@@ -42,10 +42,9 @@ The launcher and logger are deliberately passive:
   `--remote-debugging-port=0`.
 - The launcher does not use `--disable-quic`; Chrome's network behavior is kept
   close to normal.
-- If Chrome reports that a newly attached popup or worker target is
-  `waitingForDebugger`, the logger resumes it with
-  `Runtime.runIfWaitingForDebugger`; it does not otherwise use the Runtime
-  domain.
+- After enabling Network on an attached popup, iframe, or worker target, the
+  logger sends `Runtime.runIfWaitingForDebugger` for that target session; it
+  does not otherwise use the Runtime domain.
 
 That means a destination site should see ordinary Chrome requests from the
 dedicated profile, not an explicit "logger enabled" signal.
@@ -270,13 +269,13 @@ Debugger paused in another tab, click to switch to that tab.
 
 The logger does not enable the CDP `Debugger` or `Fetch` domains and does not
 intentionally pause scripts. Chrome can still create an auto-attached popup,
-iframe, or worker target in a `waitingForDebugger` state. When that happens, the
-logger calls `Runtime.runIfWaitingForDebugger` for that target session, then
-continues with passive `Network` capture.
+iframe, or worker target in a debugger-waiting state. For each attached
+inspectable target, the logger enables `Network` first, then calls
+`Runtime.runIfWaitingForDebugger` for that target session.
 
-This Runtime call only resumes a target that Chrome already marked as waiting.
-It is not request interception, script injection, browser automation, or general
-Runtime evaluation.
+This Runtime call only tells a target to continue if Chrome has it waiting for a
+debugger. It is not request interception, script injection, browser automation,
+or general Runtime evaluation.
 
 ## CLI
 

@@ -303,10 +303,10 @@ describe("CdpResponseLogger", () => {
       { maxResourceBufferSize: 104_857_600, maxTotalBufferSize: 524_288_000 },
       "session-1",
     );
-    expect(client.send).not.toHaveBeenCalledWith(
+    expect(client.send).toHaveBeenCalledWith(
       "Runtime.runIfWaitingForDebugger",
-      expect.anything(),
-      expect.anything(),
+      undefined,
+      "session-1",
     );
     expect(storage.recordBody).toHaveBeenCalledOnce();
     expect(storage.metadata).toHaveLength(1);
@@ -321,7 +321,7 @@ describe("CdpResponseLogger", () => {
     });
   });
 
-  it("resumes auto-attached targets that are waiting for debugger", async () => {
+  it("enables network before resuming attached targets", async () => {
     const client = new FakeClient();
     const storage = createStorage();
     const logger = new CdpResponseLogger(client as never, {
@@ -342,7 +342,7 @@ describe("CdpResponseLogger", () => {
         type: "page",
         url: "https://example.test/popup",
       },
-      waitingForDebugger: true,
+      waitingForDebugger: false,
     });
     await waitForAsyncEvent();
 
@@ -355,8 +355,8 @@ describe("CdpResponseLogger", () => {
       { maxResourceBufferSize: 104_857_600, maxTotalBufferSize: 524_288_000 },
       "session-1",
     );
-    expect(client.send.mock.invocationCallOrder[0]).toBeLessThan(
-      client.Network.enable.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    expect(client.Network.enable.mock.invocationCallOrder[0]).toBeLessThan(
+      client.send.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
   });
 
