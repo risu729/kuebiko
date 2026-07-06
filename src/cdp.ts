@@ -234,27 +234,24 @@ class CdpResponseLogger {
       return;
     }
 
-    await this.#resumeIfWaitingForDebugger(event, session);
-
     try {
       await this.#client.Network.enable(NETWORK_BUFFER_OPTIONS, event.sessionId);
       this.#log(`attached target=${event.targetInfo.type} session=${event.sessionId}`);
     } catch (error) {
       await this.#options.storage.recordError(createErrorRecord("Network.enable", session, error));
     }
+
+    await this.#resumeTarget(event, session);
   }
 
-  async #resumeIfWaitingForDebugger(
-    event: TargetAttachedEvent,
-    session: SessionInfo,
-  ): Promise<void> {
-    if (!event.waitingForDebugger) {
-      return;
-    }
-
+  async #resumeTarget(event: TargetAttachedEvent, session: SessionInfo): Promise<void> {
     try {
       await this.#client.send("Runtime.runIfWaitingForDebugger", undefined, event.sessionId);
-      this.#log(`resumed waiting target=${event.targetInfo.type} session=${event.sessionId}`);
+      if (event.waitingForDebugger) {
+        this.#log(`resumed waiting target=${event.targetInfo.type} session=${event.sessionId}`);
+      } else {
+        this.#verbose(`resume checked target=${event.targetInfo.type} session=${event.sessionId}`);
+      }
     } catch (error) {
       await this.#options.storage.recordError(
         createErrorRecord(
