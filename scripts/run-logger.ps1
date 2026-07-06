@@ -4,6 +4,8 @@ param(
 	[switch] $VerboseLogger,
 	[string] $Include,
 	[string] $Exclude,
+	[string] $Config,
+	[switch] $NoPlugins,
 	[long] $MaxBodyBytes = -1
 )
 
@@ -39,6 +41,12 @@ if ($Include) {
 }
 if ($Exclude) {
 	$arguments += @('--exclude', $Exclude)
+}
+if ($Config) {
+	$arguments += @('--config', $Config)
+}
+if ($NoPlugins) {
+	$arguments += '--no-plugins'
 }
 if ($MaxBodyBytes -ge 0) {
 	$arguments += @('--max-body-bytes', $MaxBodyBytes.ToString())

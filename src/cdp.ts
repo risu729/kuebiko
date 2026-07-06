@@ -1,6 +1,11 @@
 import CDP from "chrome-remote-interface";
 import type { Protocol } from "devtools-protocol";
 
+import {
+  createCaptureErrorHookEvent,
+  createResponseCompletedHookEvent,
+  createWebSocketFrameHookEvent,
+} from "./plugins";
 import { matchesFilters } from "./sanitize";
 import type {
   CompletedResponseMetadata,
@@ -204,7 +209,7 @@ class CdpResponseLogger {
           targetId: targetInfo.targetId,
         });
       } catch (error) {
-        await this.#options.storage.recordError(
+        await this.#recordCaptureError(
           createErrorRecord(
             "Target.attachToTarget",
             {
@@ -238,7 +243,7 @@ class CdpResponseLogger {
       await this.#client.Network.enable(NETWORK_BUFFER_OPTIONS, event.sessionId);
       this.#log(`attached target=${event.targetInfo.type} session=${event.sessionId}`);
     } catch (error) {
-      await this.#options.storage.recordError(createErrorRecord("Network.enable", session, error));
+      await this.#recordCaptureError(createErrorRecord("Network.enable", session, error));
     }
 
     await this.#resumeTarget(event, session);
@@ -253,7 +258,7 @@ class CdpResponseLogger {
         this.#verbose(`resume checked target=${event.targetInfo.type} session=${event.sessionId}`);
       }
     } catch (error) {
-      await this.#options.storage.recordError(
+      await this.#recordCaptureError(
         createErrorRecord(
           "Runtime.runIfWaitingForDebugger",
           session,
@@ -277,7 +282,7 @@ class CdpResponseLogger {
 
     this.#verbose(`detached session=${event.sessionId}`);
     if (session) {
-      await this.#options.storage.recordError({
+      await this.#recordCaptureError({
         error: "Target detached before all active requests completed.",
         event: "Target.detachedFromTarget",
         sessionId: event.sessionId,
@@ -349,14 +354,16 @@ class CdpResponseLogger {
 
     const bodyResult = await this.#getBodyResult(state, event);
     const requestBodyResult = await this.#getRequestBodyResult(state);
-    await this.#options.storage.recordCompletedResponse(
-      createCompletedMetadata(
-        state,
-        event,
-        bodyResult,
-        requestBodyResult,
-        this.#options.storage.runTimestamp,
-      ),
+    const metadata = createCompletedMetadata(
+      state,
+      event,
+      bodyResult,
+      requestBodyResult,
+      this.#options.storage.runTimestamp,
+    );
+    await this.#options.storage.recordCompletedResponse(metadata);
+    await this.#options.hooks?.publish(
+      createResponseCompletedHookEvent(metadata, this.#options.storage.runDirectory),
     );
 
     if (!bodyResult.bodySaved && bodyResult.error) {
@@ -379,9 +386,14 @@ class CdpResponseLogger {
     error: string,
     url: string | undefined,
   ): Promise<void> {
-    await this.#options.storage.recordError(
+    await this.#recordCaptureError(
       createErrorRecord(event, state.session, error, state.requestId, url),
     );
+  }
+
+  async #recordCaptureError(record: ErrorRecord): Promise<void> {
+    await this.#options.storage.recordError(record);
+    await this.#options.hooks?.publish(createCaptureErrorHookEvent(record, this.#options.storage));
   }
 
   async #getRequestBodyResult(state: RequestState): Promise<Partial<RequestBodySaveResult>> {
@@ -462,7 +474,7 @@ class CdpResponseLogger {
     const state = this.#requests.get(key);
     this.#requests.delete(key);
 
-    await this.#options.storage.recordError({
+    await this.#recordCaptureError({
       error: event.errorText,
       event: "Network.loadingFailed",
       requestId: event.requestId,
@@ -482,7 +494,7 @@ class CdpResponseLogger {
     }
     const state = this.#requests.get(requestKey(sessionId, event.requestId));
     const session = this.#sessions.get(sessionId);
-    await this.#options.storage.recordWebSocketFrame({
+    const frame = {
       direction: "received",
       opcode: event.response.opcode,
       payloadData: event.response.payloadData,
@@ -491,7 +503,9 @@ class CdpResponseLogger {
       targetId: session?.targetId,
       timestamp: nowIso(),
       url: state?.response?.url ?? state?.requestUrl,
-    });
+    } as const;
+    await this.#options.storage.recordWebSocketFrame(frame);
+    await this.#options.hooks?.publish(createWebSocketFrameHookEvent(frame, this.#options.storage));
   }
 }
 

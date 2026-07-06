@@ -6,6 +6,8 @@ import { CdpResponseLogger, createCompletedMetadata } from "./cdp";
 import type {
   CompletedResponseMetadata,
   ErrorRecord,
+  HookEvent,
+  HookPublisher,
   LoggerStorage,
   RequestState,
   RequestBodySource,
@@ -93,6 +95,19 @@ const createStorage = (): LoggerStorage & {
     runDirectory: "/captures/run",
     runTimestamp: "2026-07-06T12:34:56Z",
     websocket,
+  };
+};
+
+const createHooks = (): HookPublisher & { events: HookEvent[] } => {
+  const events: HookEvent[] = [];
+
+  return {
+    close: vi.fn(() => Promise.resolve()),
+    events,
+    publish: vi.fn((event) => {
+      events.push(event);
+      return Promise.resolve();
+    }),
   };
 };
 
@@ -229,8 +244,10 @@ describe("CdpResponseLogger", () => {
   it("captures completed response bodies and metadata", async () => {
     const client = new FakeClient();
     const storage = createStorage();
+    const hooks = createHooks();
     const logger = new CdpResponseLogger(client as never, {
       cdp: "http://127.0.0.1:9222",
+      hooks,
       storage,
       verbose: false,
     });
@@ -319,6 +336,22 @@ describe("CdpResponseLogger", () => {
       status: 200,
       url: "https://example.test/api",
     });
+    expect(hooks.events).toContainEqual(
+      expect.objectContaining({
+        event: "response.completed",
+        request: expect.objectContaining({
+          method: "GET",
+          requestId: "request-1",
+          url: "https://example.test/api",
+        }),
+        response: expect.objectContaining({
+          bodyFile: "bodies/body.json",
+          bodySaved: true,
+          mimeType: "application/json",
+          status: 200,
+        }),
+      }),
+    );
   });
 
   it("enables network before resuming attached targets", async () => {

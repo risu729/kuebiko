@@ -5,13 +5,26 @@ import type { ParsedArgs } from "citty";
 import { z } from "zod";
 
 import { startCdpLogger } from "./cdp";
+import { createPluginHost } from "./plugins";
 import { getDefaultCaptureDirectory } from "./sanitize";
 import { createStorage } from "./storage";
-import type { CliOptions } from "./types";
+import type {
+  CliOptions,
+  HookEvent,
+  HookEventName,
+  LoggerConfig,
+  LoggerPlugin,
+  PluginContext,
+} from "./types";
 
 const DEFAULT_CDP_ENDPOINT = "http://127.0.0.1:9222";
 
 const cliArgs = {
+  config: {
+    description: "TS/JS logger config with plugin modules.",
+    type: "string",
+    valueHint: "path",
+  },
   cdp: {
     default: DEFAULT_CDP_ENDPOINT,
     description: "CDP endpoint.",
@@ -37,6 +50,11 @@ const cliArgs = {
     description: "Capture directory.",
     type: "string",
     valueHint: "capture-dir",
+  },
+  plugins: {
+    default: true,
+    description: "Load plugins from --config.",
+    type: "boolean",
   },
   verbose: {
     description: "Print verbose status logs.",
@@ -75,6 +93,7 @@ const optionalNonEmptyString = z.preprocess(
 );
 
 const CliOptionsSchema: z.ZodType<CliOptions> = z.object({
+  config: optionalNonEmptyString,
   cdp: z.url(),
   exclude: optionalNonEmptyString.transform((value) =>
     value ? parseRegex(value, "--exclude") : undefined,
@@ -95,6 +114,7 @@ const CliOptionsSchema: z.ZodType<CliOptions> = z.object({
 
     return parsed;
   }),
+  noPlugins: z.boolean(),
   out: optionalNonEmptyString,
   verbose: z.boolean(),
 });
@@ -114,11 +134,13 @@ const assertKnownFlags = (argv: string[]): void => {
 
 const normalizeArgs = (args: LoggerArgs): CliOptions => {
   const parsed = CliOptionsSchema.parse({
+    config: args.config,
     cdp: args.cdp,
     exclude: args.exclude,
     help: false,
     include: args.include,
     maxBodyBytes: args["max-body-bytes"],
+    noPlugins: args.plugins === false,
     out: args.out,
     verbose: args.verbose ?? false,
   });
@@ -146,10 +168,18 @@ const runLogger = async (options: CliOptions): Promise<void> => {
   process.stdout.write(`cdp=${options.cdp}\n`);
 
   let logger: undefined | Awaited<ReturnType<typeof startCdpLogger>>;
+  let plugins: undefined | Awaited<ReturnType<typeof createPluginHost>>;
   try {
+    plugins = await createPluginHost({
+      configPath: options.config,
+      disabled: options.noPlugins,
+      storage,
+      verbose: options.verbose,
+    });
     logger = await startCdpLogger({
       cdp: options.cdp,
       exclude: options.exclude,
+      hooks: plugins,
       include: options.include,
       maxBodyBytes: options.maxBodyBytes,
       storage,
@@ -158,9 +188,11 @@ const runLogger = async (options: CliOptions): Promise<void> => {
     process.stdout.write("logger running; press Ctrl-C to stop\n");
     await Promise.race([waitForShutdown(), logger.closed]);
   } finally {
+    await plugins?.stopping();
     await logger?.close().catch((error: unknown) => {
       process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     });
+    await plugins?.close();
     await storage.close();
   }
 };
@@ -187,3 +219,4 @@ if (import.meta.main) {
 }
 
 export { DEFAULT_CDP_ENDPOINT, cliArgs, main, mainCommand, normalizeArgs, parseArgs, runLogger };
+export type { HookEvent, HookEventName, LoggerConfig, LoggerPlugin, PluginContext };
