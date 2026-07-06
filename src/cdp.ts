@@ -234,11 +234,37 @@ class CdpResponseLogger {
       return;
     }
 
+    await this.#resumeIfWaitingForDebugger(event, session);
+
     try {
       await this.#client.Network.enable(NETWORK_BUFFER_OPTIONS, event.sessionId);
       this.#log(`attached target=${event.targetInfo.type} session=${event.sessionId}`);
     } catch (error) {
       await this.#options.storage.recordError(createErrorRecord("Network.enable", session, error));
+    }
+  }
+
+  async #resumeIfWaitingForDebugger(
+    event: TargetAttachedEvent,
+    session: SessionInfo,
+  ): Promise<void> {
+    if (!event.waitingForDebugger) {
+      return;
+    }
+
+    try {
+      await this.#client.send("Runtime.runIfWaitingForDebugger", undefined, event.sessionId);
+      this.#log(`resumed waiting target=${event.targetInfo.type} session=${event.sessionId}`);
+    } catch (error) {
+      await this.#options.storage.recordError(
+        createErrorRecord(
+          "Runtime.runIfWaitingForDebugger",
+          session,
+          error,
+          undefined,
+          session.targetUrl,
+        ),
+      );
     }
   }
 

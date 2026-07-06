@@ -36,6 +36,8 @@ class FakeClient extends EventEmitter {
   };
 
   close = vi.fn(() => Promise.resolve());
+
+  send = vi.fn(() => Promise.resolve());
 }
 
 const createStorage = (): LoggerStorage & {
@@ -301,6 +303,11 @@ describe("CdpResponseLogger", () => {
       { maxResourceBufferSize: 104_857_600, maxTotalBufferSize: 524_288_000 },
       "session-1",
     );
+    expect(client.send).not.toHaveBeenCalledWith(
+      "Runtime.runIfWaitingForDebugger",
+      expect.anything(),
+      expect.anything(),
+    );
     expect(storage.recordBody).toHaveBeenCalledOnce();
     expect(storage.metadata).toHaveLength(1);
     expect(storage.metadata[0]).toMatchObject({
@@ -312,6 +319,84 @@ describe("CdpResponseLogger", () => {
       status: 200,
       url: "https://example.test/api",
     });
+  });
+
+  it("resumes auto-attached targets that are waiting for debugger", async () => {
+    const client = new FakeClient();
+    const storage = createStorage();
+    const logger = new CdpResponseLogger(client as never, {
+      cdp: "http://127.0.0.1:9222",
+      storage,
+      verbose: false,
+    });
+
+    await logger.start();
+    client.emit("Target.attachedToTarget", {
+      sessionId: "session-1",
+      targetInfo: {
+        attached: true,
+        browserContextId: "context-1",
+        canAccessOpener: true,
+        targetId: "target-1",
+        title: "Popup",
+        type: "page",
+        url: "https://example.test/popup",
+      },
+      waitingForDebugger: true,
+    });
+    await waitForAsyncEvent();
+
+    expect(client.send).toHaveBeenCalledWith(
+      "Runtime.runIfWaitingForDebugger",
+      undefined,
+      "session-1",
+    );
+    expect(client.Network.enable).toHaveBeenCalledWith(
+      { maxResourceBufferSize: 104_857_600, maxTotalBufferSize: 524_288_000 },
+      "session-1",
+    );
+    expect(client.send.mock.invocationCallOrder[0]).toBeLessThan(
+      client.Network.enable.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+  });
+
+  it("records resume failures and still enables network capture", async () => {
+    const client = new FakeClient();
+    client.send.mockRejectedValueOnce(new Error("resume failed"));
+    const storage = createStorage();
+    const logger = new CdpResponseLogger(client as never, {
+      cdp: "http://127.0.0.1:9222",
+      storage,
+      verbose: false,
+    });
+
+    await logger.start();
+    client.emit("Target.attachedToTarget", {
+      sessionId: "session-1",
+      targetInfo: {
+        attached: true,
+        browserContextId: "context-1",
+        canAccessOpener: true,
+        targetId: "target-1",
+        title: "Popup",
+        type: "page",
+        url: "https://example.test/popup",
+      },
+      waitingForDebugger: true,
+    });
+    await waitForAsyncEvent();
+
+    expect(storage.errors[0]).toMatchObject({
+      error: "resume failed",
+      event: "Runtime.runIfWaitingForDebugger",
+      sessionId: "session-1",
+      targetId: "target-1",
+      url: "https://example.test/popup",
+    });
+    expect(client.Network.enable).toHaveBeenCalledWith(
+      { maxResourceBufferSize: 104_857_600, maxTotalBufferSize: 524_288_000 },
+      "session-1",
+    );
   });
 
   it("saves inline request post data without request interception", async () => {

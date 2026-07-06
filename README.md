@@ -42,6 +42,10 @@ The launcher and logger are deliberately passive:
   `--remote-debugging-port=0`.
 - The launcher does not use `--disable-quic`; Chrome's network behavior is kept
   close to normal.
+- If Chrome reports that a newly attached popup or worker target is
+  `waitingForDebugger`, the logger resumes it with
+  `Runtime.runIfWaitingForDebugger`; it does not otherwise use the Runtime
+  domain.
 
 That means a destination site should see ordinary Chrome requests from the
 dedicated profile, not an explicit "logger enabled" signal.
@@ -254,6 +258,25 @@ Verify capture by checking that `netlog.json` exists and grows in the run
 folder. The warning is meaningful: NetLog captures sensitive network metadata,
 and `--net-log-capture-mode=Everything` can include more private debugging
 detail than the default browser behavior.
+
+## Debugger Paused Banner
+
+Chrome may otherwise show this banner when a page opens a popup or another
+window while CDP is attached:
+
+```text
+Debugger paused in another tab, click to switch to that tab.
+```
+
+The logger does not enable the CDP `Debugger` or `Fetch` domains and does not
+intentionally pause scripts. Chrome can still create an auto-attached popup,
+iframe, or worker target in a `waitingForDebugger` state. When that happens, the
+logger calls `Runtime.runIfWaitingForDebugger` for that target session, then
+continues with passive `Network` capture.
+
+This Runtime call only resumes a target that Chrome already marked as waiting.
+It is not request interception, script injection, browser automation, or general
+Runtime evaluation.
 
 ## CLI
 
