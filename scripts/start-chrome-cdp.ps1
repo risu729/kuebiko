@@ -10,10 +10,10 @@ function New-CaptureTimestamp {
 
 function Find-Chrome {
 	$candidates = @(
-		"${env:ProgramFiles}\Google\Chrome Beta\Application\chrome.exe",
-		"${env:ProgramFiles(x86)}\Google\Chrome Beta\Application\chrome.exe",
 		"${env:ProgramFiles}\Google\Chrome\Application\chrome.exe",
-		"${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe"
+		"${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe",
+		"${env:ProgramFiles}\Google\Chrome Beta\Application\chrome.exe",
+		"${env:ProgramFiles(x86)}\Google\Chrome Beta\Application\chrome.exe"
 	)
 
 	foreach ($candidate in $candidates) {
@@ -22,11 +22,11 @@ function Find-Chrome {
 		}
 	}
 
-	throw 'Chrome Beta or Chrome was not found in the standard Program Files locations.'
+	throw 'Chrome or Chrome Beta was not found in the standard Program Files locations.'
 }
 
 $baseDir = Join-Path $env:LOCALAPPDATA 'ChromeCdpResponseLogger'
-$profileDir = Join-Path $baseDir 'chrome-beta-profile'
+$profileDir = Join-Path $baseDir 'chrome-profile'
 $capturesDir = Join-Path $baseDir 'captures'
 $binDir = Join-Path $baseDir 'bin'
 

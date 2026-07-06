@@ -1,8 +1,8 @@
 # Chrome CDP Response Logger
 
-Local Chrome Beta network logger for Windows. It launches Chrome Beta with a
-dedicated profile, connects to Chrome's local DevTools Protocol endpoint, and
-saves request/response bodies plus metadata while you browse manually.
+Local Chrome network logger for Windows. It launches Chrome with a dedicated
+profile, connects to Chrome's local DevTools Protocol endpoint, and saves
+request/response bodies plus metadata while you browse manually.
 
 This tool is intentionally narrow. It does not use mitmproxy, `SSLKEYLOGFILE`,
 packet capture, request interception, browser automation, login automation,
@@ -11,7 +11,7 @@ analytics, parsers, dashboards, or HAR viewers.
 ## What This Is For
 
 Use this when you want raw local capture files from normal manual browsing in a
-throwaway Chrome Beta profile:
+throwaway Chrome profile:
 
 - response bodies from CDP `Network.getResponseBody`
 - request payloads that Chrome exposes through CDP
@@ -19,8 +19,8 @@ throwaway Chrome Beta profile:
 - Chrome NetLog in the same run directory
 
 The logger is written in TypeScript for Bun. Development can happen in WSL, but
-the clean runtime target is Windows: run Chrome Beta and the logger on Windows
-so the logger connects to `http://127.0.0.1:9222`.
+the clean runtime target is Windows: run Chrome and the logger on Windows so the
+logger connects to `http://127.0.0.1:9222`.
 
 ## Why Websites Usually Cannot Notice It
 
@@ -63,14 +63,14 @@ mise install
 mise run build-windows-from-wsl
 ```
 
-On Windows, start Chrome Beta and the logger together:
+On Windows, start Chrome and the logger together:
 
 ```powershell
 & "$env:LOCALAPPDATA\ChromeCdpResponseLogger\bin\start-capture.ps1"
 ```
 
-Chrome Beta opens with a dedicated profile. Log in manually inside that profile
-and browse normally. Capture files are written under:
+Chrome opens with a dedicated profile. Log in manually inside that profile and
+browse normally. Capture files are written under:
 
 ```text
 %LOCALAPPDATA%\ChromeCdpResponseLogger\captures\<run>
@@ -81,12 +81,12 @@ and browse normally. Capture files are written under:
 Chrome is launched with:
 
 ```text
-%LOCALAPPDATA%\ChromeCdpResponseLogger\chrome-beta-profile
+%LOCALAPPDATA%\ChromeCdpResponseLogger\chrome-profile
 ```
 
 The tool does not attach to your default Chrome profile and does not depend on
 it. Treat this profile as a separate browser identity. If a website needs login,
-log in manually inside this Chrome Beta window.
+log in manually inside this Chrome window.
 
 ## Output Layout
 
@@ -140,10 +140,12 @@ Response bodies are saved exactly from CDP's body result:
 - `base64Encoded: true` is decoded and written as bytes.
 - `base64Encoded: false` is written as UTF-8 bytes.
 
-Request payloads are written as UTF-8 bytes from CDP. The logger first uses
-inline `request.postData` from `Network.requestWillBeSent` when present. If
+Request payloads are written as UTF-8 bytes from CDP strings. The logger first
+uses inline `request.postData` from `Network.requestWillBeSent` when present. If
 Chrome only reports `hasPostData`, the logger tries
-`Network.getRequestPostData`.
+`Network.getRequestPostData`. This is suitable for JSON, forms, GraphQL, and
+other text request bodies. It is not raw upload byte capture, and arbitrary
+non-UTF-8 uploads may not round-trip exactly.
 
 CDP bodies are not raw wire bytes. For exact network-stack debugging, use the
 companion `netlog.json`.
@@ -206,10 +208,10 @@ bun src/index.ts --cdp http://127.0.0.1:9222 --out <capture-dir>
 
 ## Scripts
 
-Start only Chrome Beta with CDP and NetLog:
+Start only Chrome with CDP and NetLog:
 
 ```powershell
-& "$env:LOCALAPPDATA\ChromeCdpResponseLogger\bin\start-chrome-beta-cdp.ps1"
+& "$env:LOCALAPPDATA\ChromeCdpResponseLogger\bin\start-chrome-cdp.ps1"
 ```
 
 Start only the logger:
@@ -227,8 +229,8 @@ Start both with the same capture directory:
 The Chrome launcher:
 
 - creates the persistent folders
-- finds Chrome Beta in standard `Program Files` locations, falling back to
-  stable Chrome if Beta is unavailable
+- finds stable Chrome in standard `Program Files` locations, falling back to
+  Chrome Beta if stable Chrome is unavailable
 - starts Chrome with `--user-data-dir`, `--remote-debugging-address=127.0.0.1`,
   `--remote-debugging-port=9222`, `--log-net-log`, and
   `--net-log-capture-mode=Everything`
@@ -251,7 +253,7 @@ The warning does not mean that NetLog failed or that Chrome ignored the flag.
 Verify capture by checking that `netlog.json` exists and grows in the run
 folder. The warning is meaningful: NetLog captures sensitive network metadata,
 and `--net-log-capture-mode=Everything` can include more private debugging
-detail than default browser behavior.
+detail than the default browser behavior.
 
 ## CLI
 
@@ -276,7 +278,7 @@ without `LOCALAPPDATA`, pass `--out` explicitly.
 
 ```text
 %LOCALAPPDATA%\ChromeCdpResponseLogger
-%LOCALAPPDATA%\ChromeCdpResponseLogger\chrome-beta-profile
+%LOCALAPPDATA%\ChromeCdpResponseLogger\chrome-profile
 %LOCALAPPDATA%\ChromeCdpResponseLogger\captures
 %LOCALAPPDATA%\ChromeCdpResponseLogger\bin
 ```
@@ -313,3 +315,6 @@ Use `mise run compile --target windows-x64` to build only the Windows binary.
 - Logs can contain sensitive data, including private API requests, private API
   responses, submitted form content, and cookies-adjacent content. Treat every
   capture directory as secret.
+- Store capture directories somewhere private, avoid syncing them to cloud
+  drives by default, delete runs you no longer need, and share only minimized
+  redacted samples.

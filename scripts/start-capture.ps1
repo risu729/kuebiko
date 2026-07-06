@@ -15,7 +15,7 @@ function New-CaptureTimestamp {
 $baseDir = Join-Path $env:LOCALAPPDATA 'ChromeCdpResponseLogger'
 $captureDir = Join-Path (Join-Path $baseDir 'captures') (New-CaptureTimestamp)
 
-& (Join-Path $PSScriptRoot 'start-chrome-beta-cdp.ps1') -CaptureDir $captureDir
+& (Join-Path $PSScriptRoot 'start-chrome-cdp.ps1') -CaptureDir $captureDir
 
 $deadline = (Get-Date).AddSeconds(15)
 while ((Get-Date) -lt $deadline) {
