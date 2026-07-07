@@ -1,6 +1,6 @@
+import { describe, expect, it, mock } from "bun:test";
+import type { Mock } from "bun:test";
 import { EventEmitter } from "node:events";
-
-import { describe, expect, it, vi } from "vitest";
 
 import { CdpResponseLogger, createCompletedMetadata } from "./cdp";
 import type {
@@ -16,13 +16,13 @@ import type {
 
 class FakeClient extends EventEmitter {
 	Network = {
-		enable: vi.fn(() => Promise.resolve()),
-		getRequestPostData: vi.fn(() =>
+		enable: mock(() => Promise.resolve()),
+		getRequestPostData: mock(() =>
 			Promise.resolve({
 				postData: '{"from":"getRequestPostData"}',
 			}),
 		),
-		getResponseBody: vi.fn(() =>
+		getResponseBody: mock(() =>
 			Promise.resolve({
 				base64Encoded: false,
 				body: '{"ok":true}',
@@ -31,15 +31,15 @@ class FakeClient extends EventEmitter {
 	};
 
 	Target = {
-		attachToTarget: vi.fn(() => Promise.resolve({ sessionId: "session-1" })),
-		getTargets: vi.fn(() => Promise.resolve({ targetInfos: [] })),
-		setAutoAttach: vi.fn(() => Promise.resolve()),
-		setDiscoverTargets: vi.fn(() => Promise.resolve()),
+		attachToTarget: mock(() => Promise.resolve({ sessionId: "session-1" })),
+		getTargets: mock(() => Promise.resolve({ targetInfos: [] })),
+		setAutoAttach: mock(() => Promise.resolve()),
+		setDiscoverTargets: mock(() => Promise.resolve()),
 	};
 
-	close = vi.fn(() => Promise.resolve());
+	close = mock(() => Promise.resolve());
 
-	send = vi.fn(() => Promise.resolve());
+	send = mock(() => Promise.resolve());
 }
 
 const createStorage = (): LoggerStorage & {
@@ -52,10 +52,10 @@ const createStorage = (): LoggerStorage & {
 	const websocket: WebSocketFrameRecord[] = [];
 
 	return {
-		close: vi.fn(() => Promise.resolve()),
+		close: mock(() => Promise.resolve()),
 		errors,
 		metadata,
-		recordRequestBody: vi.fn((state, postData) =>
+		recordRequestBody: mock((state, postData) =>
 			Promise.resolve(
 				(() => {
 					const source: RequestBodySource =
@@ -71,7 +71,7 @@ const createStorage = (): LoggerStorage & {
 				})(),
 			),
 		),
-		recordBody: vi.fn(() =>
+		recordBody: mock(() =>
 			Promise.resolve({
 				base64Encoded: false,
 				bodyFile: "bodies/body.json",
@@ -80,15 +80,15 @@ const createStorage = (): LoggerStorage & {
 				bodySha256: "hash",
 			}),
 		),
-		recordCompletedResponse: vi.fn((record) => {
+		recordCompletedResponse: mock((record) => {
 			metadata.push(record);
 			return Promise.resolve();
 		}),
-		recordError: vi.fn((record) => {
+		recordError: mock((record) => {
 			errors.push(record);
 			return Promise.resolve();
 		}),
-		recordWebSocketFrame: vi.fn((record) => {
+		recordWebSocketFrame: mock((record) => {
 			websocket.push(record);
 			return Promise.resolve();
 		}),
@@ -102,9 +102,9 @@ const createHooks = (): HookPublisher & { events: HookEvent[] } => {
 	const events: HookEvent[] = [];
 
 	return {
-		close: vi.fn(() => Promise.resolve()),
+		close: mock(() => Promise.resolve()),
 		events,
-		publish: vi.fn((event) => {
+		publish: mock((event) => {
 			events.push(event);
 			return Promise.resolve();
 		}),
@@ -325,7 +325,7 @@ describe("CdpResponseLogger", () => {
 			undefined,
 			"session-1",
 		);
-		expect(storage.recordBody).toHaveBeenCalledOnce();
+		expect(storage.recordBody).toHaveBeenCalledTimes(1);
 		expect(storage.metadata).toHaveLength(1);
 		expect(storage.metadata[0]).toMatchObject({
 			bodyFile: "bodies/body.json",
@@ -612,7 +612,8 @@ describe("CdpResponseLogger", () => {
 	it("labels inline request body save failures with the inline post data source", async () => {
 		const client = new FakeClient();
 		const storage = createStorage();
-		vi.mocked(storage.recordRequestBody).mockResolvedValueOnce({
+		const recordRequestBody = storage.recordRequestBody as Mock<LoggerStorage["recordRequestBody"]>;
+		recordRequestBody.mockResolvedValueOnce({
 			bodySaved: false,
 			error: "disk full",
 			source: "requestWillBeSent",

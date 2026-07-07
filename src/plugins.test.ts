@@ -1,8 +1,7 @@
+import { describe, expect, it, mock } from "bun:test";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-
-import { describe, expect, it, vi } from "vitest";
 
 import { createPluginHost } from "./plugins";
 import type {
@@ -48,22 +47,22 @@ const createStorage = (runDirectory: string): LoggerStorage & { errors: ErrorRec
 	const errors: ErrorRecord[] = [];
 
 	return {
-		close: vi.fn(() => Promise.resolve()),
+		close: mock(() => Promise.resolve()),
 		errors,
-		recordBody: vi.fn(
+		recordBody: mock(
 			(): Promise<BodySaveResult & { base64Encoded: boolean }> =>
 				Promise.resolve({ base64Encoded: false, bodySaved: true }),
 		),
-		recordCompletedResponse: vi.fn(() => Promise.resolve()),
-		recordError: vi.fn((error) => {
+		recordCompletedResponse: mock(() => Promise.resolve()),
+		recordError: mock((error) => {
 			errors.push(error);
 			return Promise.resolve();
 		}),
-		recordRequestBody: vi.fn(
+		recordRequestBody: mock(
 			(_state: RequestState): Promise<RequestBodySaveResult> =>
 				Promise.resolve({ bodySaved: true, source: "requestWillBeSent" }),
 		),
-		recordWebSocketFrame: vi.fn((_frame: WebSocketFrameRecord) => Promise.resolve()),
+		recordWebSocketFrame: mock((_frame: WebSocketFrameRecord) => Promise.resolve()),
 		runDirectory,
 		runTimestamp: "2026-07-06T12:34:56Z",
 	};

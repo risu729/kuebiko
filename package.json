@@ -23,7 +23,6 @@
 		"@types/mime-types": "3.0.1",
 		"@types/node": "26.1.0",
 		"devtools-protocol": "0.0.1656784",
-		"typescript": "6.0.3",
-		"vitest": "4.1.9"
+		"typescript": "6.0.3"
 	}
 }

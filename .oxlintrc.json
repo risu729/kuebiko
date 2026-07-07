@@ -1,6 +1,6 @@
 {
 	"$schema": "https://raw.githubusercontent.com/oxc-project/oxc/main/npm/oxlint/configuration_schema.json",
-	"plugins": ["import", "jsdoc", "node", "vitest", "promise"],
+	"plugins": ["import", "jsdoc", "node", "promise"],
 	"categories": {
 		"correctness": "error",
 		"nursery": "error",
@@ -39,8 +39,7 @@
 		"import/no-named-export": "allow",
 		"import/no-nodejs-modules": "allow",
 		"import/unambiguous": "allow",
-		"node/no-process-env": "allow",
-		"vitest/no-importing-vitest-globals": "allow"
+		"node/no-process-env": "allow"
 	},
 	"overrides": [
 		{
@@ -50,19 +49,7 @@
 				"eslint/max-lines-per-function": "allow",
 				"eslint/max-statements": "allow",
 				"eslint/no-await-in-loop": "allow",
-				"promise/prefer-await-to-callbacks": "allow",
-				"vitest/max-expects": "allow",
-				"vitest/no-conditional-in-test": "allow",
-				"vitest/prefer-called-times": "allow",
-				"vitest/prefer-describe-function-title": "allow",
-				"vitest/prefer-expect-assertions": "allow",
-				"vitest/prefer-lowercase-title": "allow",
-				"vitest/prefer-strict-equal": "allow",
-				"vitest/prefer-to-be-falsy": "allow",
-				"vitest/prefer-to-be-truthy": "allow",
-				"vitest/require-mock-type-parameters": "allow",
-				"vitest/require-test-timeout": "allow",
-				"vitest/require-to-throw-message": "allow"
+				"promise/prefer-await-to-callbacks": "allow"
 			}
 		},
 		{
