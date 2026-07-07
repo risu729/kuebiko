@@ -39,8 +39,8 @@ outputs = ["node_modules"]
 run = "bun install --frozen-lockfile"
 
 [tasks.test]
-description = "Run repository Vitest tests."
-run = "bun run vitest run"
+description = "Run repository Bun tests."
+run = "bun test"
 
 [tasks.check]
 description = "Run hk linters and formatters."
