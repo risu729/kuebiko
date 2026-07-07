@@ -7,6 +7,7 @@ describe("parseArgs", () => {
     expect(parseArgs([])).toEqual({
       cdp: DEFAULT_CDP_ENDPOINT,
       help: false,
+      noPlugins: false,
       verbose: false,
     });
   });
@@ -18,6 +19,9 @@ describe("parseArgs", () => {
       "--out",
       "C:\\captures\\run",
       "--verbose",
+      "--config",
+      "logger.config.ts",
+      "--no-plugins",
       "--include",
       "api",
       "--exclude",
@@ -27,6 +31,8 @@ describe("parseArgs", () => {
     ]);
 
     expect(options.cdp).toBe("http://127.0.0.1:9333");
+    expect(options.config).toBe("logger.config.ts");
+    expect(options.noPlugins).toBe(true);
     expect(options.out).toBe("C:\\captures\\run");
     expect(options.verbose).toBe(true);
     expect(options.include?.test("https://example.test/api")).toBe(true);

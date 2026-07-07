@@ -1,11 +1,15 @@
 import type { Protocol } from "devtools-protocol";
 
+type MaybePromise<T> = T | Promise<T>;
+
 type CliOptions = {
+  config?: string | undefined;
   cdp: string;
   exclude?: RegExp | undefined;
   help: boolean;
   include?: RegExp | undefined;
   maxBodyBytes?: number | undefined;
+  noPlugins: boolean;
   out?: string | undefined;
   verbose: boolean;
 };
@@ -99,6 +103,7 @@ type CompletedResponseMetadata = {
 type ErrorRecord = {
   error: string;
   event: string;
+  pluginId?: string | undefined;
   requestId?: string | undefined;
   sessionId?: string | undefined;
   targetId?: string | undefined;
@@ -115,6 +120,123 @@ type WebSocketFrameRecord = {
   targetId?: string | undefined;
   timestamp: string;
   url?: string | undefined;
+};
+
+type RunRef = {
+  runDirectory: string;
+  runTimestamp: string;
+};
+
+type HookEventName =
+  | "run.started"
+  | "run.stopping"
+  | "run.stopped"
+  | "response.completed"
+  | "websocket.frame.received"
+  | "capture.error";
+
+type RunHookEvent = {
+  event: "run.started" | "run.stopping" | "run.stopped";
+  run: RunRef;
+  timestamp: string;
+  version: 1;
+};
+
+type ResponseCompletedHookEvent = {
+  event: "response.completed";
+  request: {
+    bodyFile?: string | undefined;
+    bodyLength?: number | undefined;
+    bodySaved?: boolean | undefined;
+    bodySha256?: string | undefined;
+    bodySource?: RequestBodySource | undefined;
+    headers?: Protocol.Network.Headers | undefined;
+    method?: string | undefined;
+    requestId: string;
+    sessionId: string;
+    url?: string | undefined;
+  };
+  response: {
+    base64Encoded?: boolean | undefined;
+    bodyFile?: string | undefined;
+    bodyLength?: number | undefined;
+    bodySaved: boolean;
+    bodySha256?: string | undefined;
+    encodedDataLength?: number | undefined;
+    headers?: Protocol.Network.Headers | undefined;
+    mimeType?: string | undefined;
+    status?: number | undefined;
+    statusText?: string | undefined;
+  };
+  run: RunRef;
+  target: {
+    targetId?: string | undefined;
+    targetType?: string | undefined;
+    targetUrl?: string | undefined;
+  };
+  timestamp: string;
+  version: 1;
+};
+
+type WebSocketFrameHookEvent = {
+  event: "websocket.frame.received";
+  frame: WebSocketFrameRecord;
+  run: RunRef;
+  timestamp: string;
+  version: 1;
+};
+
+type CaptureErrorHookEvent = {
+  error: ErrorRecord;
+  event: "capture.error";
+  run: RunRef;
+  timestamp: string;
+  version: 1;
+};
+
+type HookEvent =
+  | CaptureErrorHookEvent
+  | ResponseCompletedHookEvent
+  | RunHookEvent
+  | WebSocketFrameHookEvent;
+
+type PluginContext = {
+  configDirectory: string;
+  error: (error: unknown) => void;
+  log: (message: string) => void;
+  options: unknown;
+  pluginDirectory: string;
+  resolvePluginPath: (relativePath: string) => string;
+  resolveRunPath: (relativePath: string) => string;
+  runDirectory: string;
+  warn: (message: string) => void;
+};
+
+type LoggerPlugin = {
+  close?: (context: PluginContext) => MaybePromise<void>;
+  events: HookEventName[];
+  id: string;
+  name?: string | undefined;
+  onEvent: (event: HookEvent, context: PluginContext) => MaybePromise<void>;
+  setup?: (context: PluginContext) => MaybePromise<void>;
+  version: string;
+};
+
+type LoggerPluginConfig = {
+  enabled?: boolean | undefined;
+  module: string;
+  options?: unknown;
+  queueSize?: number | undefined;
+  timeoutMs?: number | undefined;
+};
+
+type LoggerConfig = {
+  plugins?: LoggerPluginConfig[] | undefined;
+};
+
+type HookPublisher = {
+  close: () => Promise<void>;
+  publish: (event: HookEvent) => Promise<void>;
 };
 
 type LoggerStorage = {
@@ -134,6 +256,7 @@ type LoggerStorage = {
 type StartLoggerOptions = {
   cdp: string;
   exclude?: RegExp | undefined;
+  hooks?: HookPublisher | undefined;
   include?: RegExp | undefined;
   maxBodyBytes?: number | undefined;
   storage: LoggerStorage;
@@ -142,15 +265,28 @@ type StartLoggerOptions = {
 
 export type {
   BodySaveResult,
+  CaptureErrorHookEvent,
   CliOptions,
   CompletedResponseMetadata,
   ErrorRecord,
+  HookEvent,
+  HookEventName,
+  HookPublisher,
+  LoggerConfig,
+  LoggerPlugin,
+  LoggerPluginConfig,
   LoggerStorage,
+  MaybePromise,
+  PluginContext,
   RequestState,
   RequestBodySaveResult,
   RequestBodySource,
+  ResponseCompletedHookEvent,
   RunInfo,
+  RunRef,
+  RunHookEvent,
   SessionInfo,
   StartLoggerOptions,
+  WebSocketFrameHookEvent,
   WebSocketFrameRecord,
 };

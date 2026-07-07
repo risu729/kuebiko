@@ -6,6 +6,10 @@
     "cdp-response-logger": "./src/index.ts"
   },
   "type": "module",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
   "dependencies": {
     "chrome-remote-interface": "0.34.0",
     "citty": "0.2.2",

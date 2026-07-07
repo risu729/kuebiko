@@ -108,6 +108,7 @@ errors.ndjson
 websocket.ndjson
 bodies\
 requests\
+plugins\
 netlog.json
 ```
 
@@ -115,6 +116,10 @@ netlog.json
 that Chrome exposes through CDP. Filenames are generated from timestamp,
 SHA-256, counter, and MIME-derived extension; URLs are not placed into
 filenames.
+
+`plugins\` is created when configured plugins write per-plugin output. The core
+logger still only writes raw capture files; plugins are trusted local extension
+code you opt into with `--config`.
 
 `metadata.ndjson` contains one JSON object per completed response that passed
 the filters. When available, the same metadata line links to both a saved
@@ -152,6 +157,97 @@ non-UTF-8 uploads may not round-trip exactly.
 
 CDP bodies are not raw wire bytes. For exact network-stack debugging, use the
 companion `netlog.json`.
+
+## Plugins
+
+Plugins let trusted local TypeScript or JavaScript modules react to completed
+captures in real time without duplicating the CDP logger. The logger saves
+request/response files and metadata first. Plugins then receive small immutable
+events containing metadata and relative file paths.
+
+Plugins run in the logger process. They are not sandboxed third-party code. A
+bad plugin cannot mutate requests through the logger API, but it can still use
+normal local runtime APIs, CPU, and memory. Plugin failures and queue overflows
+are written to `errors.ndjson`; capture continues.
+
+Create a config file:
+
+```ts
+export default {
+  plugins: [
+    {
+      module: "./plugins/json-api-mirror.ts",
+      enabled: true,
+      timeoutMs: 5000,
+      queueSize: 1000,
+    },
+  ],
+};
+```
+
+Plugin module paths are resolved relative to the config file.
+
+Example plugin:
+
+```ts
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname } from "node:path";
+
+import type { LoggerPlugin } from "chrome-network-logger";
+
+export default {
+  id: "json-api-mirror",
+  name: "JSON API Mirror",
+  version: "0.1.0",
+  events: ["response.completed"],
+
+  async setup(ctx) {
+    await mkdir(ctx.pluginDirectory, { recursive: true });
+  },
+
+  async onEvent(event, ctx) {
+    if (event.event !== "response.completed") return;
+    if (!event.response.bodyFile) return;
+    if (!event.response.mimeType?.includes("json")) return;
+
+    const source = ctx.resolveRunPath(event.response.bodyFile);
+    const safeRequestId = event.request.requestId.replace(
+      /[^A-Za-z0-9._-]/g,
+      "_",
+    );
+    const output = ctx.resolvePluginPath(`${safeRequestId}.json`);
+
+    await mkdir(dirname(output), { recursive: true });
+    await writeFile(output, await readFile(source));
+  },
+} satisfies LoggerPlugin;
+```
+
+Run with plugins:
+
+```powershell
+cdp-response-logger --config C:\path\logger.config.ts --out <capture-dir>
+```
+
+Disable configured plugins for a run:
+
+```powershell
+cdp-response-logger --config C:\path\logger.config.ts `
+  --no-plugins --out <capture-dir>
+```
+
+Supported plugin events are:
+
+- `run.started`
+- `run.stopping`
+- `run.stopped`
+- `response.completed`
+- `websocket.frame.received`
+- `capture.error`
+
+Hook events do not contain inline request or response bodies. Read saved files
+with `ctx.resolveRunPath(event.response.bodyFile)` or the request-body path when
+present.
 
 ## Verify A Capture
 
@@ -229,6 +325,13 @@ Start both with the same capture directory:
 & "$env:LOCALAPPDATA\ChromeCdpResponseLogger\bin\start-capture.ps1"
 ```
 
+Start both with plugins:
+
+```powershell
+& "$env:LOCALAPPDATA\ChromeCdpResponseLogger\bin\start-capture.ps1" `
+  -Config C:\path\logger.config.ts
+```
+
 The Chrome launcher:
 
 - creates the persistent folders
@@ -289,6 +392,8 @@ Options:
   --include <regex>        Only persist matching response URLs
   --exclude <regex>        Do not persist matching response URLs
   --max-body-bytes <num>   Skip body retrieval above encoded byte length
+  --config <path>          TS/JS logger config with plugin modules
+  --no-plugins             Disable plugin loading from --config
   --help                   Show help
 ```
 
@@ -334,6 +439,8 @@ Use `mise run compile --target windows-x64` to build only the Windows binary.
   server-to-browser WebSocket frames to `websocket.ndjson`; it does not write
   client-to-server frames.
 - This tool does not parse, analyze, classify, or display responses.
+- Plugins are trusted local code running in the logger process. They are useful
+  for local real-time consumers, but they are not sandboxed.
 - Logs can contain sensitive data, including private API requests, private API
   responses, submitted form content, and cookies-adjacent content. Treat every
   capture directory as secret.
