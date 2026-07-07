@@ -1,0 +1,100 @@
+{
+  "$schema": "https://raw.githubusercontent.com/oxc-project/oxc/main/npm/oxlint/configuration_schema.json",
+  "plugins": ["import", "jsdoc", "node", "vitest", "promise"],
+  "categories": {
+    "correctness": "error",
+    "nursery": "error",
+    "pedantic": "error",
+    "perf": "error",
+    "restriction": "error",
+    "style": "error",
+    "suspicious": "error"
+  },
+  "rules": {
+    "eslint/id-length": [
+      "error",
+      {
+        "checkGeneric": false,
+        "exceptions": ["_"]
+      }
+    ],
+    "eslint/no-console": "allow",
+    "eslint/no-continue": "allow",
+    "eslint/no-duplicate-imports": [
+      "error",
+      {
+        "allowSeparateTypeImports": true
+      }
+    ],
+    "eslint/no-inline-comments": "allow",
+    "eslint/no-magic-numbers": "allow",
+    "eslint/no-ternary": "allow",
+    "eslint/no-undef": "allow",
+    "eslint/no-undefined": "allow",
+    "eslint/no-useless-return": "allow",
+    "eslint/sort-keys": "allow",
+    // Let oxfmt handle import sorting
+    "eslint/sort-imports": "allow",
+    "import/no-default-export": "allow",
+    "import/no-named-export": "allow",
+    "import/no-nodejs-modules": "allow",
+    "import/unambiguous": "allow",
+    "node/no-process-env": "allow",
+    "vitest/no-importing-vitest-globals": "allow"
+  },
+  "overrides": [
+    {
+      "files": ["src/**/*.test.ts"],
+      "rules": {
+        "eslint/max-lines": "allow",
+        "eslint/max-lines-per-function": "allow",
+        "eslint/max-statements": "allow",
+        "eslint/no-await-in-loop": "allow",
+        "promise/prefer-await-to-callbacks": "allow",
+        "vitest/max-expects": "allow",
+        "vitest/no-conditional-in-test": "allow",
+        "vitest/prefer-called-times": "allow",
+        "vitest/prefer-describe-function-title": "allow",
+        "vitest/prefer-expect-assertions": "allow",
+        "vitest/prefer-lowercase-title": "allow",
+        "vitest/prefer-strict-equal": "allow",
+        "vitest/prefer-to-be-falsy": "allow",
+        "vitest/prefer-to-be-truthy": "allow",
+        "vitest/require-mock-type-parameters": "allow",
+        "vitest/require-test-timeout": "allow",
+        "vitest/require-to-throw-message": "allow"
+      }
+    },
+    {
+      "files": ["src/cdp.ts", "src/plugins.ts", "src/storage.ts"],
+      "rules": {
+        "eslint/class-methods-use-this": "allow",
+        "eslint/init-declarations": "allow",
+        "eslint/max-classes-per-file": "allow",
+        "eslint/max-lines": "allow",
+        "eslint/max-lines-per-function": "allow",
+        "eslint/max-params": "allow",
+        "eslint/max-statements": "allow",
+        "eslint/new-cap": "allow",
+        "eslint/no-await-in-loop": "allow",
+        "eslint/no-use-before-define": "allow",
+        "eslint/no-void": "allow",
+        "eslint/prefer-destructuring": "allow",
+        "promise/avoid-new": "allow",
+        "promise/no-callback-in-promise": "allow",
+        "promise/param-names": "allow",
+        "promise/prefer-await-to-callbacks": "allow",
+        "promise/prefer-await-to-then": "allow"
+      }
+    },
+    {
+      "files": ["src/index.ts", "src/sanitize.ts"],
+      "rules": {
+        "eslint/init-declarations": "allow",
+        "eslint/max-params": "allow",
+        "eslint/max-statements": "allow",
+        "promise/avoid-new": "allow"
+      }
+    }
+  ]
+}

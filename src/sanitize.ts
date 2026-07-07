@@ -14,7 +14,7 @@ const timestampForFolder = (date = new Date()): string =>
   date
     .toISOString()
     .replaceAll(":", "-")
-    .replace(/\.\d{3}Z$/, "");
+    .replace(/\.\d{3}Z$/u, "");
 
 const timestampForFile = (date = new Date()): string =>
   date.toISOString().replaceAll(":", "-").replaceAll(".", "-");

@@ -60,7 +60,7 @@ describe("createStorage", () => {
       bodySaved: true,
       bodySha256: sha256(Buffer.from('{"ok":true}')),
     });
-    expect(result.bodyFile).toMatch(/^bodies[/\\].+\.json$/);
+    expect(result.bodyFile).toMatch(/^bodies[/\\].+\.json$/u);
     const metadata = await readFile(join(dir, "metadata.ndjson"), "utf8");
     expect(metadata.trim()).toContain('"bodySaved":true');
   });
@@ -85,7 +85,7 @@ describe("createStorage", () => {
       bodySha256: sha256(Buffer.from('{"hello":"world"}')),
       source: "requestWillBeSent",
     });
-    expect(result.bodyFile).toMatch(/^requests[/\\].+\.json$/);
+    expect(result.bodyFile).toMatch(/^requests[/\\].+\.json$/u);
     await expect(readFile(join(dir, result.bodyFile ?? ""), "utf8")).resolves.toBe(
       '{"hello":"world"}',
     );

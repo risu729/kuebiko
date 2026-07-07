@@ -41,9 +41,9 @@ describe("createBodyFilename", () => {
 
 describe("matchesFilters", () => {
   it("applies include and exclude regexes", () => {
-    expect(matchesFilters("https://example.test/api", /api/, undefined)).toBe(true);
-    expect(matchesFilters("https://example.test/page", /api/, undefined)).toBe(false);
-    expect(matchesFilters("https://example.test/api", undefined, /example/)).toBe(false);
-    expect(matchesFilters("https://example.test/api", /api/, /blocked/)).toBe(true);
+    expect(matchesFilters("https://example.test/api", /api/u, undefined)).toBe(true);
+    expect(matchesFilters("https://example.test/page", /api/u, undefined)).toBe(false);
+    expect(matchesFilters("https://example.test/api", undefined, /example/u)).toBe(false);
+    expect(matchesFilters("https://example.test/api", /api/u, /blocked/u)).toBe(true);
   });
 });

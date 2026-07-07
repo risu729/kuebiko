@@ -63,8 +63,8 @@ const nowIso = (): string => new Date().toISOString();
 const errorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
 
-const pluginIdRegex = /^[a-z0-9][a-z0-9._-]*$/;
-const semverLikeRegex = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/;
+const pluginIdRegex = /^[a-z0-9][a-z0-9._-]*$/u;
+const semverLikeRegex = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/u;
 
 const toImportUrl = (path: string): string => pathToFileURL(path).href;
 

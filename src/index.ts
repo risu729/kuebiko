@@ -81,7 +81,7 @@ const validFlags = createValidFlags();
 
 const parseRegex = (value: string, flag: string): RegExp => {
   try {
-    return new RegExp(value);
+    return new RegExp(value, "u");
   } catch (error) {
     throw new Error(`${flag} must be a valid JavaScript regular expression.`, { cause: error });
   }

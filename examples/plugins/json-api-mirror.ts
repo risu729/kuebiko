@@ -23,7 +23,7 @@ export default {
     }
 
     const source = ctx.resolveRunPath(event.response.bodyFile);
-    const safeRequestId = event.request.requestId.replace(/[^A-Za-z0-9._-]/g, "_");
+    const safeRequestId = event.request.requestId.replace(/[^A-Za-z0-9._-]/gu, "_");
     const output = ctx.resolvePluginPath(`${safeRequestId}.json`);
     await mkdir(dirname(output), { recursive: true });
     await writeFile(output, await readFile(source));
