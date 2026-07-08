@@ -3,6 +3,7 @@ import type { Protocol } from "devtools-protocol";
 type MaybePromise<T> = T | Promise<T>;
 
 type CliOptions = {
+	browserArgs: string[];
 	browserCommand?: string | undefined;
 	browserPath?: string | undefined;
 	browserProfile?: string | undefined;

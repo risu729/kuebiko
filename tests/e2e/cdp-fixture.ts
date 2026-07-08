@@ -126,6 +126,8 @@ const startLogger = (options: {
 			options.profileDirectory,
 			"--cdp-port",
 			String(options.cdpPort),
+			"--browser-arg=--no-sandbox",
+			"--browser-arg=--disable-dev-shm-usage",
 			"--out",
 			options.captureDirectory,
 		],

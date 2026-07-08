@@ -2,20 +2,25 @@ import { parseArgs as parseNodeArgs } from "node:util";
 
 import { z } from "zod";
 
+import { DEFAULT_CDP_ENDPOINT, TOOL_NAME, TOOL_VERSION } from "./constants";
 import type { CliOptions } from "./types";
-
-const DEFAULT_CDP_ENDPOINT = "http://127.0.0.1:9222";
-const TOOL_NAME = "cdp-response-logger";
-const TOOL_VERSION = "0.0.0";
+import { optionalNonEmptyString, optionalStringArray, parseSafeInteger } from "./validation";
 
 type CliArgDefinition = {
 	default?: boolean | string | undefined;
 	description: string;
+	multiple?: boolean | undefined;
 	type: "boolean" | "string";
 	valueHint?: string | undefined;
 };
 
 const cliArgs = {
+	"browser-arg": {
+		description: "Extra browser arg for --launch-browser. May be repeated.",
+		multiple: true,
+		type: "string",
+		valueHint: "arg",
+	},
 	"browser-command": {
 		description: "Browser command for --launch-browser, resolved from PATH.",
 		type: "string",
@@ -89,7 +94,7 @@ const cliArgs = {
 } as const;
 
 type LoggerArgs = {
-	[key in keyof typeof cliArgs]?: boolean | string | undefined;
+	[key in keyof typeof cliArgs]?: boolean | string | string[] | undefined;
 } & {
 	help?: boolean | undefined;
 	version?: boolean | undefined;
@@ -118,30 +123,9 @@ const parseRegex = (value: string, flag: string): RegExp => {
 	}
 };
 
-const optionalNonEmptyString = z.preprocess(
-	(value) => (value === "" ? undefined : value),
-	z.string().optional(),
-);
-
-const parseSafeInteger = (
-	value: string | undefined,
-	flag: string,
-	minimum: number,
-): number | undefined => {
-	if (!value) {
-		return undefined;
-	}
-
-	const parsed = Number(value);
-	if (!Number.isSafeInteger(parsed) || parsed < minimum) {
-		throw new Error(`${flag} must be an integer greater than or equal to ${minimum}.`);
-	}
-
-	return parsed;
-};
-
 const CliOptionsSchema: z.ZodType<CliOptions> = z
 	.object({
+		browserArgs: optionalStringArray,
 		browserCommand: optionalNonEmptyString,
 		browserPath: optionalNonEmptyString,
 		browserProfile: optionalNonEmptyString,
@@ -208,6 +192,7 @@ const assertKnownFlags = (argv: string[]): void => {
 
 const normalizeArgs = (args: LoggerArgs): CliOptions =>
 	CliOptionsSchema.parse({
+		browserArgs: args["browser-arg"],
 		browserCommand: args["browser-command"],
 		browserPath: args["browser-path"],
 		browserProfile: args["browser-profile"],
@@ -226,25 +211,43 @@ const normalizeArgs = (args: LoggerArgs): CliOptions =>
 		version: args.version ?? false,
 	});
 
+const createParseOption = (
+	definition: CliArgDefinition,
+): {
+	default?: boolean | string;
+	multiple?: boolean;
+	short?: string;
+	type: "boolean" | "string";
+} => {
+	const parseOption: {
+		default?: boolean | string;
+		multiple?: boolean;
+		short?: string;
+		type: "boolean" | "string";
+	} = {
+		type: definition.type,
+	};
+	if (definition.default !== undefined) {
+		parseOption.default = definition.default;
+	}
+	if (definition.multiple) {
+		parseOption.multiple = true;
+	}
+
+	return parseOption;
+};
+
 const createParseOptions = (): Record<
 	string,
-	{ default?: boolean | string; short?: string; type: "boolean" | "string" }
+	{ default?: boolean | string; multiple?: boolean; short?: string; type: "boolean" | "string" }
 > => {
 	const options: Record<
 		string,
-		{ default?: boolean | string; short?: string; type: "boolean" | "string" }
+		{ default?: boolean | string; multiple?: boolean; short?: string; type: "boolean" | "string" }
 	> = {};
 
 	for (const [name, definition] of Object.entries(cliArgs)) {
-		const parseOption: { default?: boolean | string; short?: string; type: "boolean" | "string" } =
-			{
-				type: definition.type,
-			};
-		if ("default" in definition) {
-			parseOption.default = definition.default;
-		}
-
-		options[name] = parseOption;
+		options[name] = createParseOption(definition);
 	}
 
 	options["help"] = { short: "h", type: "boolean" };

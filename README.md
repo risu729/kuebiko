@@ -357,8 +357,8 @@ cdp-response-logger --launch-browser --browser-command chrome.exe --no-netlog
 ```
 
 The logger intentionally does not auto-discover browsers. Pass either
-`--browser-command` or `--browser-path`. Launch mode uses only these browser
-flags:
+`--browser-command` or `--browser-path`. Launch mode uses these browser flags by
+default:
 
 ```text
 --user-data-dir=<profile-dir>
@@ -369,6 +369,11 @@ flags:
 ```
 
 The NetLog flags are omitted when `--no-netlog` is set.
+
+Pass repeated `--browser-arg=<arg>` values only when your local browser
+environment requires them. For example, CI Chrome sometimes requires
+`--browser-arg=--no-sandbox`. These extra args are explicit and are not added by
+default.
 
 ### Attach Mode
 
@@ -439,6 +444,7 @@ Options:
   --browser-command <cmd>  Browser command for --launch-browser
   --browser-path <path>    Browser executable path for --launch-browser
   --browser-profile <dir>  Browser profile directory for --launch-browser
+  --browser-arg <arg>      Extra browser arg for --launch-browser
   --cdp-port <port>        Local CDP port for --launch-browser
   --no-netlog              Disable netlog.json in --launch-browser mode
   --help                   Show help

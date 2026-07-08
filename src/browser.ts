@@ -7,6 +7,7 @@ type BrowserVersion = {
 };
 
 type BrowserLaunchOptions = {
+	browserArgs: string[];
 	browserCommand?: string | undefined;
 	browserPath?: string | undefined;
 	cdpPort: number;
@@ -38,6 +39,7 @@ const getBrowserExecutable = (options: BrowserLaunchOptions): string => {
 
 const buildBrowserArgs = (options: BrowserLaunchOptions): string[] => {
 	const args = [
+		...options.browserArgs,
 		`--user-data-dir=${options.profileDirectory}`,
 		"--remote-debugging-address=127.0.0.1",
 		`--remote-debugging-port=${options.cdpPort}`,
@@ -89,6 +91,14 @@ const waitForExit = async (browser: BrowserProcess): Promise<void> => {
 	await browser.exited.catch(() => undefined);
 };
 
+const readBrowserStderr = async (browser: BrowserProcess): Promise<string> => {
+	if (!(browser.stderr instanceof ReadableStream)) {
+		return "";
+	}
+
+	return await new Response(browser.stderr).text();
+};
+
 const closeBrowser = async (browser: BrowserProcess, cdpEndpoint: string): Promise<void> => {
 	try {
 		await closeThroughCdp(cdpEndpoint);
@@ -99,15 +109,36 @@ const closeBrowser = async (browser: BrowserProcess, cdpEndpoint: string): Promi
 	await waitForExit(browser);
 };
 
-const startBrowser = async (options: BrowserLaunchOptions): Promise<StartedBrowser> => {
+const spawnBrowser = (options: BrowserLaunchOptions): BrowserProcess => {
 	const executable = getBrowserExecutable(options);
 	const args = buildBrowserArgs(options);
-	const browser = Bun.spawn([executable, ...args], {
-		stderr: options.verbose ? "inherit" : "ignore",
+
+	return Bun.spawn([executable, ...args], {
+		stderr: "pipe",
 		stdout: options.verbose ? "inherit" : "ignore",
 	});
+};
+
+const waitForStartedBrowser = async (
+	browser: BrowserProcess,
+	cdpEndpoint: string,
+): Promise<void> => {
+	try {
+		await waitForCdp(cdpEndpoint);
+	} catch (error) {
+		browser.kill("SIGTERM");
+		await waitForExit(browser);
+		const stderr = await readBrowserStderr(browser);
+		throw new Error(`Browser failed to expose CDP at ${cdpEndpoint}. Stderr: ${stderr}`, {
+			cause: error,
+		});
+	}
+};
+
+const startBrowser = async (options: BrowserLaunchOptions): Promise<StartedBrowser> => {
+	const browser = spawnBrowser(options);
 	const cdpEndpoint = createCdpEndpoint(options.cdpPort);
-	await waitForCdp(cdpEndpoint);
+	await waitForStartedBrowser(browser, cdpEndpoint);
 
 	return {
 		cdpEndpoint,

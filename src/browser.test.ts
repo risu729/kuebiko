@@ -6,6 +6,7 @@ describe("buildBrowserArgs", () => {
 	it("uses only profile, local CDP, and NetLog flags", () => {
 		expect(
 			buildBrowserArgs({
+				browserArgs: [],
 				browserCommand: "chrome.exe",
 				cdpPort: 9222,
 				netLogPath: "C:\\captures\\run\\netlog.json",
@@ -24,12 +25,30 @@ describe("buildBrowserArgs", () => {
 	it("omits NetLog flags when disabled", () => {
 		expect(
 			buildBrowserArgs({
+				browserArgs: [],
 				browserCommand: "chrome",
 				cdpPort: 9333,
 				profileDirectory: "/profile",
 				verbose: false,
 			}),
 		).toEqual([
+			"--user-data-dir=/profile",
+			"--remote-debugging-address=127.0.0.1",
+			"--remote-debugging-port=9333",
+		]);
+	});
+
+	it("prepends explicit extra browser args", () => {
+		expect(
+			buildBrowserArgs({
+				browserArgs: ["--no-sandbox"],
+				browserCommand: "chrome",
+				cdpPort: 9333,
+				profileDirectory: "/profile",
+				verbose: false,
+			}),
+		).toEqual([
+			"--no-sandbox",
 			"--user-data-dir=/profile",
 			"--remote-debugging-address=127.0.0.1",
 			"--remote-debugging-port=9333",

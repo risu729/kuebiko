@@ -5,6 +5,7 @@ import { DEFAULT_CDP_ENDPOINT, parseArgs, renderHelp } from "./index";
 describe("parseArgs", () => {
 	it("uses defaults", () => {
 		expect(parseArgs([])).toEqual({
+			browserArgs: [],
 			cdp: DEFAULT_CDP_ENDPOINT,
 			cdpPort: 9222,
 			help: false,
@@ -54,10 +55,13 @@ describe("parseArgs", () => {
 			"chrome.exe",
 			"--browser-profile",
 			"C:\\profile",
+			"--browser-arg=--no-sandbox",
+			"--browser-arg=--disable-dev-shm-usage",
 			"--no-netlog",
 		]);
 
 		expect(options.launchBrowser).toBe(true);
+		expect(options.browserArgs).toEqual(["--no-sandbox", "--disable-dev-shm-usage"]);
 		expect(options.browserCommand).toBe("chrome.exe");
 		expect(options.browserProfile).toBe("C:\\profile");
 		expect(options.netlog).toBe(false);

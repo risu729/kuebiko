@@ -52,6 +52,7 @@ const startConfiguredBrowser = async (
 	const profileDirectory = getLaunchProfileDirectory(options);
 	await mkdir(profileDirectory, { recursive: true });
 	const browser = await startBrowser({
+		browserArgs: options.browserArgs,
 		browserCommand: options.browserCommand,
 		browserPath: options.browserPath,
 		cdpPort: options.cdpPort,
