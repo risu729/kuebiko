@@ -10,6 +10,8 @@ import {
 	startContext,
 } from "./cdp-fixture";
 
+const BROWSER_E2E_TIMEOUT_MS = 30_000;
+
 describe("CDP browser e2e", () => {
 	afterEach(cleanupRuns);
 
@@ -27,17 +29,22 @@ describe("CDP browser e2e", () => {
 				await closeContext(context);
 			}
 		},
+		BROWSER_E2E_TIMEOUT_MS,
 	);
 
-	maybeBrowserIt("writes Chromium NetLog in the capture directory", async () => {
-		const context = await startContext();
+	maybeBrowserIt(
+		"writes Chromium NetLog in the capture directory",
+		async () => {
+			const context = await startContext();
 
-		try {
-			await loadPageAndWaitForCapture(context);
-		} finally {
-			await closeContext(context);
-		}
+			try {
+				await loadPageAndWaitForCapture(context);
+			} finally {
+				await closeContext(context);
+			}
 
-		assertNetLog(await readNetLog(context.netLogPath));
-	});
+			assertNetLog(await readNetLog(context.netLogPath));
+		},
+		BROWSER_E2E_TIMEOUT_MS,
+	);
 });

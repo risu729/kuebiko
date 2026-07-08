@@ -6,6 +6,7 @@ import type { CapturedApiRecord } from "./assertions";
 import waitFor from "./poll";
 
 type LoggerProcess = ReturnType<typeof Bun.spawn> & {
+	stderr: ReadableStream<Uint8Array>;
 	stdout: ReadableStream<Uint8Array>;
 };
 type LoggerStdoutReader = {
@@ -129,21 +130,34 @@ const startLogger = (options: {
 			options.captureDirectory,
 		],
 		{
-			stderr: "ignore",
+			stderr: "pipe",
 			stdout: "pipe",
 		},
 	);
 	if (!(process.stdout instanceof ReadableStream)) {
 		throw new Error("Logger stdout was not piped.");
 	}
+	if (!(process.stderr instanceof ReadableStream)) {
+		throw new Error("Logger stderr was not piped.");
+	}
 
 	return process as LoggerProcess;
 };
 
-const readUntilLoggerReady = async (reader: LoggerStdoutReader, seen = ""): Promise<void> => {
+const readLoggerStderr = async (logger: LoggerProcess): Promise<string> => {
+	await logger.exited.catch(() => undefined);
+	return await new Response(logger.stderr).text();
+};
+
+const readUntilLoggerReady = async (
+	logger: LoggerProcess,
+	reader: LoggerStdoutReader,
+	seen = "",
+): Promise<void> => {
 	const { done, value } = await reader.read();
 	if (done) {
-		throw new Error(`Logger exited before becoming ready. Output: ${seen}`);
+		const stderr = await readLoggerStderr(logger);
+		throw new Error(`Logger exited before becoming ready. Output: ${seen}\nStderr: ${stderr}`);
 	}
 
 	const output = `${seen}${new TextDecoder().decode(value)}`;
@@ -151,11 +165,11 @@ const readUntilLoggerReady = async (reader: LoggerStdoutReader, seen = ""): Prom
 		return;
 	}
 
-	await readUntilLoggerReady(reader, output);
+	await readUntilLoggerReady(logger, reader, output);
 };
 
 const waitForLoggerReady = async (logger: LoggerProcess): Promise<void> => {
-	await readUntilLoggerReady(logger.stdout.getReader() as unknown as LoggerStdoutReader);
+	await readUntilLoggerReady(logger, logger.stdout.getReader() as unknown as LoggerStdoutReader);
 };
 
 const openNewPage = async (cdpEndpoint: string, url: string): Promise<void> => {
