@@ -19,10 +19,9 @@ throwaway browser profile:
 - request/response metadata in append-only NDJSON
 - Chromium NetLog in the same run directory when using browser launch mode
 
-The logger is written in TypeScript for Bun. Development can happen in WSL, but
-the clean Windows target is to run the browser and logger on Windows so the
-logger connects to `http://127.0.0.1:9222`. Linux and macOS are also supported
-when the browser is launched locally with a reachable CDP endpoint.
+The logger is written in TypeScript for Bun and runs on Windows, Linux, and
+macOS. Run the logger on the same OS as the browser whenever possible so it can
+connect to `http://127.0.0.1:9222` without cross-VM networking assumptions.
 
 ## Why Websites Usually Cannot Notice It
 
@@ -60,48 +59,57 @@ it does not promise undetectability.
 
 ## Quick Start
 
-From WSL, prepare the repository and build the Windows executable:
+Launch mode is the recommended path. It starts a browser with the required CDP
+and NetLog flags, uses a dedicated profile, and keeps capture files in one run
+directory.
+
+Prepare the repository and build the binary:
 
 ```sh
 mise trust
 mise install
-mise run compile --target windows-x64
-wslpath -w "$PWD/dist/cdp-response-logger-windows-x64.exe"
+mise run compile
 ```
 
-The final command prints a Windows path to the compiled executable. From
-PowerShell, either run that executable directly from the printed path or copy it
-to the persistent bin folder:
+Run the logger and let it launch your browser:
 
-```powershell
-$base = "$env:LOCALAPPDATA\ChromeCdpResponseLogger"
-New-Item -ItemType Directory -Force "$base\bin" | Out-Null
-Copy-Item "<printed-windows-exe-path>" "$base\bin\cdp-response-logger.exe"
+```sh
+dist/cdp-response-logger-linux-x64 \
+  --launch-browser \
+  --browser-command google-chrome
 ```
 
-Start the logger and let it launch the browser:
+Use another browser command or executable path when needed:
 
 ```powershell
-& "$env:LOCALAPPDATA\ChromeCdpResponseLogger\bin\cdp-response-logger.exe" `
+.\dist\cdp-response-logger-windows-x64.exe `
   --launch-browser `
   --browser-command chrome.exe
 ```
 
+```sh
+dist/cdp-response-logger-linux-x64 --launch-browser --browser-command chromium
+```
+
+```sh
+bun src/index.ts --launch-browser \
+  --browser-path "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+```
+
 The browser opens with a dedicated profile, CDP bound to `127.0.0.1:9222`, and
 NetLog writing to the same capture directory. Log in manually inside that
-profile and browse normally. Capture files are written under:
-
-```text
-%LOCALAPPDATA%\ChromeCdpResponseLogger\captures\<run>
-```
+profile and browse normally.
 
 ## Dedicated Profile
 
-Launch mode uses this profile by default:
+Launch mode uses a dedicated profile under the platform default base directory:
 
-```text
-%LOCALAPPDATA%\ChromeCdpResponseLogger\browser-profile
-```
+- Windows:
+  `%LOCALAPPDATA%\ChromeCdpResponseLogger\browser-profile`
+- macOS:
+  `~/Library/Application Support/ChromeCdpResponseLogger/browser-profile`
+- Linux:
+  `${XDG_STATE_HOME:-~/.local/state}/ChromeCdpResponseLogger/browser-profile`
 
 The tool does not attach to your default browser profile and does not depend on
 it. Treat this profile as a separate browser identity. If a website needs login,
@@ -109,10 +117,10 @@ log in manually inside this browser window.
 
 ## Output Layout
 
-Each run creates a timestamped directory:
+Each run creates a timestamped directory under the platform capture root:
 
 ```text
-%LOCALAPPDATA%\ChromeCdpResponseLogger\captures\2026-07-06T12-34-56
+ChromeCdpResponseLogger/captures/2026-07-06T12-34-56
 ```
 
 The run directory contains:
@@ -122,18 +130,18 @@ run.json
 metadata.ndjson
 errors.ndjson
 websocket.ndjson
-bodies\
-requests\
-plugins\
+bodies/
+requests/
+plugins/
 netlog.json
 ```
 
-`bodies\` contains saved response bodies. `requests\` contains request payloads
+`bodies/` contains saved response bodies. `requests/` contains request payloads
 that the browser exposes through CDP. Filenames are generated from timestamp,
 SHA-256, counter, and MIME-derived extension; URLs are not placed into
 filenames.
 
-`plugins\` is created when configured plugins write per-plugin output. The core
+`plugins/` is created when configured plugins write per-plugin output. The core
 logger still only writes raw capture files; plugins are trusted local extension
 code you opt into with `--config`.
 
@@ -272,6 +280,20 @@ present.
 
 After browsing, check the latest run directory:
 
+```sh
+state_home="${XDG_STATE_HOME:-$HOME/.local/state}"
+base="${CDP_RESPONSE_LOGGER_BASE_DIR:-$state_home/ChromeCdpResponseLogger}"
+capture="$(find "$base/captures" -mindepth 1 -maxdepth 1 -type d |
+  sort |
+  tail -1)"
+printf '%s\n' "$capture"
+find "$capture/bodies" -type f | wc -l
+find "$capture/requests" -type f | wc -l
+wc -c "$capture/metadata.ndjson" "$capture/netlog.json"
+```
+
+On Windows PowerShell:
+
 ```powershell
 $capture = Get-ChildItem "$env:LOCALAPPDATA\ChromeCdpResponseLogger\captures" |
   Sort-Object LastWriteTime -Descending |
@@ -287,42 +309,46 @@ $capture.FullName
 You should see `metadata.ndjson` grow while the logger is running. Normal CDP
 misses are recorded in `errors.ndjson`.
 
-## Build From WSL
+## Build
 
-The WSL workflow builds a Windows executable into `dist/`:
+Build the configured binaries:
 
 ```sh
 mise install
-mise run compile --target windows-x64
-wslpath -w "$PWD/dist/cdp-response-logger-windows-x64.exe"
+mise run compile
 ```
 
-Recommended copied path on Windows:
+Build one target:
+
+```sh
+mise run compile --target linux-x64
+mise run compile --target windows-x64
+```
+
+The output files are:
 
 ```text
-%LOCALAPPDATA%\ChromeCdpResponseLogger\bin\cdp-response-logger.exe
+dist/cdp-response-logger-linux-x64
+dist/cdp-response-logger-windows-x64.exe
 ```
 
-If Bun cross-compilation from WSL fails, build on Windows instead:
+You can also run the TypeScript entrypoint directly with Bun:
 
-```powershell
-mise install
-mise run compile --target windows-x64
-$out = "$env:LOCALAPPDATA\ChromeCdpResponseLogger\bin\cdp-response-logger.exe"
-New-Item -ItemType Directory -Force (Split-Path $out) | Out-Null
-Copy-Item dist\cdp-response-logger-windows-x64.exe $out
-```
-
-You can also run the TypeScript entrypoint directly on Windows with Bun:
-
-```powershell
-bun src/index.ts --launch-browser --browser-command chrome.exe
+```sh
+bun src/index.ts --launch-browser --browser-command google-chrome
 ```
 
 ## Browser Modes
 
-Use launch mode when you want the logger to own the browser process. Use attach
-mode when you already started a CDP-capable browser yourself.
+Use launch mode first. It is easier to get right because the logger owns the
+browser process and supplies the CDP, dedicated-profile, and NetLog flags.
+
+Use attach mode only when you specifically need to connect to a browser you
+started yourself, such as an existing profile. That is harder in practice: the
+browser must already have been started with `--remote-debugging-port`, and
+Chromium-family browsers often reuse an existing profile process instead of
+applying new flags. You may need to fully close that profile first or use a
+separate profile directory.
 
 ### Launch Mode
 
@@ -332,11 +358,16 @@ logger exits.
 
 Use a browser command from `PATH`:
 
-```powershell
-cdp-response-logger --launch-browser --browser-command chrome.exe
+```sh
+cdp-response-logger --launch-browser --browser-command google-chrome
 ```
 
 Or use an explicit browser executable:
+
+```sh
+cdp-response-logger --launch-browser \
+  --browser-path "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+```
 
 ```powershell
 cdp-response-logger --launch-browser `
@@ -345,15 +376,15 @@ cdp-response-logger --launch-browser `
 
 Use an explicit capture directory:
 
-```powershell
-cdp-response-logger --launch-browser --browser-command chrome.exe `
-  --out "$env:LOCALAPPDATA\ChromeCdpResponseLogger\captures\manual-run"
+```sh
+cdp-response-logger --launch-browser --browser-command google-chrome \
+  --out "$HOME/captures/manual-run"
 ```
 
 Disable NetLog for a run:
 
-```powershell
-cdp-response-logger --launch-browser --browser-command chrome.exe --no-netlog
+```sh
+cdp-response-logger --launch-browser --browser-command google-chrome --no-netlog
 ```
 
 The logger intentionally does not auto-discover browsers. Pass either
@@ -377,15 +408,17 @@ default.
 
 ### Attach Mode
 
-Attach mode remains the default. Start a browser yourself with a dedicated
-profile and CDP, then run:
+Attach mode is for externally launched browsers. Start the browser yourself with
+CDP enabled, then run:
 
 ```sh
 cdp-response-logger --cdp http://127.0.0.1:9222 --out <capture-dir>
 ```
 
 Attach mode does not launch a browser or write NetLog by itself. It only
-connects to the CDP endpoint you provide.
+connects to the CDP endpoint you provide. If you also need NetLog in attach
+mode, the browser must have been started with `--log-net-log=<path>` before the
+logger connects.
 
 ## NetLog Warning
 
@@ -463,17 +496,18 @@ the platform default capture root:
 Set `CDP_RESPONSE_LOGGER_BASE_DIR` to override the base directory on any
 platform.
 
-## Persistent Windows Folders
+## Default Folders
 
-```text
-%LOCALAPPDATA%\ChromeCdpResponseLogger
-%LOCALAPPDATA%\ChromeCdpResponseLogger\browser-profile
-%LOCALAPPDATA%\ChromeCdpResponseLogger\captures
-%LOCALAPPDATA%\ChromeCdpResponseLogger\bin
-```
+- Windows:
+  `%LOCALAPPDATA%\ChromeCdpResponseLogger`
+- macOS:
+  `~/Library/Application Support/ChromeCdpResponseLogger`
+- Linux:
+  `${XDG_STATE_HOME:-~/.local/state}/ChromeCdpResponseLogger`
 
-Nothing is intentionally written under `%TEMP%` or WSL `/tmp` during normal
-capture.
+Each base directory contains `browser-profile`, `captures`, and plugin output
+created by configured plugins. Nothing is intentionally written under `%TEMP%`,
+`/tmp`, or WSL `/tmp` during normal capture.
 
 ## Development
 
@@ -485,8 +519,8 @@ mise run check --lint
 mise run compile
 ```
 
-`mise run compile` builds both Linux and Windows Bun executables into `dist/`.
-Use `mise run compile --target windows-x64` to build only the Windows binary.
+`mise run compile` builds the configured Bun executables into `dist/`. Use
+`mise run compile --target <target>` to build only one target.
 
 ## Known Limitations
 
