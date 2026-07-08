@@ -316,6 +316,13 @@ Start only Chrome with CDP and NetLog:
 & "$env:LOCALAPPDATA\ChromeCdpResponseLogger\bin\start-chrome-cdp.ps1"
 ```
 
+If `chrome.exe` is not on `PATH`, pass the executable path explicitly:
+
+```powershell
+& "$env:LOCALAPPDATA\ChromeCdpResponseLogger\bin\start-chrome-cdp.ps1" `
+  -ChromePath "C:\Program Files\Google\Chrome\Application\chrome.exe"
+```
+
 Start only the logger:
 
 ```powershell
@@ -328,6 +335,13 @@ Start both with the same capture directory:
 & "$env:LOCALAPPDATA\ChromeCdpResponseLogger\bin\start-capture.ps1"
 ```
 
+Start both with an explicit Chrome executable:
+
+```powershell
+& "$env:LOCALAPPDATA\ChromeCdpResponseLogger\bin\start-capture.ps1" `
+  -ChromePath "C:\Program Files\Google\Chrome\Application\chrome.exe"
+```
+
 Start both with plugins:
 
 ```powershell
@@ -338,8 +352,9 @@ Start both with plugins:
 The Chrome launcher:
 
 - creates the persistent folders
-- finds stable Chrome in standard `Program Files` locations, falling back to
-  Chrome Beta if stable Chrome is unavailable
+- uses `-ChromePath` when provided
+- otherwise resolves `chrome.exe` from `PATH`
+- throws an error if Chrome is not provided and `chrome.exe` is not on `PATH`
 - starts Chrome with `--user-data-dir`, `--remote-debugging-address=127.0.0.1`,
   `--remote-debugging-port=9222`, `--log-net-log`, and
   `--net-log-capture-mode=Everything`
