@@ -4,6 +4,7 @@ param(
 	[string] $Include,
 	[string] $Exclude,
 	[string] $Config,
+	[string] $ChromePath,
 	[switch] $NoPlugins,
 	[long] $MaxBodyBytes = -1
 )
@@ -17,7 +18,12 @@ function New-CaptureTimestamp {
 $baseDir = Join-Path $env:LOCALAPPDATA 'ChromeCdpResponseLogger'
 $captureDir = Join-Path (Join-Path $baseDir 'captures') (New-CaptureTimestamp)
 
-& (Join-Path $PSScriptRoot 'start-chrome-cdp.ps1') -CaptureDir $captureDir
+$chromeArguments = @('-CaptureDir', $captureDir)
+if ($ChromePath) {
+	$chromeArguments += @('-ChromePath', $ChromePath)
+}
+
+& (Join-Path $PSScriptRoot 'start-chrome-cdp.ps1') @chromeArguments
 
 $deadline = (Get-Date).AddSeconds(15)
 while ((Get-Date) -lt $deadline) {

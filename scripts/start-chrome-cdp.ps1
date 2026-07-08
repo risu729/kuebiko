@@ -1,5 +1,6 @@
 param(
-	[string] $CaptureDir
+	[string] $CaptureDir,
+	[string] $ChromePath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -8,21 +9,26 @@ function New-CaptureTimestamp {
 	return (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH-mm-ss')
 }
 
-function Find-Chrome {
-	$candidates = @(
-		"${env:ProgramFiles}\Google\Chrome\Application\chrome.exe",
-		"${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe",
-		"${env:ProgramFiles}\Google\Chrome Beta\Application\chrome.exe",
-		"${env:ProgramFiles(x86)}\Google\Chrome Beta\Application\chrome.exe"
+function Resolve-ChromePath {
+	param(
+		[string] $Path
 	)
 
-	foreach ($candidate in $candidates) {
-		if ($candidate -and (Test-Path -LiteralPath $candidate)) {
-			return $candidate
+	if ($Path) {
+		if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+			throw "Chrome executable was not found: $Path"
 		}
+
+		return (Resolve-Path -LiteralPath $Path).Path
 	}
 
-	throw 'Chrome or Chrome Beta was not found in the standard Program Files locations.'
+	$command = Get-Command 'chrome.exe' -CommandType Application -ErrorAction SilentlyContinue |
+		Select-Object -First 1
+	if (-not $command) {
+		throw 'chrome.exe was not found on PATH. Add Chrome to PATH or pass -ChromePath.'
+	}
+
+	return $command.Source
 }
 
 $baseDir = Join-Path $env:LOCALAPPDATA 'ChromeCdpResponseLogger'
@@ -38,7 +44,7 @@ if (-not $CaptureDir) {
 
 New-Item -ItemType Directory -Force -Path $CaptureDir | Out-Null
 
-$chrome = Find-Chrome
+$chrome = Resolve-ChromePath -Path $ChromePath
 $netLogPath = Join-Path $CaptureDir 'netlog.json'
 $arguments = @(
 	"--user-data-dir=$profileDir",
