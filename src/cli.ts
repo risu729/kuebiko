@@ -204,7 +204,7 @@ const renderHelp = (): string => {
 	const lines = [
 		`${TOOL_NAME} [options]`,
 		"",
-		"Save Chrome CDP response bodies and metadata.",
+		"Save CDP response bodies and metadata.",
 		"",
 		"Options:",
 		...Object.entries(cliArgs).map(([name, definition]) => formatOption(name, definition)),

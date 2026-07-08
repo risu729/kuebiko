@@ -1,8 +1,9 @@
-# Chrome CDP Response Logger
+# CDP Network Logger
 
-Local Chrome network logger for Windows. It launches Chrome with a dedicated
-profile, connects to Chrome's local DevTools Protocol endpoint, and saves
-request/response bodies plus metadata while you browse manually.
+Local network logger for browsers that expose the Chrome DevTools Protocol
+(CDP). It launches a dedicated browser profile, connects to a local CDP
+endpoint, and saves request/response bodies plus metadata while you browse
+manually.
 
 This tool is intentionally narrow. It does not use mitmproxy, `SSLKEYLOGFILE`,
 packet capture, request interception, browser automation, login automation,
@@ -11,20 +12,22 @@ analytics, parsers, dashboards, or HAR viewers.
 ## What This Is For
 
 Use this when you want raw local capture files from normal manual browsing in a
-throwaway Chrome profile:
+throwaway browser profile:
 
 - response bodies from CDP `Network.getResponseBody`
-- request payloads that Chrome exposes through CDP
+- request payloads that the browser exposes through CDP
 - request/response metadata in append-only NDJSON
-- Chrome NetLog in the same run directory
+- Chromium NetLog in the same run directory when launched with the provided
+  Chromium-family launcher
 
 The logger is written in TypeScript for Bun. Development can happen in WSL, but
-the clean runtime target is Windows: run Chrome and the logger on Windows so the
-logger connects to `http://127.0.0.1:9222`.
+the clean Windows target is to run the browser and logger on Windows so the
+logger connects to `http://127.0.0.1:9222`. Linux and macOS are also supported
+when the browser is launched locally with a reachable CDP endpoint.
 
 ## Why Websites Usually Cannot Notice It
 
-The logger observes Chrome locally. The website does not receive a header,
+The logger observes the browser locally. The website does not receive a header,
 cookie, JavaScript variable, or protocol message saying that CDP logging is
 enabled.
 
@@ -33,20 +36,20 @@ The launcher and logger are deliberately passive:
 - CDP is bound to `127.0.0.1`.
 - The logger uses the CDP `Network` domain to observe completed browser network
   activity and fetch stored bodies.
-- Chrome NetLog writes a local debugging file from Chrome's network stack.
+- NetLog writes a local debugging file from the Chromium network stack.
 - There is no `Fetch.enable`, request pausing, request rewriting, or response
   rewriting.
 - There is no `Runtime.evaluate`, script injection, extension injection, or
   Debugger-domain attachment.
 - The launcher does not use `--headless`, `--enable-automation`, or
   `--remote-debugging-port=0`.
-- The launcher does not use `--disable-quic`; Chrome's network behavior is kept
+- The launcher does not use `--disable-quic`; browser network behavior is kept
   close to normal.
 - After enabling Network on an attached popup, iframe, or worker target, the
   logger sends `Runtime.runIfWaitingForDebugger` for that target session; it
   does not otherwise use the Runtime domain.
 
-That means a destination site should see ordinary Chrome requests from the
+That means a destination site should see ordinary browser requests from the
 dedicated profile, not an explicit "logger enabled" signal.
 
 This is not a stealth or evasion guarantee. A site may still notice ordinary
@@ -66,14 +69,14 @@ mise install
 mise run build-windows-from-wsl
 ```
 
-On Windows, start Chrome and the logger together:
+On Windows, start a Chromium-family browser and the logger together:
 
 ```powershell
 & "$env:LOCALAPPDATA\ChromeCdpResponseLogger\bin\start-capture.ps1"
 ```
 
-Chrome opens with a dedicated profile. Log in manually inside that profile and
-browse normally. Capture files are written under:
+The browser opens with a dedicated profile. Log in manually inside that profile
+and browse normally. Capture files are written under:
 
 ```text
 %LOCALAPPDATA%\ChromeCdpResponseLogger\captures\<run>
@@ -81,15 +84,15 @@ browse normally. Capture files are written under:
 
 ## Dedicated Profile
 
-Chrome is launched with:
+A launched browser uses:
 
 ```text
-%LOCALAPPDATA%\ChromeCdpResponseLogger\chrome-profile
+%LOCALAPPDATA%\ChromeCdpResponseLogger\browser-profile
 ```
 
-The tool does not attach to your default Chrome profile and does not depend on
+The tool does not attach to your default browser profile and does not depend on
 it. Treat this profile as a separate browser identity. If a website needs login,
-log in manually inside this Chrome window.
+log in manually inside this browser window.
 
 ## Output Layout
 
@@ -113,7 +116,7 @@ netlog.json
 ```
 
 `bodies\` contains saved response bodies. `requests\` contains request payloads
-that Chrome exposes through CDP. Filenames are generated from timestamp,
+that the browser exposes through CDP. Filenames are generated from timestamp,
 SHA-256, counter, and MIME-derived extension; URLs are not placed into
 filenames.
 
@@ -128,7 +131,7 @@ request payload and a saved response body.
 `errors.ndjson` contains per-request capture failures. Individual CDP failures
 do not stop the logger.
 
-`netlog.json` is Chrome NetLog for network-stack debugging.
+`netlog.json` is Chromium NetLog for network-stack debugging.
 
 ## What Gets Saved
 
@@ -137,7 +140,7 @@ For completed responses, metadata includes request and response fields such as:
 - URL, method, request ID, loader ID, target/session identifiers
 - request headers and response headers
 - status, status text, MIME type, protocol, remote IP/port
-- cache/service-worker/prefetch flags where Chrome provides them
+- cache/service-worker/prefetch flags where the browser provides them
 - encoded data length
 - response body path, byte length, SHA-256, and CDP `base64Encoded`
 - request body path, byte length, SHA-256, and source when available
@@ -150,7 +153,7 @@ Response bodies are saved exactly from CDP's body result:
 
 Request payloads are written as UTF-8 bytes from CDP strings. The logger first
 uses inline `request.postData` from `Network.requestWillBeSent` when present. If
-Chrome only reports `hasPostData`, the logger tries
+the browser only reports `hasPostData`, the logger tries
 `Network.getRequestPostData`. This is suitable for JSON, forms, GraphQL, and
 other text request bodies. It is not raw upload byte capture, and arbitrary
 non-UTF-8 uploads may not round-trip exactly.
@@ -273,7 +276,7 @@ misses are recorded in `errors.ndjson`.
 
 ## Build And Deploy From WSL
 
-The WSL workflow builds a Windows executable and copies it plus the PowerShell
+The WSL workflow builds a Windows executable and copies it plus the launcher
 scripts into the persistent Windows bin folder:
 
 ```sh
@@ -310,17 +313,24 @@ bun src/index.ts --cdp http://127.0.0.1:9222 --out <capture-dir>
 
 ## Scripts
 
-Start only Chrome with CDP and NetLog:
+Start a Chromium-family browser with CDP and NetLog:
 
 ```powershell
-& "$env:LOCALAPPDATA\ChromeCdpResponseLogger\bin\start-chrome-cdp.ps1"
+& "$env:LOCALAPPDATA\ChromeCdpResponseLogger\bin\start-browser-cdp.ps1"
 ```
 
-If `chrome.exe` is not on `PATH`, pass the executable path explicitly:
+By default the Windows launcher resolves `chrome.exe` from `PATH`. To use
+another CDP-capable Chromium-family browser, pass its executable path or
+command:
 
 ```powershell
-& "$env:LOCALAPPDATA\ChromeCdpResponseLogger\bin\start-chrome-cdp.ps1" `
-  -ChromePath "C:\Program Files\Google\Chrome\Application\chrome.exe"
+& "$env:LOCALAPPDATA\ChromeCdpResponseLogger\bin\start-browser-cdp.ps1" `
+  -BrowserPath "C:\Program Files\Microsoft\Edge\Application\msedge.exe"
+```
+
+```powershell
+& "$env:LOCALAPPDATA\ChromeCdpResponseLogger\bin\start-browser-cdp.ps1" `
+  -BrowserCommand chrome.exe
 ```
 
 Start only the logger:
@@ -335,11 +345,11 @@ Start both with the same capture directory:
 & "$env:LOCALAPPDATA\ChromeCdpResponseLogger\bin\start-capture.ps1"
 ```
 
-Start both with an explicit Chrome executable:
+Start both with an explicit browser executable:
 
 ```powershell
 & "$env:LOCALAPPDATA\ChromeCdpResponseLogger\bin\start-capture.ps1" `
-  -ChromePath "C:\Program Files\Google\Chrome\Application\chrome.exe"
+  -BrowserPath "C:\Program Files\Google\Chrome\Application\chrome.exe"
 ```
 
 Start both with plugins:
@@ -349,19 +359,36 @@ Start both with plugins:
   -Config C:\path\logger.config.ts
 ```
 
-The Chrome launcher:
+The generic browser launcher:
 
 - creates the persistent folders
-- uses `-ChromePath` when provided
-- otherwise resolves `chrome.exe` from `PATH`
-- throws an error if Chrome is not provided and `chrome.exe` is not on `PATH`
-- starts Chrome with `--user-data-dir`, `--remote-debugging-address=127.0.0.1`,
+- uses `-BrowserPath` when provided
+- otherwise resolves `-BrowserCommand` from `PATH`, defaulting to `chrome.exe`
+  on Windows
+- keeps `-ChromePath` as a compatibility alias
+- throws an error if the browser is not provided and the command is not on
+  `PATH`
+- starts the browser with `--user-data-dir`,
+  `--remote-debugging-address=127.0.0.1`,
   `--remote-debugging-port=9222`, `--log-net-log`, and
   `--net-log-capture-mode=Everything`
 
-## Chrome NetLog Warning
+On Linux/macOS, `scripts/start-browser-cdp.sh` provides the same launcher shape:
 
-Chrome may show this banner after startup:
+```sh
+scripts/start-browser-cdp.sh --browser-command google-chrome
+scripts/start-browser-cdp.sh --browser-command chromium
+scripts/start-browser-cdp.sh --browser-path /path/to/browser
+```
+
+The shell launcher defaults to `google-chrome` from `PATH`.
+
+`scripts/start-chrome-cdp.ps1` and `scripts/start-chrome-cdp.bat` remain as
+Chrome-compatible wrappers around `start-browser-cdp.ps1`.
+
+## NetLog Warning
+
+Chrome and other Chromium-family browsers may show this banner after startup:
 
 ```text
 You are using an unsupported command-line flag: --log-net-log=<path>. Stability
@@ -369,34 +396,34 @@ and security will suffer.
 ```
 
 This is expected when NetLog is enabled from the command line. `--log-net-log`
-is the Chromium-documented startup flag for writing a NetLog file, but Chrome's
+is the Chromium-documented startup flag for writing a NetLog file, but browser
 security warning UI can still flag diagnostic command-line switches as
 potentially dangerous.
 
-The warning does not mean that NetLog failed or that Chrome ignored the flag.
-Verify capture by checking that `netlog.json` exists and grows in the run
+The warning does not mean that NetLog failed or that the browser ignored the
+flag. Verify capture by checking that `netlog.json` exists and grows in the run
 folder. The warning is meaningful: NetLog captures sensitive network metadata,
 and `--net-log-capture-mode=Everything` can include more private debugging
 detail than the default browser behavior.
 
 ## Debugger Paused Banner
 
-Chrome may otherwise show this banner when a page opens a popup or another
-window while CDP is attached:
+Chromium-family browsers may otherwise show this banner when a page opens a
+popup or another window while CDP is attached:
 
 ```text
 Debugger paused in another tab, click to switch to that tab.
 ```
 
 The logger does not enable the CDP `Debugger` or `Fetch` domains and does not
-intentionally pause scripts. Chrome can still create an auto-attached popup,
-iframe, or worker target in a debugger-waiting state. For each attached
+intentionally pause scripts. The browser can still create an auto-attached
+popup, iframe, or worker target in a debugger-waiting state. For each attached
 inspectable target, the logger enables `Network` first, then calls
 `Runtime.runIfWaitingForDebugger` for that target session.
 
-This Runtime call only tells a target to continue if Chrome has it waiting for a
-debugger. It is not request interception, script injection, browser automation,
-or general Runtime evaluation.
+This Runtime call only tells a target to continue if the browser has it waiting
+for a debugger. It is not request interception, script injection, browser
+automation, or general Runtime evaluation.
 
 ## CLI
 
@@ -416,14 +443,23 @@ Options:
 ```
 
 If `--out` is omitted, the logger creates a new timestamped capture folder under
-`%LOCALAPPDATA%\ChromeCdpResponseLogger\captures`. When running outside Windows
-without `LOCALAPPDATA`, pass `--out` explicitly.
+the platform default capture root:
+
+- Windows:
+  `%LOCALAPPDATA%\ChromeCdpResponseLogger\captures`
+- macOS:
+  `~/Library/Application Support/ChromeCdpResponseLogger/captures`
+- Linux:
+  `${XDG_STATE_HOME:-~/.local/state}/ChromeCdpResponseLogger/captures`
+
+Set `CDP_RESPONSE_LOGGER_BASE_DIR` to override the base directory on any
+platform.
 
 ## Persistent Windows Folders
 
 ```text
 %LOCALAPPDATA%\ChromeCdpResponseLogger
-%LOCALAPPDATA%\ChromeCdpResponseLogger\chrome-profile
+%LOCALAPPDATA%\ChromeCdpResponseLogger\browser-profile
 %LOCALAPPDATA%\ChromeCdpResponseLogger\captures
 %LOCALAPPDATA%\ChromeCdpResponseLogger\bin
 ```
@@ -436,6 +472,7 @@ capture.
 ```sh
 mise install
 mise run test
+E2E_BROWSER_PATH=/path/to/chrome-or-chromium mise run test-e2e
 mise run check --lint
 mise run compile
 ```

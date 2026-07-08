@@ -32,6 +32,6 @@ mise run compile --target windows-x64
 
 mkdir -p "${deploy_dir}"
 cp dist/cdp-response-logger-windows-x64.exe "${deploy_dir}/cdp-response-logger.exe"
-cp scripts/*.ps1 scripts/*.bat "${deploy_dir}/"
+cp scripts/*.ps1 scripts/*.bat scripts/*.sh "${deploy_dir}/"
 
 echo "Deployed logger and scripts to: ${deploy_dir}"

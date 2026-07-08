@@ -51,6 +51,28 @@ jobs:
           version: 2026.7.0
       - name: Test
         run: mise run test
+  e2e:
+    name: E2E
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Install mise
+        uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4.2.0
+        with:
+          version: 2026.7.0
+      - name: Setup Chrome
+        id: setup-chrome
+        uses: browser-actions/setup-chrome@2e1d749697dd1612b833dba4a722266286fbefcd # v2.1.2
+      - name: Run E2E
+        run: mise run test-e2e
+        env:
+          E2E_BROWSER_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
   compile:
     name: Compile
     runs-on: ubuntu-24.04
@@ -73,6 +95,7 @@ jobs:
     needs:
       - lint
       - test
+      - e2e
       - compile
     if: always() && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled'))
     runs-on: ubuntu-24.04

@@ -42,6 +42,10 @@ run = "bun install --frozen-lockfile"
 description = "Run repository Bun tests."
 run = "bun test"
 
+[tasks.test-e2e]
+description = "Run browser-backed Bun e2e tests."
+run = "bun test tests/e2e"
+
 [tasks.check]
 description = "Run hk linters and formatters."
 usage = '''

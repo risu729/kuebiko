@@ -54,13 +54,38 @@ const createBodyFilename = (
 	contentType?: string,
 ): string => `${timestamp}-${shortHash(hash)}-${counter}${contentTypeToExtension(contentType)}`;
 
-const getDefaultBaseDirectory = (): string => {
-	const localAppData = process.env["LOCALAPPDATA"];
-	if (!localAppData) {
-		throw new Error("LOCALAPPDATA is not set. Pass --out when running outside Windows.");
+const getRequiredHome = (): string => {
+	const home = process.env["HOME"] ?? process.env["USERPROFILE"];
+	if (!home) {
+		throw new Error("HOME/USERPROFILE is not set. Pass --out explicitly.");
 	}
 
-	return join(localAppData, WINDOWS_BASE_DIR_NAME);
+	return home;
+};
+
+const getDefaultBaseDirectory = (): string => {
+	const override = process.env["CDP_RESPONSE_LOGGER_BASE_DIR"];
+	if (override) {
+		return override;
+	}
+
+	if (process.platform === "win32") {
+		const localAppData = process.env["LOCALAPPDATA"];
+		if (!localAppData) {
+			throw new Error("LOCALAPPDATA is not set. Pass --out explicitly.");
+		}
+
+		return join(localAppData, WINDOWS_BASE_DIR_NAME);
+	}
+
+	if (process.platform === "darwin") {
+		return join(getRequiredHome(), "Library", "Application Support", WINDOWS_BASE_DIR_NAME);
+	}
+
+	return join(
+		process.env["XDG_STATE_HOME"] ?? join(getRequiredHome(), ".local", "state"),
+		WINDOWS_BASE_DIR_NAME,
+	);
 };
 
 const getDefaultCaptureDirectory = (date = new Date()): string =>

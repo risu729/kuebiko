@@ -136,6 +136,7 @@ const headerValue = (
 class CdpResponseLogger {
 	readonly #client: CdpClient;
 	readonly #options: StartLoggerOptions;
+	readonly #pendingEvents = new Set<Promise<void>>();
 	readonly #requests = new Map<string, RequestState>();
 	readonly #sessions = new Map<string, SessionInfo>();
 
@@ -156,7 +157,11 @@ class CdpResponseLogger {
 	}
 
 	async close(): Promise<void> {
-		await this.#client.close();
+		try {
+			await this.#client.close();
+		} finally {
+			await this.#drainPendingEvents();
+		}
 	}
 
 	#log(message: string): void {
@@ -171,10 +176,10 @@ class CdpResponseLogger {
 
 	#registerEvents(): void {
 		this.#client.on("Target.attachedToTarget", (event) => {
-			void this.#handleAttached(event);
+			this.#trackEvent(this.#handleAttached(event));
 		});
 		this.#client.on("Target.detachedFromTarget", (event) => {
-			void this.#handleDetached(event);
+			this.#trackEvent(this.#handleDetached(event));
 		});
 		this.#client.on("Network.requestWillBeSent", (event, sessionId) => {
 			this.#handleRequestWillBeSent(event as RequestWillBeSentEvent, sessionId);
@@ -183,17 +188,36 @@ class CdpResponseLogger {
 			this.#handleResponseReceived(event as ResponseReceivedEvent, sessionId);
 		});
 		this.#client.on("Network.loadingFinished", (event, sessionId) => {
-			void this.#handleLoadingFinished(event as LoadingFinishedEvent, sessionId);
+			this.#trackEvent(this.#handleLoadingFinished(event as LoadingFinishedEvent, sessionId));
 		});
 		this.#client.on("Network.loadingFailed", (event, sessionId) => {
-			void this.#handleLoadingFailed(event as LoadingFailedEvent, sessionId);
+			this.#trackEvent(this.#handleLoadingFailed(event as LoadingFailedEvent, sessionId));
 		});
 		this.#client.on("Network.webSocketFrameReceived", (event, sessionId) => {
-			void this.#handleWebSocketFrameReceived(event as WebSocketFrameReceivedEvent, sessionId);
+			this.#trackEvent(
+				this.#handleWebSocketFrameReceived(event as WebSocketFrameReceivedEvent, sessionId),
+			);
 		});
 		this.#client.on("disconnect", () => {
 			this.#log("cdp disconnected");
 		});
+	}
+
+	#trackEvent(eventWork: Promise<void>): void {
+		const tracked = eventWork
+			.catch((error: unknown) => {
+				this.#log(`cdp event handler failed: ${errorMessage(error)}`);
+			})
+			.finally(() => {
+				this.#pendingEvents.delete(tracked);
+			});
+		this.#pendingEvents.add(tracked);
+	}
+
+	async #drainPendingEvents(): Promise<void> {
+		while (this.#pendingEvents.size > 0) {
+			await Promise.allSettled([...this.#pendingEvents]);
+		}
 	}
 
 	async #attachExistingTargets(): Promise<void> {

@@ -4,7 +4,9 @@ param(
 	[string] $Include,
 	[string] $Exclude,
 	[string] $Config,
-	[string] $ChromePath,
+	[Alias('ChromePath')]
+	[string] $BrowserPath,
+	[string] $BrowserCommand = 'chrome.exe',
 	[switch] $NoPlugins,
 	[long] $MaxBodyBytes = -1
 )
@@ -19,11 +21,12 @@ $baseDir = Join-Path $env:LOCALAPPDATA 'ChromeCdpResponseLogger'
 $captureDir = Join-Path (Join-Path $baseDir 'captures') (New-CaptureTimestamp)
 
 $chromeArguments = @('-CaptureDir', $captureDir)
-if ($ChromePath) {
-	$chromeArguments += @('-ChromePath', $ChromePath)
+if ($BrowserPath) {
+	$chromeArguments += @('-BrowserPath', $BrowserPath)
 }
+$chromeArguments += @('-BrowserCommand', $BrowserCommand)
 
-& (Join-Path $PSScriptRoot 'start-chrome-cdp.ps1') @chromeArguments
+& (Join-Path $PSScriptRoot 'start-browser-cdp.ps1') @chromeArguments
 
 $deadline = (Get-Date).AddSeconds(15)
 while ((Get-Date) -lt $deadline) {

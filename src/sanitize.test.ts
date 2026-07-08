@@ -3,6 +3,8 @@ import { describe, expect, it } from "bun:test";
 import {
 	contentTypeToExtension,
 	createBodyFilename,
+	getDefaultBaseDirectory,
+	getDefaultCaptureDirectory,
 	matchesFilters,
 	shortHash,
 	timestampForFolder,
@@ -45,5 +47,25 @@ describe("matchesFilters", () => {
 		expect(matchesFilters("https://example.test/page", /api/u, undefined)).toBe(false);
 		expect(matchesFilters("https://example.test/api", undefined, /example/u)).toBe(false);
 		expect(matchesFilters("https://example.test/api", /api/u, /blocked/u)).toBe(true);
+	});
+});
+
+describe("default capture directory", () => {
+	it("uses an explicit base directory override on every platform", () => {
+		const previous = process.env["CDP_RESPONSE_LOGGER_BASE_DIR"];
+		process.env["CDP_RESPONSE_LOGGER_BASE_DIR"] = "/captures";
+
+		try {
+			expect(getDefaultBaseDirectory()).toBe("/captures");
+			expect(getDefaultCaptureDirectory(new Date("2026-07-06T12:34:56.789Z"))).toBe(
+				"/captures/captures/2026-07-06T12-34-56",
+			);
+		} finally {
+			if (previous === undefined) {
+				delete process.env["CDP_RESPONSE_LOGGER_BASE_DIR"];
+			} else {
+				process.env["CDP_RESPONSE_LOGGER_BASE_DIR"] = previous;
+			}
+		}
 	});
 });
