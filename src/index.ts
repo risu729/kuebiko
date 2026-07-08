@@ -5,6 +5,7 @@ import type { ParsedArgs } from "citty";
 import { z } from "zod";
 
 import { startCdpLogger } from "./cdp";
+import { defineConfig } from "./config";
 import { createPluginHost } from "./plugins";
 import { getDefaultCaptureDirectory } from "./sanitize";
 import { createStorage } from "./storage";
@@ -14,6 +15,7 @@ import type {
 	HookEventName,
 	LoggerConfig,
 	LoggerPlugin,
+	LoggerPluginConfig,
 	PluginContext,
 } from "./types";
 
@@ -218,5 +220,21 @@ if (import.meta.main) {
 	await main();
 }
 
-export { DEFAULT_CDP_ENDPOINT, cliArgs, main, mainCommand, normalizeArgs, parseArgs, runLogger };
-export type { HookEvent, HookEventName, LoggerConfig, LoggerPlugin, PluginContext };
+export {
+	DEFAULT_CDP_ENDPOINT,
+	cliArgs,
+	defineConfig,
+	main,
+	mainCommand,
+	normalizeArgs,
+	parseArgs,
+	runLogger,
+};
+export type {
+	HookEvent,
+	HookEventName,
+	LoggerConfig,
+	LoggerPlugin,
+	LoggerPluginConfig,
+	PluginContext,
+};

@@ -2,6 +2,7 @@ import { describe, expect, it, mock } from "bun:test";
 import { mkdir, mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { createPluginHost } from "./plugins";
 import type {
@@ -13,6 +14,8 @@ import type {
 	RequestState,
 	WebSocketFrameRecord,
 } from "./types";
+
+const packageEntryUrl = pathToFileURL(join(process.cwd(), "src/index.ts")).href;
 
 const createResponseEvent = (runDirectory: string): HookEvent => ({
 	event: "response.completed",
@@ -74,9 +77,11 @@ describe("createPluginHost", () => {
 		const runDirectory = join(dir, "run");
 		await Bun.write(
 			join(dir, "config.ts"),
-			`export default {
+			`import { defineConfig } from ${JSON.stringify(packageEntryUrl)};
+
+export default defineConfig({
       plugins: [{ module: "./json-api-mirror.ts" }]
-    };`,
+    });`,
 		);
 		await Bun.write(
 			join(dir, "json-api-mirror.ts"),
@@ -124,12 +129,14 @@ describe("createPluginHost", () => {
 		const dir = await mkdtemp(join(tmpdir(), "cdp-response-logger-plugin-"));
 		await Bun.write(
 			join(dir, "config.ts"),
-			`export default {
+			`import { defineConfig } from ${JSON.stringify(packageEntryUrl)};
+
+export default defineConfig({
       plugins: [
         { module: "./one.ts" },
         { module: "./two.ts" },
       ],
-    };`,
+    });`,
 		);
 		const plugin = `export default {
       id: "duplicate-plugin",
@@ -154,9 +161,11 @@ describe("createPluginHost", () => {
 		const dir = await mkdtemp(join(tmpdir(), "cdp-response-logger-plugin-"));
 		await Bun.write(
 			join(dir, "config.ts"),
-			`export default {
+			`import { defineConfig } from ${JSON.stringify(packageEntryUrl)};
+
+export default defineConfig({
       plugins: [{ module: "./plugin.ts", timeoutMs: 0 }],
-    };`,
+    });`,
 		);
 		await Bun.write(
 			join(dir, "plugin.ts"),
@@ -183,9 +192,11 @@ describe("createPluginHost", () => {
 		const runDirectory = join(dir, "run");
 		await Bun.write(
 			join(dir, "config.ts"),
-			`export default {
+			`import { defineConfig } from ${JSON.stringify(packageEntryUrl)};
+
+export default defineConfig({
       plugins: [{ module: "./slow.ts", queueSize: 1, timeoutMs: 1 }]
-    };`,
+    });`,
 		);
 		await Bun.write(
 			join(dir, "slow.ts"),

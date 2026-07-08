@@ -173,7 +173,9 @@ are written to `errors.ndjson`; capture continues.
 Create a config file:
 
 ```ts
-export default {
+import { defineConfig } from "chrome-network-logger";
+
+export default defineConfig({
 	plugins: [
 		{
 			module: "./plugins/json-api-mirror.ts",
@@ -182,8 +184,11 @@ export default {
 			queueSize: 1000,
 		},
 	],
-};
+});
 ```
+
+`defineConfig` provides TypeScript context and validates plugin config entries
+when the config module is evaluated.
 
 Plugin module paths are resolved relative to the config file.
 

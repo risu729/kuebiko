@@ -2,8 +2,7 @@ import { mkdir } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { z } from "zod";
-
+import { parseLoggerConfig } from "./config";
 import type {
 	CompletedResponseMetadata,
 	ErrorRecord,
@@ -29,18 +28,6 @@ const HOOK_EVENT_NAMES = new Set<HookEventName>([
 
 const DEFAULT_QUEUE_SIZE = 1000;
 const DEFAULT_TIMEOUT_MS = 5000;
-
-const PluginConfigSchema = z.object({
-	enabled: z.boolean().optional(),
-	module: z.string().min(1),
-	options: z.unknown().optional(),
-	queueSize: z.int().positive().optional(),
-	timeoutMs: z.int().positive().optional(),
-});
-
-const LoggerConfigSchema: z.ZodType<LoggerConfig> = z.object({
-	plugins: z.array(PluginConfigSchema).optional(),
-});
 
 type LoadedPlugin = {
 	configDirectory: string;
@@ -113,7 +100,7 @@ const assertValidPlugin = (plugin: unknown, modulePath: string): LoggerPlugin =>
 const loadConfig = async (configPath: string): Promise<{ config: LoggerConfig; path: string }> => {
 	const absolutePath = resolve(process.cwd(), configPath);
 	const imported = (await import(toImportUrl(absolutePath))) as { default?: unknown };
-	const config = LoggerConfigSchema.parse(imported.default ?? {});
+	const config = parseLoggerConfig(imported.default);
 
 	return { config, path: absolutePath };
 };
