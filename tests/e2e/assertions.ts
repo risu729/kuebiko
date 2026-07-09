@@ -39,19 +39,27 @@ const assertCapturedApi = (
 	expect(JSON.parse(bodies.requestBody)).toEqual({ hello: "from-page" });
 };
 
-const readNetLog = async (path: string): Promise<NetLogRecord> => {
-	const text = await waitFor("NetLog file", async () => {
+const parseNetLog = (content: string): NetLogRecord | undefined => {
+	if (!content.trim()) {
+		return undefined;
+	}
+
+	try {
+		return JSON.parse(content) as NetLogRecord;
+	} catch {
+		return undefined;
+	}
+};
+
+const readNetLog = async (path: string): Promise<NetLogRecord> =>
+	await waitFor("complete NetLog JSON", async () => {
 		const file = Bun.file(path);
 		if (!(await file.exists()) || file.size === 0) {
 			return undefined;
 		}
 
-		const content = await file.text();
-		return content.trim() ? content : undefined;
+		return parseNetLog(await file.text());
 	});
-
-	return JSON.parse(text) as NetLogRecord;
-};
 
 const assertNetLog = (netLog: NetLogRecord): void => {
 	expect(netLog.constants).toBeDefined();
