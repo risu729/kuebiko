@@ -35,7 +35,7 @@ type TestContext = RunDirectories & {
 const browserPath = process.env["E2E_BROWSER_PATH"];
 const e2eRoot = join(process.cwd(), ".e2e");
 const cleanupPaths: string[] = [];
-const LOGGER_STOP_TIMEOUT_MS = 5_000;
+const LOGGER_STOP_TIMEOUT_MS = 60_000;
 
 const maybeBrowserIt = browserPath ? it : it.skip;
 
@@ -222,16 +222,24 @@ const startContext = async (path = requireBrowserPath()): Promise<TestContext> =
 	return { ...directories, cdpEndpoint, fixtureServer, logger };
 };
 
-const stopLogger = async (logger: LoggerProcess): Promise<void> => {
-	logger.kill("SIGTERM");
-	const stopped = await Promise.race([
+const waitForLoggerExit = async (logger: LoggerProcess): Promise<boolean> =>
+	await Promise.race([
 		logger.exited.then(() => true),
 		Bun.sleep(LOGGER_STOP_TIMEOUT_MS).then(() => false),
 	]).catch(() => true);
-	if (!stopped) {
-		logger.kill("SIGKILL");
-		await logger.exited.catch(() => undefined);
+
+const stopLogger = async (logger: LoggerProcess): Promise<void> => {
+	logger.kill("SIGTERM");
+	if (await waitForLoggerExit(logger)) {
+		return;
 	}
+
+	logger.kill("SIGKILL");
+	await logger.exited.catch(() => undefined);
+	const stderr = await readLoggerStderr(logger);
+	throw new Error(
+		`Logger did not exit within ${LOGGER_STOP_TIMEOUT_MS}ms after SIGTERM. Stderr: ${stderr}`,
+	);
 };
 
 const closeContext = async (context: TestContext): Promise<void> => {

@@ -16,6 +16,8 @@ type NetLogRecord = {
 	events?: unknown;
 };
 
+const NETLOG_READ_TIMEOUT_MS = 30_000;
+
 const readCapturedBodies = async (
 	captureDirectory: string,
 	metadata: CapturedApiRecord,
@@ -39,19 +41,20 @@ const assertCapturedApi = (
 	expect(JSON.parse(bodies.requestBody)).toEqual({ hello: "from-page" });
 };
 
-const readNetLog = async (path: string): Promise<NetLogRecord> => {
-	const text = await waitFor("NetLog file", async () => {
-		const file = Bun.file(path);
-		if (!(await file.exists()) || file.size === 0) {
-			return undefined;
-		}
+const readNetLog = async (path: string): Promise<NetLogRecord> =>
+	await waitFor(
+		"complete NetLog JSON",
+		async () => {
+			const file = Bun.file(path);
+			if (!(await file.exists()) || file.size === 0) {
+				return undefined;
+			}
 
-		const content = await file.text();
-		return content.trim() ? content : undefined;
-	});
-
-	return JSON.parse(text) as NetLogRecord;
-};
+			const content = await file.text();
+			return content.trim() ? (JSON.parse(content) as NetLogRecord) : undefined;
+		},
+		{ deadline: Date.now() + NETLOG_READ_TIMEOUT_MS },
+	);
 
 const assertNetLog = (netLog: NetLogRecord): void => {
 	expect(netLog.constants).toBeDefined();
