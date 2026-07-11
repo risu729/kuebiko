@@ -37,8 +37,25 @@ const assertCapturedApi = (
 	expect(JSON.parse(bodies.requestBody)).toEqual({ hello: "from-page" });
 };
 
-const readNetLog = async (path: string): Promise<NetLogRecord> =>
-	JSON.parse(await Bun.file(path).text()) as NetLogRecord;
+const readNetLog = async (path: string): Promise<NetLogRecord> => {
+	const file = Bun.file(path);
+	if (!(await file.exists())) {
+		throw new Error(`NetLog file does not exist: ${path}`);
+	}
+
+	const contents = (await file.text()).trim();
+	if (!contents) {
+		throw new Error(`NetLog file is empty and may not have been finalized: ${path}`);
+	}
+
+	try {
+		return JSON.parse(contents) as NetLogRecord;
+	} catch (error) {
+		throw new Error(`NetLog file contains incomplete or invalid JSON: ${path}`, {
+			cause: error,
+		});
+	}
+};
 
 const assertNetLog = (netLog: NetLogRecord): void => {
 	expect(netLog.constants).toBeDefined();

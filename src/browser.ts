@@ -79,7 +79,7 @@ const waitForExit = async (browser: BrowserProcess, timeout?: number): Promise<b
 	await Promise.race([
 		browser.exited.then(() => true),
 		...(timeout === undefined ? [] : [Bun.sleep(timeout).then(() => false)]),
-	]).catch(() => true);
+	]);
 
 const requestCloseOutcome = async (
 	requestClose: () => Promise<void>,
@@ -93,7 +93,7 @@ const requestCloseOutcome = async (
 };
 
 const exitOutcome = async (browser: BrowserProcess): Promise<BrowserCloseOutcome> => {
-	await browser.exited.catch(() => undefined);
+	await browser.exited;
 	return "exited";
 };
 
