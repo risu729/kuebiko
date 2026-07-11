@@ -2,7 +2,7 @@ import { basename, join } from "node:path";
 
 import { extension } from "mime-types";
 
-const DEFAULT_BASE_DIR_NAME = "Kubebiko";
+const BASE_DIR_NAME = "Kubebiko";
 const MIME_EXTENSION_OVERRIDES = new Map([
 	["application/jsonl", ".jsonl"],
 	["application/x-jsonlines", ".jsonl"],
@@ -75,16 +75,16 @@ const getDefaultBaseDirectory = (): string => {
 			throw new Error("LOCALAPPDATA is not set. Pass --out explicitly.");
 		}
 
-		return join(localAppData, DEFAULT_BASE_DIR_NAME);
+		return join(localAppData, BASE_DIR_NAME);
 	}
 
 	if (process.platform === "darwin") {
-		return join(getRequiredHome(), "Library", "Application Support", DEFAULT_BASE_DIR_NAME);
+		return join(getRequiredHome(), "Library", "Application Support", BASE_DIR_NAME);
 	}
 
 	return join(
 		process.env["XDG_STATE_HOME"] ?? join(getRequiredHome(), ".local", "state"),
-		DEFAULT_BASE_DIR_NAME,
+		BASE_DIR_NAME,
 	);
 };
 

@@ -297,3 +297,4 @@ const renderHelp = (): string => {
 };
 
 export { DEFAULT_CDP_ENDPOINT, TOOL_VERSION, cliArgs, normalizeArgs, parseArgs, renderHelp };
+export { READY_MESSAGE } from "./constants";

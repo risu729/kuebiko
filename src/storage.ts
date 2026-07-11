@@ -5,6 +5,7 @@ import { join } from "node:path";
 
 import type { Protocol } from "devtools-protocol";
 
+import { TOOL_NAME, TOOL_VERSION } from "./constants";
 import { createBodyFilename, relativeBodyPath, timestampForFile } from "./sanitize";
 import type {
 	BodySaveResult,
@@ -82,8 +83,8 @@ const createRunInfo = (
 	nodePlatform: process.platform,
 	pid: process.pid,
 	runDirectory,
-	tool: "kubebiko",
-	version: "0.0.0",
+	tool: TOOL_NAME,
+	version: TOOL_VERSION,
 });
 
 const createStorage = async (

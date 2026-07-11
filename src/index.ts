@@ -6,6 +6,7 @@ import type { StartedBrowser } from "./browser";
 import { startCdpLogger } from "./cdp";
 import {
 	DEFAULT_CDP_ENDPOINT,
+	READY_MESSAGE,
 	TOOL_VERSION,
 	cliArgs,
 	normalizeArgs,
@@ -101,7 +102,7 @@ const runLogger = async (options: CliOptions): Promise<void> => {
 			storage,
 			verbose: options.verbose,
 		});
-		process.stdout.write("kubebiko running; press Ctrl-C to stop\n");
+		process.stdout.write(`${READY_MESSAGE}\n`);
 		await Promise.race([waitForShutdown(), logger.closed]);
 	} finally {
 		await plugins?.stopping();
@@ -140,6 +141,7 @@ if (import.meta.main) {
 
 export {
 	DEFAULT_CDP_ENDPOINT,
+	READY_MESSAGE,
 	cliArgs,
 	defineConfig,
 	main,
