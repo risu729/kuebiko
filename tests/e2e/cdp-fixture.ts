@@ -126,6 +126,7 @@ const consumeLoggerStdout = async (
 		await stdout.pipeTo(
 			new WritableStream<Uint8Array>({
 				write: (chunk) => {
+					process.stdout.write(chunk);
 					state.output += state.decoder.decode(chunk, { stream: true });
 					if (!state.ready && state.output.includes("logger running; press Ctrl-C to stop")) {
 						state.ready = true;
@@ -240,8 +241,10 @@ const startContext = async (path = requireBrowserPath()): Promise<TestContext> =
 };
 
 const stopLogger = async (context: TestContext): Promise<void> => {
+	process.stdout.write(`stopping logger pid=${context.logger.pid}\n`);
 	context.logger.kill("SIGTERM");
 	await Promise.all([context.logger.exited.catch(() => undefined), context.loggerStdout.completed]);
+	process.stdout.write("logger stopped\n");
 };
 
 const closeContext = async (context: TestContext): Promise<void> => {
