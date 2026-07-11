@@ -1,6 +1,6 @@
-# Kubebiko
+# Kuebiko
 
-Kubebiko is a passive, extensible network capture tool for browsers that expose
+Kuebiko is a passive, extensible network capture tool for browsers that expose
 the Chrome DevTools Protocol (CDP). It can launch a dedicated browser profile or
 attach to an existing local CDP endpoint, then saves request/response bodies
 plus metadata while you browse manually. Trusted local plugins can react to
@@ -75,7 +75,7 @@ mise run compile
 Run the logger and let it launch your browser:
 
 ```sh
-dist/kubebiko-linux-x64 \
+dist/kuebiko-linux-x64 \
   --launch-browser \
   --browser-command google-chrome
 ```
@@ -83,13 +83,13 @@ dist/kubebiko-linux-x64 \
 Use another browser command or executable path when needed:
 
 ```powershell
-.\dist\kubebiko-windows-x64.exe `
+.\dist\kuebiko-windows-x64.exe `
   --launch-browser `
   --browser-command chrome.exe
 ```
 
 ```sh
-dist/kubebiko-linux-x64 --launch-browser --browser-command chromium
+dist/kuebiko-linux-x64 --launch-browser --browser-command chromium
 ```
 
 ```sh
@@ -106,11 +106,11 @@ profile and browse normally.
 Launch mode uses a dedicated profile under the platform default base directory:
 
 - Windows:
-  `%LOCALAPPDATA%\Kubebiko\browser-profile`
+  `%LOCALAPPDATA%\Kuebiko\browser-profile`
 - macOS:
-  `~/Library/Application Support/Kubebiko/browser-profile`
+  `~/Library/Application Support/Kuebiko/browser-profile`
 - Linux:
-  `${XDG_STATE_HOME:-~/.local/state}/Kubebiko/browser-profile`
+  `${XDG_STATE_HOME:-~/.local/state}/Kuebiko/browser-profile`
 
 The tool does not attach to your default browser profile and does not depend on
 it. Treat this profile as a separate browser identity. If a website needs login,
@@ -121,7 +121,7 @@ log in manually inside this browser window.
 Each run creates a timestamped directory under the platform capture root:
 
 ```text
-Kubebiko/captures/2026-07-06T12-34-56
+Kuebiko/captures/2026-07-06T12-34-56
 ```
 
 The run directory contains:
@@ -185,7 +185,7 @@ companion `netlog.json`.
 
 ## Plugins
 
-The plugin system is a core part of Kubebiko. It lets trusted local TypeScript
+The plugin system is a core part of Kuebiko. It lets trusted local TypeScript
 or JavaScript modules react to completed captures in real time without
 duplicating the CDP logger. The logger saves request/response files and metadata
 first. Plugins then receive small immutable events containing metadata and
@@ -199,7 +199,7 @@ are written to `errors.ndjson`; capture continues.
 Create a config file:
 
 ```ts
-import { defineConfig } from "kubebiko";
+import { defineConfig } from "kuebiko";
 
 export default defineConfig({
 	plugins: [
@@ -224,7 +224,7 @@ Example plugin:
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 
-import type { LoggerPlugin } from "kubebiko";
+import type { LoggerPlugin } from "kuebiko";
 
 export default {
 	id: "json-api-mirror",
@@ -255,13 +255,13 @@ export default {
 Run with plugins:
 
 ```powershell
-kubebiko --config C:\path\logger.config.ts --out <capture-dir>
+kuebiko --config C:\path\logger.config.ts --out <capture-dir>
 ```
 
 Disable configured plugins for a run:
 
 ```powershell
-kubebiko --config C:\path\logger.config.ts `
+kuebiko --config C:\path\logger.config.ts `
   --no-plugins --out <capture-dir>
 ```
 
@@ -284,7 +284,7 @@ After browsing, check the latest run directory:
 
 ```sh
 state_home="${XDG_STATE_HOME:-$HOME/.local/state}"
-base="${KUBEBIKO_BASE_DIR:-$state_home/Kubebiko}"
+base="${KUEBIKO_BASE_DIR:-$state_home/Kuebiko}"
 capture="$(find "$base/captures" -mindepth 1 -maxdepth 1 -type d |
   sort |
   tail -1)"
@@ -297,7 +297,7 @@ wc -c "$capture/metadata.ndjson" "$capture/netlog.json"
 On Windows PowerShell:
 
 ```powershell
-$capture = Get-ChildItem "$env:LOCALAPPDATA\Kubebiko\captures" |
+$capture = Get-ChildItem "$env:LOCALAPPDATA\Kuebiko\captures" |
   Sort-Object LastWriteTime -Descending |
   Select-Object -First 1
 
@@ -330,8 +330,8 @@ mise run compile --target windows-x64
 The output files are:
 
 ```text
-dist/kubebiko-linux-x64
-dist/kubebiko-windows-x64.exe
+dist/kuebiko-linux-x64
+dist/kuebiko-windows-x64.exe
 ```
 
 You can also run the TypeScript entrypoint directly with Bun:
@@ -361,32 +361,32 @@ logger exits.
 Use a browser command from `PATH`:
 
 ```sh
-kubebiko --launch-browser --browser-command google-chrome
+kuebiko --launch-browser --browser-command google-chrome
 ```
 
 Or use an explicit browser executable:
 
 ```sh
-kubebiko --launch-browser \
+kuebiko --launch-browser \
   --browser-path "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 ```
 
 ```powershell
-kubebiko --launch-browser `
+kuebiko --launch-browser `
   --browser-path "C:\Program Files\Google\Chrome\Application\chrome.exe"
 ```
 
 Use an explicit capture directory:
 
 ```sh
-kubebiko --launch-browser --browser-command google-chrome \
+kuebiko --launch-browser --browser-command google-chrome \
   --out "$HOME/captures/manual-run"
 ```
 
 Disable NetLog for a run:
 
 ```sh
-kubebiko --launch-browser --browser-command google-chrome --no-netlog
+kuebiko --launch-browser --browser-command google-chrome --no-netlog
 ```
 
 The logger intentionally does not auto-discover browsers. Pass either
@@ -414,7 +414,7 @@ Attach mode is for externally launched browsers. Start the browser yourself with
 CDP enabled, then run:
 
 ```sh
-kubebiko --cdp http://127.0.0.1:9222 --out <capture-dir>
+kuebiko --cdp http://127.0.0.1:9222 --out <capture-dir>
 ```
 
 Attach mode does not launch a browser or write NetLog by itself. It only
@@ -464,7 +464,7 @@ automation, or general Runtime evaluation.
 ## CLI
 
 ```text
-kubebiko [options]
+kuebiko [options]
 
 Options:
   --cdp <url>              CDP endpoint (default: http://127.0.0.1:9222)
@@ -489,22 +489,22 @@ If `--out` is omitted, the logger creates a new timestamped capture folder under
 the platform default capture root:
 
 - Windows:
-  `%LOCALAPPDATA%\Kubebiko\captures`
+  `%LOCALAPPDATA%\Kuebiko\captures`
 - macOS:
-  `~/Library/Application Support/Kubebiko/captures`
+  `~/Library/Application Support/Kuebiko/captures`
 - Linux:
-  `${XDG_STATE_HOME:-~/.local/state}/Kubebiko/captures`
+  `${XDG_STATE_HOME:-~/.local/state}/Kuebiko/captures`
 
-Set `KUBEBIKO_BASE_DIR` to override the base directory on any platform.
+Set `KUEBIKO_BASE_DIR` to override the base directory on any platform.
 
 ## Default Folders
 
 - Windows:
-  `%LOCALAPPDATA%\Kubebiko`
+  `%LOCALAPPDATA%\Kuebiko`
 - macOS:
-  `~/Library/Application Support/Kubebiko`
+  `~/Library/Application Support/Kuebiko`
 - Linux:
-  `${XDG_STATE_HOME:-~/.local/state}/Kubebiko`
+  `${XDG_STATE_HOME:-~/.local/state}/Kuebiko`
 
 Each base directory contains `browser-profile`, `captures`, and plugin output
 created by configured plugins. Nothing is intentionally written under `%TEMP%`,

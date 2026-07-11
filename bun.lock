@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "kubebiko",
+      "name": "kuebiko",
       "dependencies": {
         "chrome-remote-interface": "0.34.0",
         "mime-types": "3.0.2",

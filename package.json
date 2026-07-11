@@ -1,9 +1,9 @@
 {
-	"name": "kubebiko",
+	"name": "kuebiko",
 	"version": "0.0.0",
 	"private": true,
 	"bin": {
-		"kubebiko": "./src/index.ts"
+		"kuebiko": "./src/index.ts"
 	},
 	"type": "module",
 	"types": "./src/index.ts",

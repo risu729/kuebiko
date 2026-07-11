@@ -2,7 +2,7 @@ import { basename, join } from "node:path";
 
 import { extension } from "mime-types";
 
-const BASE_DIR_NAME = "Kubebiko";
+const BASE_DIR_NAME = "Kuebiko";
 const MIME_EXTENSION_OVERRIDES = new Map([
 	["application/jsonl", ".jsonl"],
 	["application/x-jsonlines", ".jsonl"],
@@ -64,7 +64,7 @@ const getRequiredHome = (): string => {
 };
 
 const getDefaultBaseDirectory = (): string => {
-	const override = process.env["KUBEBIKO_BASE_DIR"];
+	const override = process.env["KUEBIKO_BASE_DIR"];
 	if (override) {
 		return override;
 	}

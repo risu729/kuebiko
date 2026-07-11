@@ -2,7 +2,7 @@ import { it } from "bun:test";
 import { mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 
-import { READY_MESSAGE } from "kubebiko";
+import { READY_MESSAGE } from "kuebiko";
 
 import type { CapturedApiRecord } from "./assertions";
 import waitFor from "./poll";

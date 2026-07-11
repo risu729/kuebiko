@@ -83,7 +83,7 @@ describe("parseArgs", () => {
 	});
 
 	it("renders local help output", () => {
-		expect(renderHelp()).toContain("kubebiko [options]");
+		expect(renderHelp()).toContain("kuebiko [options]");
 		expect(renderHelp()).toContain("--no-plugins");
 	});
 });
