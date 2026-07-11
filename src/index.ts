@@ -30,6 +30,7 @@ const waitForShutdown = (): Promise<void> =>
 	new Promise((resolve) => {
 		process.once("SIGINT", () => resolve());
 		process.once("SIGTERM", () => resolve());
+		process.once("disconnect", () => resolve());
 	});
 
 const getDefaultBrowserProfileDirectory = (): string =>
