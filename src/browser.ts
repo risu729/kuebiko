@@ -1,10 +1,10 @@
+import CDP from "chrome-remote-interface";
+
 type BrowserProcess = ReturnType<typeof Bun.spawn>;
 
 type BrowserVersion = {
 	webSocketDebuggerUrl?: string | undefined;
 };
-
-type BrowserCloseOutcome = "exited" | "failed" | "requested" | "timeout";
 
 type BrowserLaunchOptions = {
 	browserArgs: string[];
@@ -18,12 +18,14 @@ type BrowserLaunchOptions = {
 
 type StartedBrowser = {
 	cdpEndpoint: string;
-	close: (requestClose?: () => Promise<void>) => Promise<void>;
+	close: () => Promise<void>;
 };
 
-const BROWSER_STOP_TIMEOUT_MS = 5_000;
 const CDP_READY_TIMEOUT_MS = 15_000;
 const CDP_READY_POLL_MS = 100;
+const BROWSER_STOP_TIMEOUT_MS = 5_000;
+const connectCdp = CDP;
+const getCdpVersion = CDP.Version;
 
 const createCdpEndpoint = (port: number): string => `http://127.0.0.1:${port}`;
 
@@ -75,53 +77,22 @@ const waitForCdp = async (
 	}
 };
 
+const closeThroughCdp = async (cdpEndpoint: string): Promise<void> => {
+	const endpoint = new URL(cdpEndpoint);
+	const connectionOptions = {
+		host: endpoint.hostname,
+		port: Number(endpoint.port),
+	};
+	const version = await getCdpVersion(connectionOptions);
+	const client = await connectCdp({ ...connectionOptions, target: version.webSocketDebuggerUrl });
+	await client.Browser.close();
+};
+
 const waitForExit = async (browser: BrowserProcess, timeout?: number): Promise<boolean> =>
 	await Promise.race([
 		browser.exited.then(() => true),
 		...(timeout === undefined ? [] : [Bun.sleep(timeout).then(() => false)]),
 	]).catch(() => true);
-
-const requestCloseOutcome = async (
-	requestClose: () => Promise<void>,
-): Promise<BrowserCloseOutcome> => {
-	try {
-		await requestClose();
-		return "requested";
-	} catch {
-		return "failed";
-	}
-};
-
-const exitOutcome = async (browser: BrowserProcess): Promise<BrowserCloseOutcome> => {
-	await browser.exited.catch(() => undefined);
-	return "exited";
-};
-
-const timeoutOutcome = async (): Promise<BrowserCloseOutcome> => {
-	await Bun.sleep(BROWSER_STOP_TIMEOUT_MS);
-	return "timeout";
-};
-
-const beginBrowserClose = async (
-	browser: BrowserProcess,
-	requestClose?: () => Promise<void>,
-): Promise<boolean> => {
-	if (!requestClose) {
-		browser.kill("SIGTERM");
-		return false;
-	}
-
-	const outcome = await Promise.race([
-		requestCloseOutcome(requestClose),
-		exitOutcome(browser),
-		timeoutOutcome(),
-	]);
-	if (outcome !== "exited" && outcome !== "requested") {
-		browser.kill("SIGTERM");
-	}
-
-	return outcome === "exited";
-};
 
 const readBrowserStderr = async (browser: BrowserProcess): Promise<string> => {
 	if (!(browser.stderr instanceof ReadableStream)) {
@@ -131,12 +102,11 @@ const readBrowserStderr = async (browser: BrowserProcess): Promise<string> => {
 	return await new Response(browser.stderr).text();
 };
 
-const closeBrowser = async (
-	browser: BrowserProcess,
-	requestClose?: () => Promise<void>,
-): Promise<void> => {
-	if (await beginBrowserClose(browser, requestClose)) {
-		return;
+const closeBrowser = async (browser: BrowserProcess, cdpEndpoint: string): Promise<void> => {
+	try {
+		await closeThroughCdp(cdpEndpoint);
+	} catch {
+		browser.kill("SIGTERM");
 	}
 
 	if (await waitForExit(browser, BROWSER_STOP_TIMEOUT_MS)) {
@@ -185,8 +155,8 @@ const startBrowser = async (options: BrowserLaunchOptions): Promise<StartedBrows
 
 	return {
 		cdpEndpoint,
-		close: async (requestClose) => {
-			await closeBrowser(browser, requestClose);
+		close: async () => {
+			await closeBrowser(browser, cdpEndpoint);
 		},
 	};
 };
