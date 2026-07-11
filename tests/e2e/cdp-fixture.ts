@@ -242,10 +242,8 @@ const startContext = async (path = requireBrowserPath()): Promise<TestContext> =
 };
 
 const stopLogger = async (context: TestContext): Promise<void> => {
-	process.stdout.write(`stopping logger pid=${context.logger.pid}\n`);
 	context.logger.send("shutdown");
 	await Promise.all([context.logger.exited.catch(() => undefined), context.loggerStdout.completed]);
-	process.stdout.write("logger stopped\n");
 };
 
 const closeContext = async (context: TestContext): Promise<void> => {
