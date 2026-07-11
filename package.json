@@ -22,6 +22,6 @@
 		"@types/mime-types": "3.0.1",
 		"@types/node": "26.1.1",
 		"devtools-protocol": "0.0.1660672",
-		"typescript": "6.0.3"
+		"typescript": "7.0.2"
 	}
 }
