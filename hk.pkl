@@ -1,16 +1,18 @@
 amends "https://raw.githubusercontent.com/risu729/hk-config/v1.0.0/presets.pkl"
+
 import "https://raw.githubusercontent.com/risu729/hk-config/v1.0.0/helpers.pkl"
 
-local picked = helpers.pick(new Listing {
-  "oxlint"
-  "oxfmt"
-  "tsc"
-  "github-actions"
-  "tombi"
-  "rumdl"
-  "yaml"
-  "typos"
-  "hygiene"
-})
+local picked =
+  helpers.pick(new Listing {
+    "oxlint"
+    "oxfmt"
+    "tsc"
+    "github-actions"
+    "tombi"
+    "rumdl"
+    "yaml"
+    "typos"
+    "hygiene"
+  })
 
 hooks = helpers.standardHooks(picked)
