@@ -30,7 +30,12 @@ const waitForShutdown = (): Promise<void> =>
 	new Promise((resolve) => {
 		process.once("SIGINT", () => resolve());
 		process.once("SIGTERM", () => resolve());
-		process.once("disconnect", () => resolve());
+		process.once("message", (message) => {
+			if (message === "shutdown") {
+				process.stdout.write("shutdown requested via IPC\n");
+				resolve();
+			}
+		});
 	});
 
 const getDefaultBrowserProfileDirectory = (): string =>
