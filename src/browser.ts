@@ -149,7 +149,7 @@ const closeBrowser = async (
 	}
 
 	browser.kill("SIGKILL");
-	await waitForExit(browser);
+	browser.unref();
 };
 
 const spawnBrowser = (options: BrowserLaunchOptions): BrowserProcess => {

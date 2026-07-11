@@ -18,6 +18,7 @@ import type {
 } from "./types";
 
 type CdpClient = CDP.Client;
+type TerminableSocket = { terminate?: () => void };
 type TargetAttachedEvent = Protocol.Target.AttachedToTargetEvent;
 type TargetDetachedEvent = Protocol.Target.DetachedFromTargetEvent;
 type RequestWillBeSentEvent = Protocol.Network.RequestWillBeSentEvent;
@@ -33,10 +34,30 @@ const NETWORK_BUFFER_OPTIONS = {
 	maxTotalBufferSize: 500 * 1024 * 1024,
 };
 
+const CDP_CLOSE_TIMEOUT_MS = 5_000;
+const CDP_DRAIN_TIMEOUT_MS = 1_000;
+
 const errorMessage = (error: unknown): string =>
 	error instanceof Error ? error.message : String(error);
 
 const nowIso = (): string => new Date().toISOString();
+
+const settles = async (promise: Promise<unknown>): Promise<boolean> => {
+	try {
+		await promise;
+	} catch {
+		// Rejection also means the operation has settled.
+	}
+	return true;
+};
+
+const settlesWithin = async (promise: Promise<unknown>, timeout: number): Promise<boolean> =>
+	await Promise.race([settles(promise), Bun.sleep(timeout).then(() => false)]);
+
+const terminateClientSocket = (client: CdpClient): void => {
+	const socket = Reflect.get(client, "_ws") as TerminableSocket | undefined;
+	socket?.terminate?.();
+};
 
 const requestKey = (sessionId: string, requestId: string): string => `${sessionId}:${requestId}`;
 
@@ -157,11 +178,12 @@ class CdpResponseLogger {
 	}
 
 	async close(): Promise<void> {
-		try {
-			await this.#client.close();
-		} finally {
-			await this.#drainPendingEvents();
+		const closing = this.#client.close();
+		if (!(await settlesWithin(closing, CDP_CLOSE_TIMEOUT_MS))) {
+			terminateClientSocket(this.#client);
+			await settlesWithin(closing, CDP_DRAIN_TIMEOUT_MS);
 		}
+		await settlesWithin(this.#drainPendingEvents(), CDP_DRAIN_TIMEOUT_MS);
 	}
 
 	#log(message: string): void {
