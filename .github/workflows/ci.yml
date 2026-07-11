@@ -29,7 +29,7 @@ jobs:
       - name: Install mise
         uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4.2.0
         with:
-          version: 2026.7.3
+          version: 2026.7.5
       - name: Run lint
         run: mise run check --lint
         env:
@@ -48,7 +48,7 @@ jobs:
       - name: Install mise
         uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4.2.0
         with:
-          version: 2026.7.3
+          version: 2026.7.5
       - name: Test
         run: mise run test
   e2e:
@@ -65,7 +65,7 @@ jobs:
       - name: Install mise
         uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4.2.0
         with:
-          version: 2026.7.3
+          version: 2026.7.5
       - name: Setup Chrome
         id: setup-chrome
         uses: browser-actions/setup-chrome@2e1d749697dd1612b833dba4a722266286fbefcd # v2.1.2
@@ -87,7 +87,7 @@ jobs:
       - name: Install mise
         uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4.2.0
         with:
-          version: 2026.7.3
+          version: 2026.7.5
       - name: Compile binaries
         run: mise run compile
   ci-check:
