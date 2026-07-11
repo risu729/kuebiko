@@ -3,7 +3,7 @@
 [tools]
 bun = "1.3.14"
 node = "26.5.0"
-"npm:typescript" = "7.0.1-rc"
+"npm:typescript" = "7.0.2"
 hk = "1.48.0"
 oxlint = "1.72.0"
 oxfmt = "0.57.0"
