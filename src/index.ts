@@ -99,14 +99,14 @@ const runLogger = async (options: CliOptions): Promise<void> => {
 		await Promise.race([waitForShutdown(), logger.closed]);
 	} finally {
 		await plugins?.stopping();
+		await browser?.close().catch((error: unknown) => {
+			process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+		});
 		await logger?.close().catch((error: unknown) => {
 			process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
 		});
 		await plugins?.close();
 		await storage?.close();
-		await browser?.close().catch((error: unknown) => {
-			process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-		});
 	}
 };
 

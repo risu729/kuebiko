@@ -23,7 +23,6 @@ type StartedBrowser = {
 
 const CDP_READY_TIMEOUT_MS = 15_000;
 const CDP_READY_POLL_MS = 100;
-const BROWSER_STOP_TIMEOUT_MS = 5_000;
 const connectCdp = CDP;
 const getCdpVersion = CDP.Version;
 
@@ -88,11 +87,9 @@ const closeThroughCdp = async (cdpEndpoint: string): Promise<void> => {
 	await client.Browser.close();
 };
 
-const waitForExit = async (browser: BrowserProcess, timeout?: number): Promise<boolean> =>
-	await Promise.race([
-		browser.exited.then(() => true),
-		...(timeout === undefined ? [] : [Bun.sleep(timeout).then(() => false)]),
-	]).catch(() => true);
+const waitForExit = async (browser: BrowserProcess): Promise<void> => {
+	await browser.exited.catch(() => undefined);
+};
 
 const readBrowserStderr = async (browser: BrowserProcess): Promise<string> => {
 	if (!(browser.stderr instanceof ReadableStream)) {
@@ -109,16 +106,6 @@ const closeBrowser = async (browser: BrowserProcess, cdpEndpoint: string): Promi
 		browser.kill("SIGTERM");
 	}
 
-	if (await waitForExit(browser, BROWSER_STOP_TIMEOUT_MS)) {
-		return;
-	}
-
-	browser.kill("SIGTERM");
-	if (await waitForExit(browser, BROWSER_STOP_TIMEOUT_MS)) {
-		return;
-	}
-
-	browser.kill("SIGKILL");
 	await waitForExit(browser);
 };
 
