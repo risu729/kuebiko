@@ -62,13 +62,13 @@ flag "--target <target>" default="all" help="Target platform: all, linux-x64, or
 run = '''
 compile_linux() {
   bun build --compile --target=bun-linux-x64 \
-    --outfile=dist/cdp-response-logger-linux-x64 \
+    --outfile=dist/kubebiko-linux-x64 \
     src/index.ts
 }
 
 compile_windows() {
   bun build --compile --target=bun-windows-x64 \
-    --outfile=dist/cdp-response-logger-windows-x64.exe \
+    --outfile=dist/kubebiko-windows-x64.exe \
     src/index.ts
 }
 

@@ -82,7 +82,7 @@ const createRunInfo = (
 	nodePlatform: process.platform,
 	pid: process.pid,
 	runDirectory,
-	tool: "cdp-response-logger",
+	tool: "kubebiko",
 	version: "0.0.0",
 });
 

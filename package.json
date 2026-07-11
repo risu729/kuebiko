@@ -1,9 +1,9 @@
 {
-	"name": "chrome-network-logger",
+	"name": "kubebiko",
 	"version": "0.0.0",
 	"private": true,
 	"bin": {
-		"cdp-response-logger": "./src/index.ts"
+		"kubebiko": "./src/index.ts"
 	},
 	"type": "module",
 	"types": "./src/index.ts",

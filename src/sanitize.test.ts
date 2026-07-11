@@ -52,8 +52,8 @@ describe("matchesFilters", () => {
 
 describe("default capture directory", () => {
 	it("uses an explicit base directory override on every platform", () => {
-		const previous = process.env["CDP_RESPONSE_LOGGER_BASE_DIR"];
-		process.env["CDP_RESPONSE_LOGGER_BASE_DIR"] = "/captures";
+		const previous = process.env["KUBEBIKO_BASE_DIR"];
+		process.env["KUBEBIKO_BASE_DIR"] = "/captures";
 
 		try {
 			expect(getDefaultBaseDirectory()).toBe("/captures");
@@ -62,9 +62,9 @@ describe("default capture directory", () => {
 			);
 		} finally {
 			if (previous === undefined) {
-				delete process.env["CDP_RESPONSE_LOGGER_BASE_DIR"];
+				delete process.env["KUBEBIKO_BASE_DIR"];
 			} else {
-				process.env["CDP_RESPONSE_LOGGER_BASE_DIR"] = previous;
+				process.env["KUBEBIKO_BASE_DIR"] = previous;
 			}
 		}
 	});

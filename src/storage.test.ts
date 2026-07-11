@@ -19,7 +19,7 @@ describe("bodyToBytes", () => {
 
 describe("createStorage", () => {
 	it("writes bodies and metadata records", async () => {
-		const dir = await mkdtemp(join(tmpdir(), "cdp-response-logger-"));
+		const dir = await mkdtemp(join(tmpdir(), "kubebiko-"));
 		const storage = await createStorage(dir, "http://127.0.0.1:9222", "2026-07-06T12:34:56Z");
 		const state: RequestState = {
 			requestId: "request-1",
@@ -65,7 +65,7 @@ describe("createStorage", () => {
 	});
 
 	it("writes request bodies separately from response bodies", async () => {
-		const dir = await mkdtemp(join(tmpdir(), "cdp-response-logger-"));
+		const dir = await mkdtemp(join(tmpdir(), "kubebiko-"));
 		const storage = await createStorage(dir, "http://127.0.0.1:9222", "2026-07-06T12:34:56Z");
 		const state: RequestState = {
 			requestContentType: "application/json",

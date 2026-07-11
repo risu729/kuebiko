@@ -101,7 +101,7 @@ const runLogger = async (options: CliOptions): Promise<void> => {
 			storage,
 			verbose: options.verbose,
 		});
-		process.stdout.write("logger running; press Ctrl-C to stop\n");
+		process.stdout.write("kubebiko running; press Ctrl-C to stop\n");
 		await Promise.race([waitForShutdown(), logger.closed]);
 	} finally {
 		await plugins?.stopping();

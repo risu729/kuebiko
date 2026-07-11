@@ -73,7 +73,7 @@ const createStorage = (runDirectory: string): LoggerStorage & { errors: ErrorRec
 
 describe("createPluginHost", () => {
 	it("loads a TS plugin and publishes path-based response events", async () => {
-		const dir = await mkdtemp(join(tmpdir(), "cdp-response-logger-plugin-"));
+		const dir = await mkdtemp(join(tmpdir(), "kubebiko-plugin-"));
 		const runDirectory = join(dir, "run");
 		await Bun.write(
 			join(dir, "config.ts"),
@@ -88,7 +88,7 @@ export default defineConfig({
 			`
       import { mkdir } from "node:fs/promises";
       import { dirname } from "node:path";
-      import type { LoggerPlugin } from "chrome-network-logger";
+      import type { LoggerPlugin } from "kubebiko";
 
       export default {
         id: "json-api-mirror",
@@ -126,7 +126,7 @@ export default defineConfig({
 	});
 
 	it("fails startup on duplicate plugin IDs", async () => {
-		const dir = await mkdtemp(join(tmpdir(), "cdp-response-logger-plugin-"));
+		const dir = await mkdtemp(join(tmpdir(), "kubebiko-plugin-"));
 		await Bun.write(
 			join(dir, "config.ts"),
 			`import { defineConfig } from ${JSON.stringify(packageEntryUrl)};
@@ -158,7 +158,7 @@ export default defineConfig({
 	});
 
 	it("rejects zero timeout plugin config", async () => {
-		const dir = await mkdtemp(join(tmpdir(), "cdp-response-logger-plugin-"));
+		const dir = await mkdtemp(join(tmpdir(), "kubebiko-plugin-"));
 		await Bun.write(
 			join(dir, "config.ts"),
 			`import { defineConfig } from ${JSON.stringify(packageEntryUrl)};
@@ -188,7 +188,7 @@ export default defineConfig({
 	});
 
 	it("records plugin queue overflow and timeout errors without throwing", async () => {
-		const dir = await mkdtemp(join(tmpdir(), "cdp-response-logger-plugin-"));
+		const dir = await mkdtemp(join(tmpdir(), "kubebiko-plugin-"));
 		const runDirectory = join(dir, "run");
 		await Bun.write(
 			join(dir, "config.ts"),

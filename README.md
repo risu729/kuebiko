@@ -1,9 +1,10 @@
-# CDP Network Logger
+# Kubebiko
 
-Local network logger for browsers that expose the Chrome DevTools Protocol
-(CDP). It can launch a dedicated browser profile or attach to an existing local
-CDP endpoint, then saves request/response bodies plus metadata while you browse
-manually.
+Kubebiko is a passive, extensible network capture tool for browsers that expose
+the Chrome DevTools Protocol (CDP). It can launch a dedicated browser profile or
+attach to an existing local CDP endpoint, then saves request/response bodies
+plus metadata while you browse manually. Trusted local plugins can react to
+completed captures without changing browser traffic.
 
 This tool is intentionally narrow. It does not use mitmproxy, `SSLKEYLOGFILE`,
 packet capture, request interception, browser automation, login automation,
@@ -74,7 +75,7 @@ mise run compile
 Run the logger and let it launch your browser:
 
 ```sh
-dist/cdp-response-logger-linux-x64 \
+dist/kubebiko-linux-x64 \
   --launch-browser \
   --browser-command google-chrome
 ```
@@ -82,13 +83,13 @@ dist/cdp-response-logger-linux-x64 \
 Use another browser command or executable path when needed:
 
 ```powershell
-.\dist\cdp-response-logger-windows-x64.exe `
+.\dist\kubebiko-windows-x64.exe `
   --launch-browser `
   --browser-command chrome.exe
 ```
 
 ```sh
-dist/cdp-response-logger-linux-x64 --launch-browser --browser-command chromium
+dist/kubebiko-linux-x64 --launch-browser --browser-command chromium
 ```
 
 ```sh
@@ -105,11 +106,11 @@ profile and browse normally.
 Launch mode uses a dedicated profile under the platform default base directory:
 
 - Windows:
-  `%LOCALAPPDATA%\ChromeCdpResponseLogger\browser-profile`
+  `%LOCALAPPDATA%\Kubebiko\browser-profile`
 - macOS:
-  `~/Library/Application Support/ChromeCdpResponseLogger/browser-profile`
+  `~/Library/Application Support/Kubebiko/browser-profile`
 - Linux:
-  `${XDG_STATE_HOME:-~/.local/state}/ChromeCdpResponseLogger/browser-profile`
+  `${XDG_STATE_HOME:-~/.local/state}/Kubebiko/browser-profile`
 
 The tool does not attach to your default browser profile and does not depend on
 it. Treat this profile as a separate browser identity. If a website needs login,
@@ -120,7 +121,7 @@ log in manually inside this browser window.
 Each run creates a timestamped directory under the platform capture root:
 
 ```text
-ChromeCdpResponseLogger/captures/2026-07-06T12-34-56
+Kubebiko/captures/2026-07-06T12-34-56
 ```
 
 The run directory contains:
@@ -184,10 +185,11 @@ companion `netlog.json`.
 
 ## Plugins
 
-Plugins let trusted local TypeScript or JavaScript modules react to completed
-captures in real time without duplicating the CDP logger. The logger saves
-request/response files and metadata first. Plugins then receive small immutable
-events containing metadata and relative file paths.
+The plugin system is a core part of Kubebiko. It lets trusted local TypeScript
+or JavaScript modules react to completed captures in real time without
+duplicating the CDP logger. The logger saves request/response files and metadata
+first. Plugins then receive small immutable events containing metadata and
+relative file paths.
 
 Plugins run in the logger process. They are not sandboxed third-party code. A
 bad plugin cannot mutate requests through the logger API, but it can still use
@@ -197,7 +199,7 @@ are written to `errors.ndjson`; capture continues.
 Create a config file:
 
 ```ts
-import { defineConfig } from "chrome-network-logger";
+import { defineConfig } from "kubebiko";
 
 export default defineConfig({
 	plugins: [
@@ -222,7 +224,7 @@ Example plugin:
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 
-import type { LoggerPlugin } from "chrome-network-logger";
+import type { LoggerPlugin } from "kubebiko";
 
 export default {
 	id: "json-api-mirror",
@@ -253,13 +255,13 @@ export default {
 Run with plugins:
 
 ```powershell
-cdp-response-logger --config C:\path\logger.config.ts --out <capture-dir>
+kubebiko --config C:\path\logger.config.ts --out <capture-dir>
 ```
 
 Disable configured plugins for a run:
 
 ```powershell
-cdp-response-logger --config C:\path\logger.config.ts `
+kubebiko --config C:\path\logger.config.ts `
   --no-plugins --out <capture-dir>
 ```
 
@@ -282,7 +284,7 @@ After browsing, check the latest run directory:
 
 ```sh
 state_home="${XDG_STATE_HOME:-$HOME/.local/state}"
-base="${CDP_RESPONSE_LOGGER_BASE_DIR:-$state_home/ChromeCdpResponseLogger}"
+base="${KUBEBIKO_BASE_DIR:-$state_home/Kubebiko}"
 capture="$(find "$base/captures" -mindepth 1 -maxdepth 1 -type d |
   sort |
   tail -1)"
@@ -295,7 +297,7 @@ wc -c "$capture/metadata.ndjson" "$capture/netlog.json"
 On Windows PowerShell:
 
 ```powershell
-$capture = Get-ChildItem "$env:LOCALAPPDATA\ChromeCdpResponseLogger\captures" |
+$capture = Get-ChildItem "$env:LOCALAPPDATA\Kubebiko\captures" |
   Sort-Object LastWriteTime -Descending |
   Select-Object -First 1
 
@@ -328,8 +330,8 @@ mise run compile --target windows-x64
 The output files are:
 
 ```text
-dist/cdp-response-logger-linux-x64
-dist/cdp-response-logger-windows-x64.exe
+dist/kubebiko-linux-x64
+dist/kubebiko-windows-x64.exe
 ```
 
 You can also run the TypeScript entrypoint directly with Bun:
@@ -359,32 +361,32 @@ logger exits.
 Use a browser command from `PATH`:
 
 ```sh
-cdp-response-logger --launch-browser --browser-command google-chrome
+kubebiko --launch-browser --browser-command google-chrome
 ```
 
 Or use an explicit browser executable:
 
 ```sh
-cdp-response-logger --launch-browser \
+kubebiko --launch-browser \
   --browser-path "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 ```
 
 ```powershell
-cdp-response-logger --launch-browser `
+kubebiko --launch-browser `
   --browser-path "C:\Program Files\Google\Chrome\Application\chrome.exe"
 ```
 
 Use an explicit capture directory:
 
 ```sh
-cdp-response-logger --launch-browser --browser-command google-chrome \
+kubebiko --launch-browser --browser-command google-chrome \
   --out "$HOME/captures/manual-run"
 ```
 
 Disable NetLog for a run:
 
 ```sh
-cdp-response-logger --launch-browser --browser-command google-chrome --no-netlog
+kubebiko --launch-browser --browser-command google-chrome --no-netlog
 ```
 
 The logger intentionally does not auto-discover browsers. Pass either
@@ -412,7 +414,7 @@ Attach mode is for externally launched browsers. Start the browser yourself with
 CDP enabled, then run:
 
 ```sh
-cdp-response-logger --cdp http://127.0.0.1:9222 --out <capture-dir>
+kubebiko --cdp http://127.0.0.1:9222 --out <capture-dir>
 ```
 
 Attach mode does not launch a browser or write NetLog by itself. It only
@@ -462,7 +464,7 @@ automation, or general Runtime evaluation.
 ## CLI
 
 ```text
-cdp-response-logger [options]
+kubebiko [options]
 
 Options:
   --cdp <url>              CDP endpoint (default: http://127.0.0.1:9222)
@@ -487,23 +489,22 @@ If `--out` is omitted, the logger creates a new timestamped capture folder under
 the platform default capture root:
 
 - Windows:
-  `%LOCALAPPDATA%\ChromeCdpResponseLogger\captures`
+  `%LOCALAPPDATA%\Kubebiko\captures`
 - macOS:
-  `~/Library/Application Support/ChromeCdpResponseLogger/captures`
+  `~/Library/Application Support/Kubebiko/captures`
 - Linux:
-  `${XDG_STATE_HOME:-~/.local/state}/ChromeCdpResponseLogger/captures`
+  `${XDG_STATE_HOME:-~/.local/state}/Kubebiko/captures`
 
-Set `CDP_RESPONSE_LOGGER_BASE_DIR` to override the base directory on any
-platform.
+Set `KUBEBIKO_BASE_DIR` to override the base directory on any platform.
 
 ## Default Folders
 
 - Windows:
-  `%LOCALAPPDATA%\ChromeCdpResponseLogger`
+  `%LOCALAPPDATA%\Kubebiko`
 - macOS:
-  `~/Library/Application Support/ChromeCdpResponseLogger`
+  `~/Library/Application Support/Kubebiko`
 - Linux:
-  `${XDG_STATE_HOME:-~/.local/state}/ChromeCdpResponseLogger`
+  `${XDG_STATE_HOME:-~/.local/state}/Kubebiko`
 
 Each base directory contains `browser-profile`, `captures`, and plugin output
 created by configured plugins. Nothing is intentionally written under `%TEMP%`,

@@ -1,7 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 
-import type { LoggerPlugin } from "chrome-network-logger";
+import type { LoggerPlugin } from "kubebiko";
 
 export default {
 	id: "json-api-mirror",

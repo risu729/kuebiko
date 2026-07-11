@@ -2,7 +2,7 @@ import { basename, join } from "node:path";
 
 import { extension } from "mime-types";
 
-const WINDOWS_BASE_DIR_NAME = "ChromeCdpResponseLogger";
+const DEFAULT_BASE_DIR_NAME = "Kubebiko";
 const MIME_EXTENSION_OVERRIDES = new Map([
 	["application/jsonl", ".jsonl"],
 	["application/x-jsonlines", ".jsonl"],
@@ -64,7 +64,7 @@ const getRequiredHome = (): string => {
 };
 
 const getDefaultBaseDirectory = (): string => {
-	const override = process.env["CDP_RESPONSE_LOGGER_BASE_DIR"];
+	const override = process.env["KUBEBIKO_BASE_DIR"];
 	if (override) {
 		return override;
 	}
@@ -75,16 +75,16 @@ const getDefaultBaseDirectory = (): string => {
 			throw new Error("LOCALAPPDATA is not set. Pass --out explicitly.");
 		}
 
-		return join(localAppData, WINDOWS_BASE_DIR_NAME);
+		return join(localAppData, DEFAULT_BASE_DIR_NAME);
 	}
 
 	if (process.platform === "darwin") {
-		return join(getRequiredHome(), "Library", "Application Support", WINDOWS_BASE_DIR_NAME);
+		return join(getRequiredHome(), "Library", "Application Support", DEFAULT_BASE_DIR_NAME);
 	}
 
 	return join(
 		process.env["XDG_STATE_HOME"] ?? join(getRequiredHome(), ".local", "state"),
-		WINDOWS_BASE_DIR_NAME,
+		DEFAULT_BASE_DIR_NAME,
 	);
 };
 
