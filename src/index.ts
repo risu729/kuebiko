@@ -30,6 +30,12 @@ const waitForShutdown = (): Promise<void> =>
 	new Promise((resolve) => {
 		process.once("SIGINT", () => resolve());
 		process.once("SIGTERM", () => resolve());
+		process.once("message", (message) => {
+			if (message === "shutdown") {
+				process.stdout.write("shutdown requested via IPC\n");
+				resolve();
+			}
+		});
 	});
 
 const getDefaultBrowserProfileDirectory = (): string =>
@@ -99,14 +105,18 @@ const runLogger = async (options: CliOptions): Promise<void> => {
 		await Promise.race([waitForShutdown(), logger.closed]);
 	} finally {
 		await plugins?.stopping();
-		await logger?.close().catch((error: unknown) => {
-			process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-		});
+		const activeLogger = logger;
+		const requestBrowserClose = activeLogger ? () => activeLogger.closeBrowser() : undefined;
+		await Promise.all([
+			browser?.close(requestBrowserClose).catch((error: unknown) => {
+				process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+			}),
+			logger?.close().catch((error: unknown) => {
+				process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+			}),
+		]);
 		await plugins?.close();
 		await storage?.close();
-		await browser?.close().catch((error: unknown) => {
-			process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-		});
 	}
 };
 

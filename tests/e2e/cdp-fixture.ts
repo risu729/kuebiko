@@ -6,11 +6,19 @@ import type { CapturedApiRecord } from "./assertions";
 import waitFor from "./poll";
 
 type LoggerProcess = ReturnType<typeof Bun.spawn> & {
-	stderr: ReadableStream<Uint8Array>;
 	stdout: ReadableStream<Uint8Array>;
 };
-type LoggerStdoutReader = {
-	read: () => Promise<{ done: boolean; value?: Uint8Array | undefined }>;
+
+type LoggerStdout = {
+	completed: Promise<string>;
+	ready: Promise<void>;
+};
+
+type LoggerStdoutState = {
+	decoder: TextDecoder;
+	output: string;
+	readiness: PromiseWithResolvers<void>;
+	ready: boolean;
 };
 
 type MetadataRecord = {
@@ -30,12 +38,12 @@ type TestContext = RunDirectories & {
 	cdpEndpoint: string;
 	fixtureServer: ReturnType<typeof Bun.serve>;
 	logger: LoggerProcess;
+	loggerStdout: LoggerStdout;
 };
 
 const browserPath = process.env["E2E_BROWSER_PATH"];
 const e2eRoot = join(process.cwd(), ".e2e");
 const cleanupPaths: string[] = [];
-const LOGGER_STOP_TIMEOUT_MS = 60_000;
 
 const maybeBrowserIt = browserPath ? it : it.skip;
 
@@ -110,12 +118,53 @@ const createRunDirectories = async (): Promise<RunDirectories> => {
 	return { captureDirectory, netLogPath, profileDirectory, runRoot };
 };
 
+const consumeLoggerStdout = async (
+	stdout: ReadableStream<Uint8Array>,
+	state: LoggerStdoutState,
+): Promise<string> => {
+	try {
+		await stdout.pipeTo(
+			new WritableStream<Uint8Array>({
+				write: (chunk) => {
+					process.stdout.write(chunk);
+					state.output += state.decoder.decode(chunk, { stream: true });
+					if (!state.ready && state.output.includes("logger running; press Ctrl-C to stop")) {
+						state.ready = true;
+						state.readiness.resolve();
+					}
+				},
+			}),
+		);
+	} catch (error) {
+		state.readiness.reject(error);
+		throw error;
+	}
+
+	state.output += state.decoder.decode();
+	if (!state.ready) {
+		state.readiness.reject(
+			new Error(`Logger exited before becoming ready. Output: ${state.output}`),
+		);
+	}
+	return state.output;
+};
+
+const captureLoggerStdout = (stdout: ReadableStream<Uint8Array>): LoggerStdout => {
+	const state: LoggerStdoutState = {
+		decoder: new TextDecoder(),
+		output: "",
+		readiness: Promise.withResolvers<void>(),
+		ready: false,
+	};
+	return { completed: consumeLoggerStdout(stdout, state), ready: state.readiness.promise };
+};
+
 const startLogger = (options: {
 	browserPath: string;
 	captureDirectory: string;
 	cdpPort: number;
 	profileDirectory: string;
-}): LoggerProcess => {
+}): { logger: LoggerProcess; stdout: LoggerStdout } => {
 	const process = Bun.spawn(
 		[
 			"bun",
@@ -133,46 +182,16 @@ const startLogger = (options: {
 			options.captureDirectory,
 		],
 		{
-			stderr: "pipe",
+			ipc: () => undefined,
+			stderr: "inherit",
 			stdout: "pipe",
 		},
 	);
 	if (!(process.stdout instanceof ReadableStream)) {
 		throw new Error("Logger stdout was not piped.");
 	}
-	if (!(process.stderr instanceof ReadableStream)) {
-		throw new Error("Logger stderr was not piped.");
-	}
-
-	return process as LoggerProcess;
-};
-
-const readLoggerStderr = async (logger: LoggerProcess): Promise<string> => {
-	await logger.exited.catch(() => undefined);
-	return await new Response(logger.stderr).text();
-};
-
-const readUntilLoggerReady = async (
-	logger: LoggerProcess,
-	reader: LoggerStdoutReader,
-	seen = "",
-): Promise<void> => {
-	const { done, value } = await reader.read();
-	if (done) {
-		const stderr = await readLoggerStderr(logger);
-		throw new Error(`Logger exited before becoming ready. Output: ${seen}\nStderr: ${stderr}`);
-	}
-
-	const output = `${seen}${new TextDecoder().decode(value)}`;
-	if (output.includes("logger running")) {
-		return;
-	}
-
-	await readUntilLoggerReady(logger, reader, output);
-};
-
-const waitForLoggerReady = async (logger: LoggerProcess): Promise<void> => {
-	await readUntilLoggerReady(logger, logger.stdout.getReader() as unknown as LoggerStdoutReader);
+	const logger = process as LoggerProcess;
+	return { logger, stdout: captureLoggerStdout(logger.stdout) };
 };
 
 const openNewPage = async (cdpEndpoint: string, url: string): Promise<void> => {
@@ -211,40 +230,25 @@ const startContext = async (path = requireBrowserPath()): Promise<TestContext> =
 	const fixtureServer = startFixtureServer();
 	const cdpPort = reservePort();
 	const cdpEndpoint = `http://127.0.0.1:${cdpPort}`;
-	const logger = startLogger({
+	const { logger, stdout: loggerStdout } = startLogger({
 		browserPath: path,
 		captureDirectory: directories.captureDirectory,
 		cdpPort,
 		profileDirectory: directories.profileDirectory,
 	});
-	await waitForLoggerReady(logger);
+	await loggerStdout.ready;
 
-	return { ...directories, cdpEndpoint, fixtureServer, logger };
+	return { ...directories, cdpEndpoint, fixtureServer, logger, loggerStdout };
 };
 
-const waitForLoggerExit = async (logger: LoggerProcess): Promise<boolean> =>
-	await Promise.race([
-		logger.exited.then(() => true),
-		Bun.sleep(LOGGER_STOP_TIMEOUT_MS).then(() => false),
-	]).catch(() => true);
-
-const stopLogger = async (logger: LoggerProcess): Promise<void> => {
-	logger.kill("SIGTERM");
-	if (await waitForLoggerExit(logger)) {
-		return;
-	}
-
-	logger.kill("SIGKILL");
-	await logger.exited.catch(() => undefined);
-	const stderr = await readLoggerStderr(logger);
-	throw new Error(
-		`Logger did not exit within ${LOGGER_STOP_TIMEOUT_MS}ms after SIGTERM. Stderr: ${stderr}`,
-	);
+const stopLogger = async (context: TestContext): Promise<void> => {
+	context.logger.send("shutdown");
+	await Promise.all([context.logger.exited.catch(() => undefined), context.loggerStdout.completed]);
 };
 
 const closeContext = async (context: TestContext): Promise<void> => {
 	context.fixtureServer.stop(true);
-	await stopLogger(context.logger);
+	await stopLogger(context);
 };
 
 const loadPageAndWaitForCapture = async (context: TestContext): Promise<void> => {
