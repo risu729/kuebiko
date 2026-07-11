@@ -15,7 +15,7 @@
         "@types/chrome-remote-interface": "0.34.0",
         "@types/mime-types": "3.0.1",
         "@types/node": "26.1.1",
-        "devtools-protocol": "0.0.1658499",
+        "devtools-protocol": "0.0.1660672",
         "typescript": "6.0.3",
       },
     },
@@ -37,7 +37,7 @@
 
     "commander": ["commander@2.11.0", "", {}, "sha512-b0553uYA5YAEGgyYIGYROzKQ7X5RAqedkfjiZxwi0kL1g3bOaBNNZfYkzt/CL0umgD5wc9Jec2FbB98CjkMRvQ=="],
 
-    "devtools-protocol": ["devtools-protocol@0.0.1658499", "", {}, "sha512-ErMPzWOOgJU/Ftl1Qj2iGGsVqHceICIgeLeFuuVah4vQjC3hE1XwGlXA34syuduBCK1y3dn3VCI8a/MlfSnL/A=="],
+    "devtools-protocol": ["devtools-protocol@0.0.1660672", "", {}, "sha512-H0AtOUIZr23DbvvjT7C6Bj3dHmSqQKZR7MI+c/7fCcLEPSljNU8OF1IllVZCGdXClcp66X/cRQ5f4d8vbJokNA=="],
 
     "mime-db": ["mime-db@1.54.0", "", {}, "sha512-aU5EJuIN2WDemCcAp2vFBfp/m4EAhWJnUNSSw0ixs7/kXbd6Pg64EmwJkNdFhB8aWt1sH2CTXrLxo/iAGV3oPQ=="],
 
