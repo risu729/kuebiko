@@ -324,6 +324,7 @@ Build one target:
 
 ```sh
 mise run compile --target linux-x64
+mise run compile --target macos-arm64
 mise run compile --target windows-x64
 ```
 
@@ -331,6 +332,7 @@ The output files are:
 
 ```text
 dist/kuebiko-linux-x64
+dist/kuebiko-macos-arm64
 dist/kuebiko-windows-x64.exe
 ```
 
