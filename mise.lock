@@ -390,73 +390,73 @@ url_api = "https://api.github.com/repos/suzuki-shunsuke/pinact/releases/assets/4
 provenance = "github-attestations"
 
 [[tools.rumdl]]
-version = "v0.2.37"
+version = "v0.2.38"
 backend = "aqua:rvben/rumdl"
 
 [tools.rumdl."platforms.linux-arm64"]
-checksum = "sha256:2cee94dbc4e577c54869723245be548589e80a5e5a93fe25a3cc535d51e1ac6d"
-url = "https://github.com/rvben/rumdl/releases/download/v0.2.37/rumdl-v0.2.37-aarch64-unknown-linux-musl.tar.gz"
-url_api = "https://api.github.com/repos/rvben/rumdl/releases/assets/482465207"
+checksum = "sha256:6452cef18d68614bc89cca26a51d844b3a906bcf2364885807d1d5d87a38f750"
+url = "https://github.com/rvben/rumdl/releases/download/v0.2.38/rumdl-v0.2.38-aarch64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/rvben/rumdl/releases/assets/483977335"
 provenance = "github-attestations"
 
 [tools.rumdl."platforms.linux-arm64-musl"]
-checksum = "sha256:2cee94dbc4e577c54869723245be548589e80a5e5a93fe25a3cc535d51e1ac6d"
-url = "https://github.com/rvben/rumdl/releases/download/v0.2.37/rumdl-v0.2.37-aarch64-unknown-linux-musl.tar.gz"
-url_api = "https://api.github.com/repos/rvben/rumdl/releases/assets/482465207"
+checksum = "sha256:6452cef18d68614bc89cca26a51d844b3a906bcf2364885807d1d5d87a38f750"
+url = "https://github.com/rvben/rumdl/releases/download/v0.2.38/rumdl-v0.2.38-aarch64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/rvben/rumdl/releases/assets/483977335"
 provenance = "github-attestations"
 
 [tools.rumdl."platforms.linux-x64"]
-checksum = "sha256:0999d31c6f1429f0b3b5ed86d3ebb2768e5b4a16b373a51a41a7af2d7eb43b7c"
-url = "https://github.com/rvben/rumdl/releases/download/v0.2.37/rumdl-v0.2.37-x86_64-unknown-linux-musl.tar.gz"
-url_api = "https://api.github.com/repos/rvben/rumdl/releases/assets/482465203"
+checksum = "sha256:494e1dd5ab31b9a0161168a9084a2901df0c953aaf1677d53dd740c68fc386e2"
+url = "https://github.com/rvben/rumdl/releases/download/v0.2.38/rumdl-v0.2.38-x86_64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/rvben/rumdl/releases/assets/483977332"
 provenance = "github-attestations"
 
 [tools.rumdl."platforms.linux-x64-baseline"]
-checksum = "sha256:0999d31c6f1429f0b3b5ed86d3ebb2768e5b4a16b373a51a41a7af2d7eb43b7c"
-url = "https://github.com/rvben/rumdl/releases/download/v0.2.37/rumdl-v0.2.37-x86_64-unknown-linux-musl.tar.gz"
-url_api = "https://api.github.com/repos/rvben/rumdl/releases/assets/482465203"
+checksum = "sha256:494e1dd5ab31b9a0161168a9084a2901df0c953aaf1677d53dd740c68fc386e2"
+url = "https://github.com/rvben/rumdl/releases/download/v0.2.38/rumdl-v0.2.38-x86_64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/rvben/rumdl/releases/assets/483977332"
 provenance = "github-attestations"
 
 [tools.rumdl."platforms.linux-x64-musl"]
-checksum = "sha256:0999d31c6f1429f0b3b5ed86d3ebb2768e5b4a16b373a51a41a7af2d7eb43b7c"
-url = "https://github.com/rvben/rumdl/releases/download/v0.2.37/rumdl-v0.2.37-x86_64-unknown-linux-musl.tar.gz"
-url_api = "https://api.github.com/repos/rvben/rumdl/releases/assets/482465203"
+checksum = "sha256:494e1dd5ab31b9a0161168a9084a2901df0c953aaf1677d53dd740c68fc386e2"
+url = "https://github.com/rvben/rumdl/releases/download/v0.2.38/rumdl-v0.2.38-x86_64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/rvben/rumdl/releases/assets/483977332"
 provenance = "github-attestations"
 
 [tools.rumdl."platforms.linux-x64-musl-baseline"]
-checksum = "sha256:0999d31c6f1429f0b3b5ed86d3ebb2768e5b4a16b373a51a41a7af2d7eb43b7c"
-url = "https://github.com/rvben/rumdl/releases/download/v0.2.37/rumdl-v0.2.37-x86_64-unknown-linux-musl.tar.gz"
-url_api = "https://api.github.com/repos/rvben/rumdl/releases/assets/482465203"
+checksum = "sha256:494e1dd5ab31b9a0161168a9084a2901df0c953aaf1677d53dd740c68fc386e2"
+url = "https://github.com/rvben/rumdl/releases/download/v0.2.38/rumdl-v0.2.38-x86_64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/rvben/rumdl/releases/assets/483977332"
 provenance = "github-attestations"
 
 [tools.rumdl."platforms.macos-arm64"]
-checksum = "sha256:ac5f31077c492c3303d27264d8d8840b1279cb5a8cd62f863a2045e1427a6c79"
-url = "https://github.com/rvben/rumdl/releases/download/v0.2.37/rumdl-v0.2.37-aarch64-apple-darwin.tar.gz"
-url_api = "https://api.github.com/repos/rvben/rumdl/releases/assets/482465206"
+checksum = "sha256:53bd2a738210dead496efc1abb04325e4e3d03d886295d73c7aa2c1a56d5c978"
+url = "https://github.com/rvben/rumdl/releases/download/v0.2.38/rumdl-v0.2.38-aarch64-apple-darwin.tar.gz"
+url_api = "https://api.github.com/repos/rvben/rumdl/releases/assets/483977343"
 provenance = "github-attestations"
 
 [tools.rumdl."platforms.macos-x64"]
-checksum = "sha256:7cdfbc6ac896bfe433938a050e0f7b4dfc9ebc78d17ec8f4f872580b1fe06eba"
-url = "https://github.com/rvben/rumdl/releases/download/v0.2.37/rumdl-v0.2.37-x86_64-apple-darwin.tar.gz"
-url_api = "https://api.github.com/repos/rvben/rumdl/releases/assets/482465213"
+checksum = "sha256:02eba1c0c3834781d54ae7d45bb1b25433467d9e4e01975cdd470a5e4e064c73"
+url = "https://github.com/rvben/rumdl/releases/download/v0.2.38/rumdl-v0.2.38-x86_64-apple-darwin.tar.gz"
+url_api = "https://api.github.com/repos/rvben/rumdl/releases/assets/483977337"
 provenance = "github-attestations"
 
 [tools.rumdl."platforms.macos-x64-baseline"]
-checksum = "sha256:7cdfbc6ac896bfe433938a050e0f7b4dfc9ebc78d17ec8f4f872580b1fe06eba"
-url = "https://github.com/rvben/rumdl/releases/download/v0.2.37/rumdl-v0.2.37-x86_64-apple-darwin.tar.gz"
-url_api = "https://api.github.com/repos/rvben/rumdl/releases/assets/482465213"
+checksum = "sha256:02eba1c0c3834781d54ae7d45bb1b25433467d9e4e01975cdd470a5e4e064c73"
+url = "https://github.com/rvben/rumdl/releases/download/v0.2.38/rumdl-v0.2.38-x86_64-apple-darwin.tar.gz"
+url_api = "https://api.github.com/repos/rvben/rumdl/releases/assets/483977337"
 provenance = "github-attestations"
 
 [tools.rumdl."platforms.windows-x64"]
-checksum = "sha256:e8db622a0aff15f9abcea4ecdb4d87a636d4211f4cb01e45dc19957713436da1"
-url = "https://github.com/rvben/rumdl/releases/download/v0.2.37/rumdl-v0.2.37-x86_64-pc-windows-msvc.zip"
-url_api = "https://api.github.com/repos/rvben/rumdl/releases/assets/482465212"
+checksum = "sha256:8e8c098aaa31a78fa0466e1bdece6d9886a9d3a1d8e81edf18136d45ba05586f"
+url = "https://github.com/rvben/rumdl/releases/download/v0.2.38/rumdl-v0.2.38-x86_64-pc-windows-msvc.zip"
+url_api = "https://api.github.com/repos/rvben/rumdl/releases/assets/483977341"
 provenance = "github-attestations"
 
 [tools.rumdl."platforms.windows-x64-baseline"]
-checksum = "sha256:e8db622a0aff15f9abcea4ecdb4d87a636d4211f4cb01e45dc19957713436da1"
-url = "https://github.com/rvben/rumdl/releases/download/v0.2.37/rumdl-v0.2.37-x86_64-pc-windows-msvc.zip"
-url_api = "https://api.github.com/repos/rvben/rumdl/releases/assets/482465212"
+checksum = "sha256:8e8c098aaa31a78fa0466e1bdece6d9886a9d3a1d8e81edf18136d45ba05586f"
+url = "https://github.com/rvben/rumdl/releases/download/v0.2.38/rumdl-v0.2.38-x86_64-pc-windows-msvc.zip"
+url_api = "https://api.github.com/repos/rvben/rumdl/releases/assets/483977341"
 provenance = "github-attestations"
 
 [[tools.shellcheck]]
