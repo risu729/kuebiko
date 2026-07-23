@@ -85,15 +85,15 @@ jobs:
         include:
           - name: Linux x64
             runner: ubuntu-24.04
-            bun_target: bun-linux-x64
+            target: linux-x64
             binary: ./dist/kuebiko-linux-x64
           - name: macOS arm64
             runner: macos-latest
-            bun_target: bun-darwin-arm64
+            target: macos-arm64
             binary: ./dist/kuebiko-macos-arm64
           - name: Windows x64
             runner: windows-latest
-            bun_target: bun-windows-x64
+            target: windows-x64
             binary: ./dist/kuebiko-windows-x64.exe
     steps:
       - name: Checkout
@@ -104,19 +104,11 @@ jobs:
         uses: jdx/mise-action@dad1bfd3df957f44999b559dd69dc1671cb4e9ea # v4.2.1
         with:
           version: 2026.7.12
-      - name: Install dependencies
-        if: runner.os != 'Windows'
-        run: bun install --frozen-lockfile
-      - name: Install dependencies
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: bun install --frozen-lockfile
       - name: Compile binary
         if: runner.os != 'Windows'
-        run: bun build --compile "--target=${BUN_TARGET}" "--outfile=${BINARY_PATH}" src/index.ts
+        run: mise run compile --target "${COMPILE_TARGET}"
         env:
-          BINARY_PATH: ${{ matrix.binary }}
-          BUN_TARGET: ${{ matrix.bun_target }}
+          COMPILE_TARGET: ${{ matrix.target }}
       - name: Smoke test binary
         if: runner.os != 'Windows'
         run: |
@@ -127,10 +119,9 @@ jobs:
       - name: Compile binary
         if: runner.os == 'Windows'
         shell: pwsh
-        run: bun build --compile "--target=$env:BUN_TARGET" "--outfile=$env:BINARY_PATH" src/index.ts
+        run: mise run compile --target $env:COMPILE_TARGET
         env:
-          BINARY_PATH: ${{ matrix.binary }}
-          BUN_TARGET: ${{ matrix.bun_target }}
+          COMPILE_TARGET: ${{ matrix.target }}
       - name: Smoke test binary
         if: runner.os == 'Windows'
         shell: pwsh
