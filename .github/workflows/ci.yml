@@ -90,6 +90,31 @@ jobs:
           version: 2026.7.12
       - name: Compile binaries
         run: mise run compile
+  windows-smoke:
+    name: Windows Smoke Test
+    runs-on: windows-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install mise
+        uses: jdx/mise-action@dad1bfd3df957f44999b559dd69dc1671cb4e9ea # v4.2.1
+        with:
+          version: 2026.7.12
+      - name: Compile Windows binary
+        run: mise run compile --target windows-x64
+      - name: Smoke test Windows binary
+        shell: pwsh
+        run: |
+          $binary = ".\dist\kuebiko-windows-x64.exe"
+          if (-not (Test-Path -PathType Leaf $binary)) {
+            throw "Expected Windows binary does not exist: $binary"
+          }
+          & $binary --help
   ci-check:
     name: CI Check
     needs:
@@ -97,6 +122,7 @@ jobs:
       - test
       - e2e
       - compile
+      - windows-smoke
     if: ${{ !cancelled() && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
