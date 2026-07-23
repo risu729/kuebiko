@@ -104,6 +104,13 @@ jobs:
         uses: jdx/mise-action@dad1bfd3df957f44999b559dd69dc1671cb4e9ea # v4.2.1
         with:
           version: 2026.7.12
+      - name: Install dependencies
+        if: runner.os != 'Windows'
+        run: bun install --frozen-lockfile
+      - name: Install dependencies
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: bun install --frozen-lockfile
       - name: Compile binary
         if: runner.os != 'Windows'
         run: bun build --compile "--target=${BUN_TARGET}" "--outfile=${BINARY_PATH}" src/index.ts
