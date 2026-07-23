@@ -58,24 +58,24 @@ from heavy logging. Some sites also use broad anti-debugging or automation
 heuristics. This project avoids the obvious automation and interception signals;
 it does not promise undetectability.
 
+## Install
+
+Install the latest release with mise:
+
+```sh
+mise i risu729/kuebiko
+```
+
 ## Quick Start
 
 Launch mode is the recommended path. It starts a browser with the required CDP
 and NetLog flags, uses a dedicated profile, and keeps capture files in one run
 directory.
 
-Prepare the repository and build the binary:
-
-```sh
-mise trust
-mise install
-mise run compile
-```
-
 Run the logger and let it launch your browser:
 
 ```sh
-dist/kuebiko-linux-x64 \
+kuebiko \
   --launch-browser \
   --browser-command google-chrome
 ```
@@ -83,17 +83,13 @@ dist/kuebiko-linux-x64 \
 Use another browser command or executable path when needed:
 
 ```powershell
-.\dist\kuebiko-windows-x64.exe `
+kuebiko.exe `
   --launch-browser `
   --browser-command chrome.exe
 ```
 
 ```sh
-dist/kuebiko-linux-x64 --launch-browser --browser-command chromium
-```
-
-```sh
-bun src/index.ts --launch-browser \
+kuebiko --launch-browser \
   --browser-path "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 ```
 
@@ -311,45 +307,6 @@ $capture.FullName
 You should see `metadata.ndjson` grow while the logger is running. Normal CDP
 misses are recorded in `errors.ndjson`.
 
-## Build
-
-Build the configured binaries:
-
-```sh
-mise install
-mise run compile
-```
-
-Build one target:
-
-```sh
-mise run compile --target linux-x64
-mise run compile --target macos-arm64
-mise run compile --target windows-x64
-```
-
-The output files are:
-
-```text
-dist/kuebiko-linux-x64
-dist/kuebiko-macos-arm64
-dist/kuebiko-windows-x64.exe
-```
-
-Release builds embed their semantic version. Local builds use
-`0.0.0-development` unless a version is provided explicitly:
-
-```sh
-mise run compile --target linux-x64 --version 1.2.3
-dist/kuebiko-linux-x64 --version
-```
-
-You can also run the TypeScript entrypoint directly with Bun:
-
-```sh
-bun src/index.ts --launch-browser --browser-command google-chrome
-```
-
 ## Browser Modes
 
 Use launch mode first. It is easier to get right because the logger owns the
@@ -501,13 +458,6 @@ Options:
 Successful pushes to `main` are released automatically from conventional commit
 messages after CI passes. GitHub Releases contain archives for Windows x64,
 Linux x64, and macOS arm64.
-
-Release archives include GitHub build provenance attestations. Verify a
-downloaded archive with GitHub CLI:
-
-```sh
-gh attestation verify <archive> --repo risu729/kuebiko
-```
 
 If `--out` is omitted, the logger creates a new timestamped capture folder under
 the platform default capture root:
