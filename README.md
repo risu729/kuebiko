@@ -63,7 +63,7 @@ it does not promise undetectability.
 Install the latest release with mise:
 
 ```sh
-mise i risu729/kuebiko
+mise use -g github:risu729/kuebiko
 ```
 
 ## Quick Start
