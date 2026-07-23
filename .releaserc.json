@@ -1,0 +1,20 @@
+{
+	"plugins": [
+		"@semantic-release/commit-analyzer",
+		"@semantic-release/release-notes-generator",
+		[
+			"@semantic-release/exec",
+			{
+				"prepareCmd": "mise run package-release --version ${nextRelease.version}"
+			}
+		],
+		[
+			"@semantic-release/github",
+			{
+				"assets": ["dist/release/*.tar.gz", "dist/release/*.zip"],
+				"successComment": false,
+				"failCommentCondition": false
+			}
+		]
+	]
+}

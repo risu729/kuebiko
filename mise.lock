@@ -307,6 +307,10 @@ url = "https://nodejs.org/dist/v26.5.0/node-v26.5.0-win-x64.zip"
 checksum = "sha256:d3b2277dbcccfdf24ef6302928f64f484cff1d77a6d3caa3a28f4d20ce9158f6"
 url = "https://nodejs.org/dist/v26.5.0/node-v26.5.0-win-x64.zip"
 
+[[tools."npm:semantic-release"]]
+version = "25.0.8"
+backend = "npm:semantic-release"
+
 [[tools."npm:typescript"]]
 version = "7.0.2"
 backend = "npm:typescript"

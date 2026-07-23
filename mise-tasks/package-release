@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+#MISE description="Build and package release archives."
+#USAGE flag "--version <version>" help="Release version to embed and package."
+
+set -euo pipefail
+
+release_version="${usage_version:?--version is required}"
+release_directory="${PWD}/dist/release"
+staging_directory="$(mktemp -d)"
+trap 'rm -rf "${staging_directory}"' EXIT
+
+rm -rf "${release_directory}"
+mkdir -p \
+  "${release_directory}" \
+  "${staging_directory}/linux-x64" \
+  "${staging_directory}/macos-arm64" \
+  "${staging_directory}/windows-x64"
+
+mise run compile --version "${release_version}"
+
+install -m 0755 dist/kuebiko-linux-x64 "${staging_directory}/linux-x64/kuebiko"
+install -m 0755 dist/kuebiko-macos-arm64 "${staging_directory}/macos-arm64/kuebiko"
+install -m 0755 dist/kuebiko-windows-x64.exe "${staging_directory}/windows-x64/kuebiko.exe"
+
+tar -C "${staging_directory}/linux-x64" \
+  -czf "${release_directory}/kuebiko-v${release_version}-linux-x64.tar.gz" \
+  kuebiko
+tar -C "${staging_directory}/macos-arm64" \
+  -czf "${release_directory}/kuebiko-v${release_version}-macos-arm64.tar.gz" \
+  kuebiko
+(
+  cd "${staging_directory}/windows-x64"
+  zip -q "${release_directory}/kuebiko-v${release_version}-windows-x64.zip" \
+    kuebiko.exe
+)
+
+actual_version="$(dist/kuebiko-linux-x64 --version)"
+if [[ "${actual_version}" != "${release_version}" ]]; then
+  printf 'Expected release version %s, got %s\n' \
+    "${release_version}" "${actual_version}" >&2
+  exit 1
+fi

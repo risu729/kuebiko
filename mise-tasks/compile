@@ -3,23 +3,34 @@
 #USAGE flag "--target <target>" default="all" help="Target platform: all, linux-x64, macos-arm64, or windows-x64" {
 #USAGE   choices "all" "linux-x64" "macos-arm64" "windows-x64"
 #USAGE }
+#USAGE flag "--version <version>" default="0.0.0-development" help="Version to embed in the binaries."
 
 set -euo pipefail
 
+build_version="${usage_version:-0.0.0-development}"
+if [[ ! "${build_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+  printf 'Invalid build version: %s\n' "${build_version}" >&2
+  exit 1
+fi
+build_version_define="\"${build_version}\""
+
 compile_linux() {
   bun build --compile --target=bun-linux-x64 \
+    --define "KUEBIKO_BUILD_VERSION=${build_version_define}" \
     --outfile=dist/kuebiko-linux-x64 \
     src/index.ts
 }
 
 compile_macos() {
   bun build --compile --target=bun-darwin-arm64 \
+    --define "KUEBIKO_BUILD_VERSION=${build_version_define}" \
     --outfile=dist/kuebiko-macos-arm64 \
     src/index.ts
 }
 
 compile_windows() {
   bun build --compile --target=bun-windows-x64 \
+    --define "KUEBIKO_BUILD_VERSION=${build_version_define}" \
     --outfile=dist/kuebiko-windows-x64.exe \
     src/index.ts
 }

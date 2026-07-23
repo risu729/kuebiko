@@ -336,6 +336,14 @@ dist/kuebiko-macos-arm64
 dist/kuebiko-windows-x64.exe
 ```
 
+Release builds embed their semantic version. Local builds use
+`0.0.0-development` unless a version is provided explicitly:
+
+```sh
+mise run compile --target linux-x64 --version 1.2.3
+dist/kuebiko-linux-x64 --version
+```
+
 You can also run the TypeScript entrypoint directly with Bun:
 
 ```sh
@@ -484,7 +492,21 @@ Options:
   --browser-arg <arg>      Extra browser arg for --launch-browser
   --cdp-port <port>        Local CDP port for --launch-browser
   --no-netlog              Disable netlog.json in --launch-browser mode
-  --help                   Show help
+  --help, -h               Show help
+  --version, -v            Show version
+```
+
+## Releases
+
+Successful pushes to `main` are released automatically from conventional commit
+messages after CI passes. GitHub Releases contain archives for Windows x64,
+Linux x64, and macOS arm64.
+
+Release archives include GitHub build provenance attestations. Verify a
+downloaded archive with GitHub CLI:
+
+```sh
+gh attestation verify <archive> --repo risu729/kuebiko
 ```
 
 If `--out` is omitted, the logger creates a new timestamped capture folder under
