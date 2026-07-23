@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { READY_MESSAGE } from "kuebiko";
 
 import type { CapturedApiRecord } from "./assertions";
+import openNewPage from "./cdp-page";
 import waitFor from "./poll";
 
 type LoggerProcess = ReturnType<typeof Bun.spawn> & {
@@ -14,6 +15,7 @@ type LoggerProcess = ReturnType<typeof Bun.spawn> & {
 type LoggerStdout = {
 	completed: Promise<string>;
 	ready: Promise<void>;
+	waitForNext: (text: string) => Promise<void>;
 };
 
 type LoggerStdoutState = {
@@ -158,37 +160,24 @@ const captureLoggerStdout = (stdout: ReadableStream<Uint8Array>): LoggerStdout =
 		readiness: Promise.withResolvers<void>(),
 		ready: false,
 	};
-	return { completed: consumeLoggerStdout(stdout, state), ready: state.readiness.promise };
+	return {
+		completed: consumeLoggerStdout(stdout, state),
+		ready: state.readiness.promise,
+		waitForNext: async (text) => {
+			const initialCount = state.output.split(text).length;
+			await waitFor(`logger output containing ${text}`, () =>
+				Promise.resolve(state.output.split(text).length > initialCount ? true : undefined),
+			);
+		},
+	};
 };
 
-const startLogger = (options: {
-	browserPath: string;
-	captureDirectory: string;
-	cdpPort: number;
-	profileDirectory: string;
-}): { logger: LoggerProcess; stdout: LoggerStdout } => {
-	const process = Bun.spawn(
-		[
-			"bun",
-			"src/index.ts",
-			"--launch-browser",
-			"--browser-path",
-			options.browserPath,
-			"--browser-profile",
-			options.profileDirectory,
-			"--cdp-port",
-			String(options.cdpPort),
-			"--browser-arg=--no-sandbox",
-			"--browser-arg=--disable-dev-shm-usage",
-			"--out",
-			options.captureDirectory,
-		],
-		{
-			ipc: () => undefined,
-			stderr: "inherit",
-			stdout: "pipe",
-		},
-	);
+const startLoggerProcess = (args: string[]): { logger: LoggerProcess; stdout: LoggerStdout } => {
+	const process = Bun.spawn(["bun", "src/index.ts", ...args], {
+		ipc: () => undefined,
+		stderr: "inherit",
+		stdout: "pipe",
+	});
 	if (!(process.stdout instanceof ReadableStream)) {
 		throw new Error("Logger stdout was not piped.");
 	}
@@ -196,14 +185,25 @@ const startLogger = (options: {
 	return { logger, stdout: captureLoggerStdout(logger.stdout) };
 };
 
-const openNewPage = async (cdpEndpoint: string, url: string): Promise<void> => {
-	const response = await fetch(`${cdpEndpoint}/json/new?${encodeURIComponent(url)}`, {
-		method: "PUT",
-	});
-	if (!response.ok) {
-		throw new Error(`Failed to open CDP page: ${response.status} ${await response.text()}`);
-	}
-};
+const startLogger = (options: {
+	browserPath: string;
+	captureDirectory: string;
+	cdpPort: number;
+	profileDirectory: string;
+}): { logger: LoggerProcess; stdout: LoggerStdout } =>
+	startLoggerProcess([
+		"--launch-browser",
+		"--browser-path",
+		options.browserPath,
+		"--browser-profile",
+		options.profileDirectory,
+		"--cdp-port",
+		String(options.cdpPort),
+		"--browser-arg=--no-sandbox",
+		"--browser-arg=--disable-dev-shm-usage",
+		"--out",
+		options.captureDirectory,
+	]);
 
 const readMetadata = async (path: string): Promise<MetadataRecord[]> => {
 	if (!(await Bun.file(path).exists())) {
@@ -254,16 +254,20 @@ const closeContext = async (context: TestContext): Promise<void> => {
 };
 
 const loadPageAndWaitForCapture = async (context: TestContext): Promise<void> => {
-	await openNewPage(context.cdpEndpoint, `http://127.0.0.1:${context.fixtureServer.port}/`);
+	await openNewPage(context, `http://127.0.0.1:${context.fixtureServer.port}/`);
 	await findCapturedApiRecord(context.captureDirectory);
 };
 
 export {
 	cleanupRuns,
 	closeContext,
+	createRunDirectories,
 	findCapturedApiRecord,
 	loadPageAndWaitForCapture,
 	maybeBrowserIt,
+	reservePort,
+	startFixtureServer,
 	startContext,
+	startLoggerProcess,
 };
 export type { TestContext };

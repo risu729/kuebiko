@@ -12,7 +12,7 @@ import {
 
 const BROWSER_E2E_TIMEOUT_MS = 30_000;
 
-describe("CDP browser e2e", () => {
+describe("CDP launch-mode browser e2e", () => {
 	afterEach(cleanupRuns);
 
 	maybeBrowserIt(
