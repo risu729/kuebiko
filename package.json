@@ -22,7 +22,7 @@
 		"@types/chrome-remote-interface": "0.34.0",
 		"@types/mime-types": "3.0.1",
 		"@types/node": "26.1.2",
-		"devtools-protocol": "0.0.1666840",
+		"devtools-protocol": "0.0.1669207",
 		"typescript": "7.0.2"
 	}
 }
