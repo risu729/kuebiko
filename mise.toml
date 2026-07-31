@@ -15,7 +15,7 @@ ghalint = "1.5.6"
 pinact = "4.1.1"
 zizmor = "1.28.0"
 tombi = "1.2.4"
-rumdl = "v0.2.46"
+rumdl = "v0.2.47"
 yamlfmt = "0.21.0"
 # required for pipx backend
 uv = "0.12.0"
