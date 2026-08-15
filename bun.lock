@@ -16,7 +16,7 @@
         "@types/chrome-remote-interface": "0.34.0",
         "@types/mime-types": "3.0.1",
         "@types/node": "26.2.0",
-        "devtools-protocol": "0.0.1676914",
+        "devtools-protocol": "0.0.1677763",
         "typescript": "7.0.2",
       },
     },
@@ -212,7 +212,7 @@
 
     "deep-extend": ["deep-extend@0.6.0", "", {}, "sha512-LOHxIOaPYdHlJRtCQfDIVZtfw/ufM8+rVj649RIHzcm/vGwQRXFt6OPqIFWsm2XEMrNIEtWR64sY1LEKD2vAOA=="],
 
-    "devtools-protocol": ["devtools-protocol@0.0.1676914", "", {}, "sha512-cvae7I5bx76EoNHRNMiYyMJH7d3y6PiVzC3nBTMNHVKZZ4hRiT3JWxFbohtzV4PoGQIDAaZQh/ULcQPe4qJHqA=="],
+    "devtools-protocol": ["devtools-protocol@0.0.1677763", "", {}, "sha512-DGflkl9ehLrUXqK3ntQ5ORMWa5gy8MafMGMsHGc7Vu3YGiyU7I8lwo3bWV35a3mmZeFxEzBSWB0zwJKD7paCIw=="],
 
     "dir-glob": ["dir-glob@3.0.1", "", { "dependencies": { "path-type": "^4.0.0" } }, "sha512-WkrWp9GR4KXfKGYzOLmTuGVi1UWFfws377n9cc55/tb6DuqyF6pcQ5AbiHEshaDpY9v6oaSr2XCDidGmMwdzIA=="],
 
