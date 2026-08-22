@@ -108,14 +108,13 @@ const runLogger = async (options: CliOptions): Promise<void> => {
 		await plugins?.stopping();
 		const activeLogger = logger;
 		const requestBrowserClose = activeLogger ? () => activeLogger.closeBrowser() : undefined;
-		await Promise.all([
-			browser?.close(requestBrowserClose).catch((error: unknown) => {
-				process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-			}),
-			logger?.close().catch((error: unknown) => {
-				process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-			}),
-		]);
+		// Close the browser first: closing the CDP client rejects Browser.close in flight.
+		await browser?.close(requestBrowserClose).catch((error: unknown) => {
+			process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+		});
+		await logger?.close().catch((error: unknown) => {
+			process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+		});
 		await plugins?.close();
 		await storage?.close();
 	}
