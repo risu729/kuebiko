@@ -27,7 +27,9 @@ function Invoke-Compile {
     [string]$BuildVersionDefine
   )
 
-  bun build --compile "--target=$BunTarget" "--define=KUEBIKO_BUILD_VERSION=$BuildVersionDefine" "--outfile=$OutputPath" src/index.ts
+  # Tie the browser process tree to this process: if the logger is killed instead of
+  # shut down, Bun kills every descendant, so Chrome is not left running.
+  bun build --compile "--target=$BunTarget" "--compile-exec-argv=--no-orphans" "--define=KUEBIKO_BUILD_VERSION=$BuildVersionDefine" "--outfile=$OutputPath" src/index.ts
   if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
   }

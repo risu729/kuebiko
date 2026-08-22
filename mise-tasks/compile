@@ -14,8 +14,13 @@ if [[ ! "${build_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-
 fi
 build_version_define="\"${build_version}\""
 
+# Tie the browser process tree to this process: if the logger is killed instead of
+# shut down, Bun kills every descendant, so Chrome is not left running.
+no_orphans_argv="--no-orphans"
+
 compile_linux() {
   bun build --compile --target=bun-linux-x64 \
+    --compile-exec-argv="${no_orphans_argv}" \
     --define "KUEBIKO_BUILD_VERSION=${build_version_define}" \
     --outfile=dist/kuebiko-linux-x64 \
     src/index.ts
@@ -23,6 +28,7 @@ compile_linux() {
 
 compile_macos() {
   bun build --compile --target=bun-darwin-arm64 \
+    --compile-exec-argv="${no_orphans_argv}" \
     --define "KUEBIKO_BUILD_VERSION=${build_version_define}" \
     --outfile=dist/kuebiko-macos-arm64 \
     src/index.ts
@@ -30,6 +36,7 @@ compile_macos() {
 
 compile_windows() {
   bun build --compile --target=bun-windows-x64 \
+    --compile-exec-argv="${no_orphans_argv}" \
     --define "KUEBIKO_BUILD_VERSION=${build_version_define}" \
     --outfile=dist/kuebiko-windows-x64.exe \
     src/index.ts

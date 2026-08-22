@@ -1,0 +1,7 @@
+#:schema https://www.schemastore.org/bunfig.json
+
+[run]
+# Tie the browser process tree to the logger when running from source, matching
+# what --compile-exec-argv gives the compiled binaries. Without it, killing the
+# logger instead of shutting it down leaves the whole Chrome tree running.
+noOrphans = true
