@@ -24,6 +24,8 @@ type StartedBrowser = {
 const BROWSER_STOP_TIMEOUT_MS = 5_000;
 const CDP_READY_TIMEOUT_MS = 15_000;
 const CDP_READY_POLL_MS = 100;
+// Bound every probe so a stalled peer cannot hang startup past its deadline.
+const CDP_PROBE_TIMEOUT_MS = 2_000;
 
 const createCdpEndpoint = (port: number): string => `http://127.0.0.1:${port}`;
 
@@ -52,12 +54,41 @@ const buildBrowserArgs = (options: BrowserLaunchOptions): string[] => {
 };
 
 const fetchBrowserVersion = async (cdpEndpoint: string): Promise<BrowserVersion> => {
-	const response = await fetch(`${cdpEndpoint}/json/version`);
+	const response = await fetch(`${cdpEndpoint}/json/version`, {
+		signal: AbortSignal.timeout(CDP_PROBE_TIMEOUT_MS),
+	});
 	if (!response.ok) {
 		throw new Error(`CDP version endpoint returned ${response.status}.`);
 	}
 
 	return (await response.json()) as BrowserVersion;
+};
+
+// Chrome hands off and exits when another browser already holds the profile.
+// The browser already there keeps serving the port, so waitForCdp still succeeds.
+// Capture would then run against a browser this process does not own, and the
+// NetLog it asked for would never be written.
+//
+// Any answer means the port is taken, so fetchBrowserVersion is not reused here.
+// A peer replying 404, serving HTML, or stalling still owns that port.
+// Only a connection that cannot be established is evidence the port is free.
+// An unrecognized transport failure therefore falls through to spawning.
+const assertCdpEndpointFree = async (
+	cdpEndpoint: string,
+	timeoutMs = CDP_PROBE_TIMEOUT_MS,
+): Promise<void> => {
+	try {
+		await fetch(`${cdpEndpoint}/json/version`, { signal: AbortSignal.timeout(timeoutMs) });
+	} catch (error) {
+		if ((error as { name?: string }).name !== "TimeoutError") {
+			return;
+		}
+	}
+
+	throw new Error(
+		`A browser is already listening on ${cdpEndpoint}. Launch mode needs a port of its own; ` +
+			`stop that browser, pass a different --cdp-port, or attach to it with --cdp ${cdpEndpoint}.`,
+	);
 };
 
 const waitForCdp = async (
@@ -179,8 +210,9 @@ const waitForStartedBrowser = async (
 };
 
 const startBrowser = async (options: BrowserLaunchOptions): Promise<StartedBrowser> => {
-	const browser = spawnBrowser(options);
 	const cdpEndpoint = createCdpEndpoint(options.cdpPort);
+	await assertCdpEndpointFree(cdpEndpoint);
+	const browser = spawnBrowser(options);
 	await waitForStartedBrowser(browser, cdpEndpoint);
 
 	return {
@@ -191,5 +223,5 @@ const startBrowser = async (options: BrowserLaunchOptions): Promise<StartedBrows
 	};
 };
 
-export { buildBrowserArgs, createCdpEndpoint, startBrowser };
+export { assertCdpEndpointFree, buildBrowserArgs, createCdpEndpoint, startBrowser };
 export type { BrowserLaunchOptions, StartedBrowser };
