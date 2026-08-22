@@ -119,7 +119,7 @@ type ErrorRecord = {
 };
 
 type WebSocketFrameRecord = {
-	direction: "received";
+	direction: "sent" | "received";
 	opcode: number;
 	payloadData: string;
 	requestId: string;
@@ -140,6 +140,7 @@ type HookEventName =
 	| "run.stopped"
 	| "response.completed"
 	| "websocket.frame.received"
+	| "websocket.frame.sent"
 	| "capture.error";
 
 type RunHookEvent = {
@@ -188,7 +189,8 @@ type ResponseCompletedHookEvent = {
 };
 
 type WebSocketFrameHookEvent = {
-	event: "websocket.frame.received";
+	// The event name follows the frame direction, so a plugin can subscribe to one side.
+	event: "websocket.frame.received" | "websocket.frame.sent";
 	frame: WebSocketFrameRecord;
 	run: RunRef;
 	timestamp: string;

@@ -23,6 +23,7 @@ const HOOK_EVENT_NAMES = new Set<HookEventName>([
 	"run.stopped",
 	"response.completed",
 	"websocket.frame.received",
+	"websocket.frame.sent",
 	"capture.error",
 ]);
 
@@ -382,7 +383,7 @@ const createWebSocketFrameHookEvent = (
 	frame: WebSocketFrameRecord,
 	storage: LoggerStorage,
 ): HookEvent => ({
-	event: "websocket.frame.received",
+	event: frame.direction === "sent" ? "websocket.frame.sent" : "websocket.frame.received",
 	frame,
 	run: {
 		runDirectory: storage.runDirectory,

@@ -15,6 +15,7 @@ import type {
 	RequestBodySource,
 	SessionInfo,
 	StartLoggerOptions,
+	WebSocketFrameRecord,
 } from "./types";
 
 type CdpClient = CDP.Client;
@@ -25,7 +26,12 @@ type RequestWillBeSentEvent = Protocol.Network.RequestWillBeSentEvent;
 type ResponseReceivedEvent = Protocol.Network.ResponseReceivedEvent;
 type LoadingFinishedEvent = Protocol.Network.LoadingFinishedEvent;
 type LoadingFailedEvent = Protocol.Network.LoadingFailedEvent;
-type WebSocketFrameReceivedEvent = Protocol.Network.WebSocketFrameReceivedEvent;
+type WebSocketCreatedEvent = Protocol.Network.WebSocketCreatedEvent;
+type WebSocketClosedEvent = Protocol.Network.WebSocketClosedEvent;
+// Both frame events carry the same requestId and response payload.
+type WebSocketFrameEvent =
+	| Protocol.Network.WebSocketFrameReceivedEvent
+	| Protocol.Network.WebSocketFrameSentEvent;
 
 const TARGET_TYPES = new Set(["page", "iframe", "worker", "shared_worker", "service_worker"]);
 
@@ -170,6 +176,10 @@ class CdpResponseLogger {
 	readonly #pendingEvents = new Set<Promise<void>>();
 	readonly #requests = new Map<string, RequestState>();
 	readonly #sessions = new Map<string, SessionInfo>();
+	// Socket URLs keyed like #requests.
+	// A WebSocket handshake produces no Network.requestWillBeSent event.
+	// Nothing else maps a frame requestId back to its URL.
+	readonly #webSockets = new Map<string, string>();
 
 	constructor(client: CdpClient, options: StartLoggerOptions) {
 		this.#client = client;
@@ -225,10 +235,19 @@ class CdpResponseLogger {
 		this.#client.on("Network.loadingFailed", (event, sessionId) => {
 			this.#trackEvent(this.#handleLoadingFailed(event as LoadingFailedEvent, sessionId));
 		});
+		this.#client.on("Network.webSocketCreated", (event, sessionId) => {
+			this.#handleWebSocketCreated(event as WebSocketCreatedEvent, sessionId);
+		});
+		this.#client.on("Network.webSocketClosed", (event, sessionId) => {
+			this.#handleWebSocketClosed(event as WebSocketClosedEvent, sessionId);
+		});
 		this.#client.on("Network.webSocketFrameReceived", (event, sessionId) => {
 			this.#trackEvent(
-				this.#handleWebSocketFrameReceived(event as WebSocketFrameReceivedEvent, sessionId),
+				this.#handleWebSocketFrame("received", event as WebSocketFrameEvent, sessionId),
 			);
+		});
+		this.#client.on("Network.webSocketFrameSent", (event, sessionId) => {
+			this.#trackEvent(this.#handleWebSocketFrame("sent", event as WebSocketFrameEvent, sessionId));
 		});
 		this.#client.on("disconnect", () => {
 			this.#log("cdp disconnected");
@@ -336,6 +355,13 @@ class CdpResponseLogger {
 			if (state.session.sessionId === event.sessionId) {
 				this.#requests.delete(key);
 				this.#hopWrites.delete(key);
+			}
+		}
+
+		const socketPrefix = `${event.sessionId}:`;
+		for (const key of this.#webSockets.keys()) {
+			if (key.startsWith(socketPrefix)) {
+				this.#webSockets.delete(key);
 			}
 		}
 
@@ -650,25 +676,43 @@ class CdpResponseLogger {
 		});
 	}
 
-	async #handleWebSocketFrameReceived(
-		event: WebSocketFrameReceivedEvent,
+	// Network.webSocketCreated carries the socket URL, and it is the only event that does.
+	// Handshake requests never reach #requests, so the URL is kept until the socket closes.
+	#handleWebSocketCreated(event: WebSocketCreatedEvent, sessionId?: string): void {
+		if (!sessionId) {
+			return;
+		}
+		this.#webSockets.set(requestKey(sessionId, event.requestId), event.url);
+	}
+
+	#handleWebSocketClosed(event: WebSocketClosedEvent, sessionId?: string): void {
+		if (!sessionId) {
+			return;
+		}
+		this.#webSockets.delete(requestKey(sessionId, event.requestId));
+	}
+
+	async #handleWebSocketFrame(
+		direction: WebSocketFrameRecord["direction"],
+		event: WebSocketFrameEvent,
 		sessionId?: string,
 	): Promise<void> {
 		if (!sessionId) {
 			return;
 		}
-		const state = this.#requests.get(requestKey(sessionId, event.requestId));
 		const session = this.#sessions.get(sessionId);
-		const frame = {
-			direction: "received",
+		const frame: WebSocketFrameRecord = {
+			direction,
 			opcode: event.response.opcode,
 			payloadData: event.response.payloadData,
 			requestId: event.requestId,
 			sessionId,
 			targetId: session?.targetId,
 			timestamp: nowIso(),
-			url: state?.response?.url ?? state?.requestUrl,
-		} as const;
+			// A socket the logger never saw open, or one already closed, has no URL here.
+			// The frame is still recorded, payload included.
+			url: this.#webSockets.get(requestKey(sessionId, event.requestId)),
+		};
 		await this.#options.storage.recordWebSocketFrame(frame);
 		await this.#options.hooks?.publish(createWebSocketFrameHookEvent(frame, this.#options.storage));
 	}

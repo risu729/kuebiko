@@ -227,6 +227,34 @@ const emitFinalResponse = (client: FakeClient, url: string): void => {
 	);
 };
 
+const emitWebSocketCreated = (client: FakeClient, url: string): void => {
+	client.emit(
+		"Network.webSocketCreated",
+		{ initiator: { type: "script" }, requestId: "socket-1", url },
+		"session-1",
+	);
+};
+
+const emitWebSocketFrame = (
+	client: FakeClient,
+	direction: "sent" | "received",
+	payloadData: string,
+): void => {
+	client.emit(
+		direction === "sent" ? "Network.webSocketFrameSent" : "Network.webSocketFrameReceived",
+		{
+			requestId: "socket-1",
+			response: { mask: direction === "sent", opcode: 1, payloadData },
+			timestamp: 6,
+		},
+		"session-1",
+	);
+};
+
+const emitWebSocketClosed = (client: FakeClient): void => {
+	client.emit("Network.webSocketClosed", { requestId: "socket-1", timestamp: 7 }, "session-1");
+};
+
 describe("createCompletedMetadata", () => {
 	it("creates one appendable metadata object per response", () => {
 		const state: RequestState = {
@@ -1294,5 +1322,102 @@ describe("CdpResponseLogger", () => {
 		expect(storage.errors).toContainEqual(
 			expect.objectContaining({ event: "Target.detachedFromTarget" }),
 		);
+	});
+
+	it("records both frame directions with the url of the socket that carried them", async () => {
+		const client = new FakeClient();
+		const storage = createStorage();
+		const hooks = createHooks();
+		const logger = new CdpResponseLogger(client as never, {
+			cdp: "http://127.0.0.1:9222",
+			hooks,
+			storage,
+			verbose: false,
+		});
+
+		await logger.start();
+		attachPageTarget(client);
+		await waitForAsyncEvent();
+		emitWebSocketCreated(client, "wss://chat.test/socket");
+		emitWebSocketFrame(client, "sent", '{"type":"subscribe"}');
+		emitWebSocketFrame(client, "received", '{"type":"ack"}');
+		await waitForAsyncEvent();
+
+		expect(storage.websocket).toEqual([
+			{
+				direction: "sent",
+				opcode: 1,
+				payloadData: '{"type":"subscribe"}',
+				requestId: "socket-1",
+				sessionId: "session-1",
+				targetId: "target-1",
+				timestamp: expect.any(String),
+				url: "wss://chat.test/socket",
+			},
+			{
+				direction: "received",
+				opcode: 1,
+				payloadData: '{"type":"ack"}',
+				requestId: "socket-1",
+				sessionId: "session-1",
+				targetId: "target-1",
+				timestamp: expect.any(String),
+				url: "wss://chat.test/socket",
+			},
+		]);
+		expect(hooks.events.map((event) => event.event)).toEqual([
+			"websocket.frame.sent",
+			"websocket.frame.received",
+		]);
+	});
+
+	it("records a frame without a url once the socket closed", async () => {
+		const client = new FakeClient();
+		const storage = createStorage();
+		const logger = new CdpResponseLogger(client as never, {
+			cdp: "http://127.0.0.1:9222",
+			storage,
+			verbose: false,
+		});
+
+		await logger.start();
+		attachPageTarget(client);
+		await waitForAsyncEvent();
+		emitWebSocketCreated(client, "wss://chat.test/socket");
+		emitWebSocketFrame(client, "received", '{"type":"ack"}');
+		emitWebSocketClosed(client);
+		emitWebSocketFrame(client, "received", '{"type":"late"}');
+		await waitForAsyncEvent();
+
+		expect(storage.websocket.map((frame) => frame.url)).toEqual([
+			"wss://chat.test/socket",
+			undefined,
+		]);
+	});
+
+	it("drops socket urls when the target detaches", async () => {
+		const client = new FakeClient();
+		const storage = createStorage();
+		const logger = new CdpResponseLogger(client as never, {
+			cdp: "http://127.0.0.1:9222",
+			storage,
+			verbose: false,
+		});
+
+		await logger.start();
+		attachPageTarget(client);
+		await waitForAsyncEvent();
+		emitWebSocketCreated(client, "wss://chat.test/socket");
+		client.emit("Target.detachedFromTarget", { sessionId: "session-1", targetId: "target-1" });
+		await waitForAsyncEvent();
+		emitWebSocketFrame(client, "sent", '{"type":"orphan"}');
+		await waitForAsyncEvent();
+
+		expect(storage.websocket).toHaveLength(1);
+		expect(storage.websocket[0]).toMatchObject({
+			direction: "sent",
+			payloadData: '{"type":"orphan"}',
+			url: undefined,
+		});
 	});
 });
