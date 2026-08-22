@@ -3,6 +3,7 @@ import type { Mock } from "bun:test";
 import { EventEmitter } from "node:events";
 
 import { CdpResponseLogger, createCompletedMetadata } from "./cdp";
+import { createCaptureSummary } from "./summary";
 import type {
 	CompletedResponseMetadata,
 	ErrorRecord,
@@ -94,6 +95,7 @@ const createStorage = (): LoggerStorage & {
 		}),
 		runDirectory: "/captures/run",
 		runTimestamp: "2026-07-06T12:34:56Z",
+		summary: createCaptureSummary(),
 		websocket,
 	};
 };

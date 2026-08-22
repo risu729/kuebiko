@@ -117,6 +117,9 @@ const runLogger = async (options: CliOptions): Promise<void> => {
 		});
 		await plugins?.close();
 		await storage?.close();
+		if (storage) {
+			process.stdout.write(`${storage.summary.render()}\n`);
+		}
 	}
 };
 

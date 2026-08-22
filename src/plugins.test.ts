@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { createPluginHost } from "./plugins";
+import { createCaptureSummary } from "./summary";
 import type {
 	BodySaveResult,
 	ErrorRecord,
@@ -66,6 +67,7 @@ const createStorage = (runDirectory: string): LoggerStorage & { errors: ErrorRec
 		recordWebSocketFrame: mock((_frame: WebSocketFrameRecord) => Promise.resolve()),
 		runDirectory,
 		runTimestamp: "2026-07-06T12:34:56Z",
+		summary: createCaptureSummary(),
 	};
 };
 

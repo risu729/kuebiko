@@ -7,6 +7,7 @@ import type { Protocol } from "devtools-protocol";
 
 import { TOOL_NAME, TOOL_VERSION } from "./constants";
 import { createBodyFilename, relativeBodyPath, timestampForFile } from "./sanitize";
+import { createCaptureSummary } from "./summary";
 import type {
 	BodySaveResult,
 	CompletedResponseMetadata,
@@ -108,6 +109,7 @@ const createStorage = async (
 	const metadata = createNdjsonWriter(join(runDirectory, "metadata.ndjson"));
 	const errors = createNdjsonWriter(join(runDirectory, "errors.ndjson"));
 	const websocket = createNdjsonWriter(join(runDirectory, "websocket.ndjson"));
+	const summary = createCaptureSummary();
 	let bodyCounter = 0;
 	let requestCounter = 0;
 
@@ -141,6 +143,7 @@ const createStorage = async (
 				requestCounter,
 				state.requestContentType,
 			);
+			summary.recordSavedRequestBody(bytes.byteLength);
 
 			return {
 				bodyFile: join("requests", filename),
@@ -172,6 +175,7 @@ const createStorage = async (
 				bodyCounter,
 				state.response?.mimeType,
 			);
+			summary.recordSavedResponseBody(bytes.byteLength);
 
 			return {
 				base64Encoded: body.base64Encoded,
@@ -201,6 +205,8 @@ const createStorage = async (
 			await metadata.append(record);
 		},
 		recordError: async (record: ErrorRecord) => {
+			// Count before the write so a failing errors.ndjson still shows up in the summary.
+			summary.recordError(record);
 			await errors.append(record);
 		},
 		recordWebSocketFrame: async (frame: WebSocketFrameRecord) => {
@@ -208,6 +214,7 @@ const createStorage = async (
 		},
 		runDirectory,
 		runTimestamp,
+		summary,
 	};
 };
 

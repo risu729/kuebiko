@@ -91,6 +91,30 @@ describe("createStorage", () => {
 		await expect(readdir(join(dir, "requests"))).resolves.toHaveLength(1);
 	});
 
+	it("tracks saved bodies and errors in the run summary", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "kuebiko-"));
+		const storage = await createStorage(dir, "http://127.0.0.1:9222", "2026-07-06T12:34:56Z");
+		const state: RequestState = {
+			requestId: "request-1",
+			session: { sessionId: "session-1" },
+		};
+
+		await storage.recordBody(state, { base64Encoded: false, body: '{"ok":true}' });
+		await storage.recordRequestBody(state, "hello");
+		await storage.recordError({
+			error: "No data found for resource with given identifier",
+			event: "Network.getResponseBody",
+			timestamp: "2026-07-06T12:34:57Z",
+			url: "https://example.test/api",
+		});
+		await storage.close();
+
+		expect(storage.summary.render().split("\n")).toEqual([
+			"summary responses=1 response_bytes=11 requests=1 request_bytes=5 errors=1",
+			"summary_errors host=example.test total=1 Network.getResponseBody=1",
+		]);
+	});
+
 	// Without a listener on the writer, a failing write emits an unhandled "error".
 	// That terminates the process, so reaching the end of this test is the assertion.
 	it("reports write failures to the caller instead of terminating the process", async () => {
