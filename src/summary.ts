@@ -4,6 +4,7 @@ type EventCounts = Map<string, number>;
 
 type CaptureSummary = {
 	recordError: (record: ErrorRecord) => void;
+	recordEventSourceMessage: () => void;
 	recordRedirectHop: () => void;
 	recordSavedRequestBody: (byteLength: number) => void;
 	recordSavedResponseBody: (byteLength: number) => void;
@@ -73,41 +74,49 @@ const renderHostLines = (errorsByHost: Map<string, EventCounts>): string[] => {
 
 const createCaptureSummary = (): CaptureSummary => {
 	const errorsByHost = new Map<string, EventCounts>();
-	let errorCount = 0;
-	let frameCount = 0;
-	let redirectHops = 0;
-	let requestBodies = 0;
-	let requestBytes = 0;
-	let responseBodies = 0;
-	let responseBytes = 0;
+	// One tally keeps the counters together as more record kinds are captured.
+	const counts = {
+		errors: 0,
+		eventSourceMessages: 0,
+		redirectHops: 0,
+		requestBodies: 0,
+		requestBytes: 0,
+		responseBodies: 0,
+		responseBytes: 0,
+		webSocketFrames: 0,
+	};
 
 	const renderTotals = (): string[] => [
-		`summary responses=${responseBodies} response_bytes=${responseBytes} requests=${requestBodies} request_bytes=${requestBytes}`,
-		`summary websocket_frames=${frameCount} redirects=${redirectHops} errors=${errorCount}`,
+		`summary responses=${counts.responseBodies} response_bytes=${counts.responseBytes} requests=${counts.requestBodies} request_bytes=${counts.requestBytes}`,
+		`summary websocket_frames=${counts.webSocketFrames} eventsource_messages=${counts.eventSourceMessages} redirects=${counts.redirectHops} errors=${counts.errors}`,
 	];
 
 	return {
 		recordError: (record: ErrorRecord): void => {
-			errorCount += 1;
+			counts.errors += 1;
 			const bucket = errorBucket(record);
 			const events = errorsByHost.get(bucket) ?? new Map<string, number>();
 			increment(events, record.event);
 			errorsByHost.set(bucket, events);
 		},
+		// An SSE stream never finishes, so its messages reach no response total either.
+		recordEventSourceMessage: (): void => {
+			counts.eventSourceMessages += 1;
+		},
 		// Redirect hops carry no body, so they would otherwise miss every total.
 		recordRedirectHop: (): void => {
-			redirectHops += 1;
+			counts.redirectHops += 1;
 		},
 		recordSavedRequestBody: (byteLength: number): void => {
-			requestBodies += 1;
-			requestBytes += byteLength;
+			counts.requestBodies += 1;
+			counts.requestBytes += byteLength;
 		},
 		recordSavedResponseBody: (byteLength: number): void => {
-			responseBodies += 1;
-			responseBytes += byteLength;
+			counts.responseBodies += 1;
+			counts.responseBytes += byteLength;
 		},
 		recordWebSocketFrame: (): void => {
-			frameCount += 1;
+			counts.webSocketFrames += 1;
 		},
 		render: (): string => [...renderTotals(), ...renderHostLines(errorsByHost)].join("\n"),
 	};

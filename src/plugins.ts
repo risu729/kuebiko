@@ -6,6 +6,7 @@ import { parseLoggerConfig } from "./config";
 import type {
 	CompletedResponseMetadata,
 	ErrorRecord,
+	EventSourceMessageRecord,
 	HookEvent,
 	HookEventName,
 	HookPublisher,
@@ -24,6 +25,7 @@ const HOOK_EVENT_NAMES = new Set<HookEventName>([
 	"response.completed",
 	"websocket.frame.received",
 	"websocket.frame.sent",
+	"eventsource.message",
 	"capture.error",
 ]);
 
@@ -393,6 +395,20 @@ const createWebSocketFrameHookEvent = (
 	version: 1,
 });
 
+const createEventSourceMessageHookEvent = (
+	message: EventSourceMessageRecord,
+	storage: LoggerStorage,
+): HookEvent => ({
+	event: "eventsource.message",
+	message,
+	run: {
+		runDirectory: storage.runDirectory,
+		runTimestamp: storage.runTimestamp,
+	},
+	timestamp: nowIso(),
+	version: 1,
+});
+
 const createCaptureErrorHookEvent = (error: ErrorRecord, storage: LoggerStorage): HookEvent => ({
 	error,
 	event: "capture.error",
@@ -427,6 +443,7 @@ export {
 	DEFAULT_QUEUE_SIZE,
 	DEFAULT_TIMEOUT_MS,
 	createCaptureErrorHookEvent,
+	createEventSourceMessageHookEvent,
 	createPluginHost,
 	createResponseCompletedHookEvent,
 	createWebSocketFrameHookEvent,

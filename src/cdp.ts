@@ -3,6 +3,7 @@ import type { Protocol } from "devtools-protocol";
 
 import {
 	createCaptureErrorHookEvent,
+	createEventSourceMessageHookEvent,
 	createResponseCompletedHookEvent,
 	createWebSocketFrameHookEvent,
 } from "./plugins";
@@ -10,6 +11,7 @@ import { matchesFilters } from "./sanitize";
 import type {
 	CompletedResponseMetadata,
 	ErrorRecord,
+	EventSourceMessageRecord,
 	RequestState,
 	RequestBodySaveResult,
 	RequestBodySource,
@@ -29,6 +31,7 @@ type LoadingFailedEvent = Protocol.Network.LoadingFailedEvent;
 type WebSocketCreatedEvent = Protocol.Network.WebSocketCreatedEvent;
 type WebSocketClosedEvent = Protocol.Network.WebSocketClosedEvent;
 type WebSocketFrameErrorEvent = Protocol.Network.WebSocketFrameErrorEvent;
+type EventSourceMessageReceivedEvent = Protocol.Network.EventSourceMessageReceivedEvent;
 // Both frame events carry the same requestId and response payload.
 type WebSocketFrameEvent =
 	| Protocol.Network.WebSocketFrameReceivedEvent
@@ -249,6 +252,11 @@ class CdpResponseLogger {
 		});
 		this.#client.on("Network.webSocketFrameSent", (event, sessionId) => {
 			this.#trackEvent(this.#handleWebSocketFrame("sent", event as WebSocketFrameEvent, sessionId));
+		});
+		this.#client.on("Network.eventSourceMessageReceived", (event, sessionId) => {
+			this.#trackEvent(
+				this.#handleEventSourceMessage(event as EventSourceMessageReceivedEvent, sessionId),
+			);
 		});
 		this.#client.on("Network.webSocketFrameError", (event, sessionId) => {
 			this.#trackEvent(
@@ -721,6 +729,38 @@ class CdpResponseLogger {
 		};
 		await this.#options.storage.recordWebSocketFrame(frame);
 		await this.#options.hooks?.publish(createWebSocketFrameHookEvent(frame, this.#options.storage));
+	}
+
+	// An EventSource connection stays open for the life of the page.
+	// Network.loadingFinished never fires for it, so no response body is ever retrieved.
+	// Each message arrives as its own event instead, and is recorded on its own.
+	//
+	// Unlike a WebSocket handshake, an EventSource connection does emit
+	// Network.requestWillBeSent, so #requests holds the stream while it is open.
+	// A message arriving once that state is gone, dropped on detach, records no url.
+	async #handleEventSourceMessage(
+		event: EventSourceMessageReceivedEvent,
+		sessionId?: string,
+	): Promise<void> {
+		if (!sessionId) {
+			return;
+		}
+		const session = this.#sessions.get(sessionId);
+		const state = this.#requests.get(requestKey(sessionId, event.requestId));
+		const message: EventSourceMessageRecord = {
+			data: event.data,
+			eventId: event.eventId,
+			eventName: event.eventName,
+			requestId: event.requestId,
+			sessionId,
+			targetId: session?.targetId,
+			timestamp: nowIso(),
+			url: state?.response?.url ?? state?.requestUrl,
+		};
+		await this.#options.storage.recordEventSourceMessage(message);
+		await this.#options.hooks?.publish(
+			createEventSourceMessageHookEvent(message, this.#options.storage),
+		);
 	}
 
 	// A frame-level protocol error leaves no other trace.

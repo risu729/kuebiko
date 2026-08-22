@@ -8,6 +8,7 @@ import { CdpResponseLogger, createCompletedMetadata } from "./cdp";
 import type {
 	CompletedResponseMetadata,
 	ErrorRecord,
+	EventSourceMessageRecord,
 	HookEvent,
 	HookPublisher,
 	LoggerStorage,
@@ -46,16 +47,19 @@ class FakeClient extends EventEmitter {
 
 const createStorage = (): LoggerStorage & {
 	errors: ErrorRecord[];
+	eventSource: EventSourceMessageRecord[];
 	metadata: CompletedResponseMetadata[];
 	websocket: WebSocketFrameRecord[];
 } => {
 	const metadata: CompletedResponseMetadata[] = [];
 	const errors: ErrorRecord[] = [];
+	const eventSource: EventSourceMessageRecord[] = [];
 	const websocket: WebSocketFrameRecord[] = [];
 
 	return {
 		close: mock(() => Promise.resolve()),
 		errors,
+		eventSource,
 		metadata,
 		recordRequestBody: mock((state, postData) =>
 			Promise.resolve(
@@ -88,6 +92,10 @@ const createStorage = (): LoggerStorage & {
 		}),
 		recordError: mock((record) => {
 			errors.push(record);
+			return Promise.resolve();
+		}),
+		recordEventSourceMessage: mock((record) => {
+			eventSource.push(record);
 			return Promise.resolve();
 		}),
 		recordWebSocketFrame: mock((record) => {
@@ -274,6 +282,23 @@ const emitWebSocketFrameError = (
 ): void => {
 	const { requestId, sessionId } = socketRef(ref);
 	client.emit("Network.webSocketFrameError", { errorMessage, requestId, timestamp: 8 }, sessionId);
+};
+
+const emitEventSourceMessage = (
+	client: FakeClient,
+	message: { data: string; eventId?: string; eventName?: string; requestId?: string },
+): void => {
+	client.emit(
+		"Network.eventSourceMessageReceived",
+		{
+			data: message.data,
+			eventId: message.eventId ?? "",
+			eventName: message.eventName ?? "message",
+			requestId: message.requestId ?? "request-1",
+			timestamp: 9,
+		},
+		"session-1",
+	);
 };
 
 describe("createCompletedMetadata", () => {
@@ -1526,5 +1551,106 @@ describe("CdpResponseLogger", () => {
 			payloadData: '{"type":"orphan"}',
 			url: undefined,
 		});
+	});
+
+	// An SSE stream never reaches loadingFinished, so its request state stays alive.
+	// Every message on the open stream is therefore attributed to the stream URL.
+	it("records eventsource messages with the url of the open stream request", async () => {
+		const client = new FakeClient();
+		const storage = createStorage();
+		const hooks = createHooks();
+		const logger = new CdpResponseLogger(client as never, {
+			cdp: "http://127.0.0.1:9222",
+			hooks,
+			storage,
+			verbose: false,
+		});
+
+		await logger.start();
+		attachPageTarget(client);
+		await waitForAsyncEvent();
+		emitRequestWillBeSent(client, { url: "https://stream.test/prices" });
+		await waitForAsyncEvent();
+		emitEventSourceMessage(client, { data: '{"btc":1}', eventId: "1", eventName: "price" });
+		emitEventSourceMessage(client, { data: '{"btc":2}', eventId: "2", eventName: "price" });
+		await waitForAsyncEvent();
+
+		expect(storage.eventSource).toEqual([
+			{
+				data: '{"btc":1}',
+				eventId: "1",
+				eventName: "price",
+				requestId: "request-1",
+				sessionId: "session-1",
+				targetId: "target-1",
+				timestamp: expect.any(String),
+				url: "https://stream.test/prices",
+			},
+			{
+				data: '{"btc":2}',
+				eventId: "2",
+				eventName: "price",
+				requestId: "request-1",
+				sessionId: "session-1",
+				targetId: "target-1",
+				timestamp: expect.any(String),
+				url: "https://stream.test/prices",
+			},
+		]);
+		expect(hooks.events.map((event) => event.event)).toEqual([
+			"eventsource.message",
+			"eventsource.message",
+		]);
+	});
+
+	it("records an eventsource message without a url when no request state is known", async () => {
+		const client = new FakeClient();
+		const storage = createStorage();
+		const logger = new CdpResponseLogger(client as never, {
+			cdp: "http://127.0.0.1:9222",
+			storage,
+			verbose: false,
+		});
+
+		await logger.start();
+		attachPageTarget(client);
+		await waitForAsyncEvent();
+		// A stream the logger joined mid-flight never produced Network.requestWillBeSent for it.
+		emitEventSourceMessage(client, { data: '{"btc":3}' });
+		await waitForAsyncEvent();
+
+		expect(storage.eventSource).toHaveLength(1);
+		expect(storage.eventSource[0]).toMatchObject({
+			data: '{"btc":3}',
+			eventName: "message",
+			url: undefined,
+		});
+	});
+
+	// Detaching drops the request state, so later messages lose the URL but are still recorded.
+	it("records eventsource messages without a url after the target detached", async () => {
+		const client = new FakeClient();
+		const storage = createStorage();
+		const logger = new CdpResponseLogger(client as never, {
+			cdp: "http://127.0.0.1:9222",
+			storage,
+			verbose: false,
+		});
+
+		await logger.start();
+		attachPageTarget(client);
+		await waitForAsyncEvent();
+		emitRequestWillBeSent(client, { url: "https://stream.test/prices" });
+		await waitForAsyncEvent();
+		emitEventSourceMessage(client, { data: '{"btc":1}' });
+		client.emit("Target.detachedFromTarget", { sessionId: "session-1", targetId: "target-1" });
+		await waitForAsyncEvent();
+		emitEventSourceMessage(client, { data: '{"btc":2}' });
+		await waitForAsyncEvent();
+
+		expect(storage.eventSource.map((message) => message.url)).toEqual([
+			"https://stream.test/prices",
+			undefined,
+		]);
 	});
 });

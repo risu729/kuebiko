@@ -13,6 +13,7 @@ import type {
 	BodySaveResult,
 	CompletedResponseMetadata,
 	ErrorRecord,
+	EventSourceMessageRecord,
 	LoggerStorage,
 	RequestState,
 	RequestBodySaveResult,
@@ -135,6 +136,7 @@ const createStorage = async (
 	const metadata = createNdjsonWriter(join(runDirectory, "metadata.ndjson"));
 	const errors = createNdjsonWriter(join(runDirectory, "errors.ndjson"));
 	const websocket = createNdjsonWriter(join(runDirectory, "websocket.ndjson"));
+	const eventSource = createNdjsonWriter(join(runDirectory, "eventsource.ndjson"));
 	const summary = createCaptureSummary();
 	let bodyCounter = 0;
 	let requestCounter = 0;
@@ -222,8 +224,13 @@ const createStorage = async (
 	return {
 		close: async () => {
 			// Shutdown runs from a finally block, where a rejection becomes an unhandled one.
-			// Settle all three so a writer that already failed cannot stop the others closing.
-			await Promise.allSettled([metadata.close(), errors.close(), websocket.close()]);
+			// Settle them all so a writer that already failed cannot stop the others closing.
+			await Promise.allSettled([
+				metadata.close(),
+				errors.close(),
+				websocket.close(),
+				eventSource.close(),
+			]);
 		},
 		recordRequestBody,
 		recordBody,
@@ -237,6 +244,10 @@ const createStorage = async (
 			// Count before the write so a failing errors.ndjson still shows up in the summary.
 			summary.recordError(record);
 			await errors.append(record);
+		},
+		recordEventSourceMessage: async (message: EventSourceMessageRecord) => {
+			summary.recordEventSourceMessage();
+			await eventSource.append(message);
 		},
 		recordWebSocketFrame: async (frame: WebSocketFrameRecord) => {
 			summary.recordWebSocketFrame();

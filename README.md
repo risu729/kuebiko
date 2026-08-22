@@ -127,6 +127,7 @@ run.json
 metadata.ndjson
 errors.ndjson
 websocket.ndjson
+eventsource.ndjson
 bodies/
 requests/
 plugins/
@@ -166,8 +167,20 @@ directions: `direction` is `"received"` for a server-to-browser frame and
 from the `Network.webSocketCreated` event of the socket its `requestId` belongs
 to. A frame the logger sees without that event, because the socket was opened
 before it attached or had already closed, is still recorded but has no `url`.
+
+`eventsource.ndjson` contains one JSON object per Server-Sent Events message,
+with the `eventName`, `eventId`, and `data` the browser parsed out of the
+stream. An SSE connection stays open for the life of the page, so it never
+reaches `Network.loadingFinished` and has no saved response body; the messages
+are the capture. Each message carries the stream `url`, which is recoverable
+because an `EventSource` connection does produce `Network.requestWillBeSent`,
+unlike a WebSocket handshake. A message recorded after the logger lost that
+request state, because the target detached or the stream started before it
+attached, is still written but has no `url`.
+
 `--include` and `--exclude` apply to response URLs only and never gate
-`websocket.ndjson`, because a frame without a URL could not be matched anyway.
+`websocket.ndjson` or `eventsource.ndjson`, because a record without a URL could
+not be matched anyway.
 
 `errors.ndjson` contains per-request capture failures. Individual CDP failures
 do not stop the logger. WebSocket failures land here too: a frame the browser
@@ -184,7 +197,7 @@ visible without opening `errors.ndjson`:
 
 ```text
 summary responses=482 response_bytes=19203112 requests=37 request_bytes=8241
-summary websocket_frames=126 redirects=54 errors=4
+summary websocket_frames=126 eventsource_messages=18 redirects=54 errors=4
 summary_errors host=example.test total=2 Network.getResponseBody=2
 summary_errors host=cdn.example.test total=1 Network.loadingFailed=1
 summary_errors host=plugin:json-api-mirror total=1 Plugin.onEvent=1
@@ -192,7 +205,8 @@ summary_errors host=plugin:json-api-mirror total=1 Plugin.onEvent=1
 
 `responses` and `requests` count saved body files, and the byte totals are the
 bytes written for them. `websocket_frames` counts every frame recorded, sent and
-received together. `redirects` counts recorded redirect hops, which have no body
+received together, and `eventsource_messages` counts every recorded SSE message.
+`redirects` counts recorded redirect hops, which have no body
 of their own and would otherwise be invisible in the totals. One
 `summary_errors` line is printed per host with the `errors.ndjson` `event`
 counts behind it, ordered by failure count. Only the top 20 hosts get a line;
@@ -325,11 +339,15 @@ Supported plugin events are:
 - `response.completed`
 - `websocket.frame.received`
 - `websocket.frame.sent`
+- `eventsource.message`
 - `capture.error`
 
 Hook events do not contain inline request or response bodies. Read saved files
 with `ctx.resolveRunPath(event.response.bodyFile)` or the request-body path when
-present.
+present. WebSocket frames and SSE messages have no saved body file of their own:
+`websocket.frame.*` carries the frame in `event.frame` and `eventsource.message`
+carries the message in `event.message`, exactly as written to the matching
+NDJSON file.
 
 Redirect hops publish `response.completed` like any other recorded response, so
 plugins see the whole chain. Such an event has `response.redirect` set to `true`
@@ -583,6 +601,10 @@ mise run compile
 - WebSocket messages are not normal HTTP response bodies. Both directions are
   written to `websocket.ndjson` as individual frames, not reassembled messages,
   and a frame on a socket the logger never saw open has no `url`.
+- Server-Sent Events are captured as individual messages in
+  `eventsource.ndjson`, not as a response body. The connection stays open for
+  the life of the page, so CDP never has a body to return for it, and a message
+  recorded after the logger lost the stream's request state has no `url`.
 - This tool does not parse, analyze, classify, or display responses.
 - Plugins are trusted local code running in the logger process. They are useful
   for local real-time consumers, but they are not sandboxed.
