@@ -49,6 +49,8 @@ const startBrowser = (options: { browserPath: string; profileDirectory: string }
 			options.browserPath,
 			"--no-sandbox",
 			"--disable-dev-shm-usage",
+			"--no-first-run",
+			"--no-default-browser-check",
 			"--no-startup-window",
 			`--user-data-dir=${options.profileDirectory}`,
 			"--remote-debugging-address=127.0.0.1",
