@@ -37,6 +37,9 @@ const NETWORK_BUFFER_OPTIONS = {
 const CDP_CLOSE_TIMEOUT_MS = 5_000;
 const CDP_DRAIN_TIMEOUT_MS = 1_000;
 
+const HOP_POST_DATA_ERROR =
+	"Redirect hop post data was not inlined; Network.getRequestPostData answers for the request now in flight.";
+
 const errorMessage = (error: unknown): string =>
 	error instanceof Error ? error.message : String(error);
 
@@ -161,6 +164,8 @@ const headerValue = (
 
 class CdpResponseLogger {
 	readonly #client: CdpClient;
+	// Redirect hop writes in flight, keyed like #requests so a chain appends in order.
+	readonly #hopWrites = new Map<string, Promise<void>>();
 	readonly #options: StartLoggerOptions;
 	readonly #pendingEvents = new Set<Promise<void>>();
 	readonly #requests = new Map<string, RequestState>();
@@ -330,6 +335,7 @@ class CdpResponseLogger {
 		for (const [key, state] of this.#requests) {
 			if (state.session.sessionId === event.sessionId) {
 				this.#requests.delete(key);
+				this.#hopWrites.delete(key);
 			}
 		}
 
@@ -382,7 +388,15 @@ class CdpResponseLogger {
 			return;
 		}
 
-		await this.#recordRedirectHop(previous, redirectResponse, event);
+		// Saving a hop request body can outlast the next hop's event.
+		// Chaining the writes keeps metadata.ndjson in chain order.
+		const pending = this.#hopWrites.get(key) ?? Promise.resolve();
+		const write = pending.then(() => this.#recordRedirectHop(previous, redirectResponse, event));
+		this.#hopWrites.set(
+			key,
+			write.catch(() => undefined),
+		);
+		await write;
 	}
 
 	// A redirect hop never reaches loadingFinished.
@@ -404,12 +418,7 @@ class CdpResponseLogger {
 			return;
 		}
 
-		// Inline post data is the only request body the finalized hop can claim:
-		// Network.getRequestPostData answers for the hop now in flight.
-		const requestBodyResult: Partial<RequestBodySaveResult> =
-			hop.requestPostData === undefined
-				? {}
-				: await this.#options.storage.recordRequestBody(hop, hop.requestPostData);
+		const requestBodyResult = await this.#getHopRequestBodyResult(hop);
 		const metadata: CompletedResponseMetadata = {
 			...createCompletedMetadata(
 				hop,
@@ -467,7 +476,9 @@ class CdpResponseLogger {
 			return;
 		}
 
+		const hopWrites = this.#hopWrites.get(key);
 		this.#requests.delete(key);
+		this.#hopWrites.delete(key);
 
 		const url = state.response?.url ?? state.requestUrl;
 		if (!matchesFilters(url, this.#options.include, this.#options.exclude)) {
@@ -483,6 +494,8 @@ class CdpResponseLogger {
 			requestBodyResult,
 			this.#options.storage.runTimestamp,
 		);
+		// The terminal response closes the chain, so its record appends last.
+		await hopWrites;
 		await this.#options.storage.recordCompletedResponse(metadata);
 		await this.#options.hooks?.publish(
 			createResponseCompletedHookEvent(metadata, this.#options.storage.runDirectory),
@@ -521,6 +534,25 @@ class CdpResponseLogger {
 	async #recordCaptureError(record: ErrorRecord): Promise<void> {
 		await this.#options.storage.recordError(record);
 		await this.#options.hooks?.publish(createCaptureErrorHookEvent(record, this.#options.storage));
+	}
+
+	// Inline post data is the only request body a finalized hop can claim.
+	// Network.getRequestPostData answers for the request now in flight, so a body
+	// Chrome left out of the event is reported as a loss instead of fetched.
+	async #getHopRequestBodyResult(state: RequestState): Promise<Partial<RequestBodySaveResult>> {
+		if (state.requestPostData !== undefined) {
+			return await this.#options.storage.recordRequestBody(state, state.requestPostData);
+		}
+
+		if (state.hasPostData !== true) {
+			return {};
+		}
+
+		return {
+			bodySaved: false,
+			error: HOP_POST_DATA_ERROR,
+			source: "requestWillBeSent",
+		};
 	}
 
 	async #getRequestBodyResult(state: RequestState): Promise<Partial<RequestBodySaveResult>> {
@@ -601,8 +633,12 @@ class CdpResponseLogger {
 		}
 		const key = requestKey(sessionId, event.requestId);
 		const state = this.#requests.get(key);
+		const hopWrites = this.#hopWrites.get(key);
 		this.#requests.delete(key);
+		this.#hopWrites.delete(key);
 
+		// Hops that already completed belong in the capture before the failure.
+		await hopWrites;
 		await this.#recordCaptureError({
 			error: event.errorText,
 			event: "Network.loadingFailed",

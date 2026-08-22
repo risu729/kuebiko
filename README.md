@@ -181,9 +181,9 @@ summary_errors host=plugin:json-api-mirror total=1 Plugin.onEvent=1
 `responses` and `requests` count saved body files, and the byte totals are the
 bytes written for them. `redirects` counts recorded redirect hops, which have no
 body of their own and would otherwise be invisible in the totals. One
-`summary_errors` line is printed per host with the
-`errors.ndjson` `event` counts behind it, ordered by failure count. Only the top
-20 hosts get a line; the rest are collapsed into a final remainder line.
+`summary_errors` line is printed per host with the `errors.ndjson` `event`
+counts behind it, ordered by failure count. Only the top 20 hosts get a line;
+the rest are collapsed into a final remainder line.
 
 Plugin failures have no URL, so they are grouped under `plugin:<id>` instead of
 a host. Host `unknown` collects failures whose URL the browser never delivered,
@@ -554,7 +554,13 @@ mise run compile
   responses, cached responses, service-worker cases, or after navigation races.
 - Redirect hops are recorded as metadata only. Their status, `location`, and
   `set-cookie` headers are saved, but no response body exists to save, and a
-  hop the logger did not observe from its start is skipped.
+  hop the logger did not observe from its start is skipped. `redirectIndex`
+  counts from the first hop the logger saw, so a chain joined mid-flight is
+  numbered relative to attach time and may have no index-0 record.
+- A redirect hop keeps only the request payload Chrome inlined in the event.
+  When Chrome reports `hasPostData` without the data, usually for a large body,
+  the hop records a request body error instead: refetching it would return the
+  payload of the request that is already in flight.
 - CDP may not expose every request payload. `Network.getRequestPostData` can
   fail after navigation races and does not include uploaded files for multipart
   form data.

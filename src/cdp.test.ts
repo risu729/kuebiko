@@ -113,10 +113,10 @@ const createHooks = (): HookPublisher & { events: HookEvent[] } => {
 	};
 };
 
+// Event handlers only await promises that are already resolved.
+// One turn of the event loop therefore drains a whole handler.
 const waitForAsyncEvent = async (): Promise<void> => {
-	for (let index = 0; index < 6; index += 1) {
-		await Promise.resolve();
-	}
+	await Bun.sleep(0);
 };
 
 const attachPageTarget = (client: FakeClient): void => {
@@ -153,9 +153,23 @@ const createRedirectResponse = (options: {
 	url: options.url,
 });
 
+const SSO_TO_IDP = createRedirectResponse({
+	location: "https://idp.test/login",
+	status: 301,
+	statusText: "Moved Permanently",
+	url: "https://sso.test/authorize",
+});
+
+const IDP_TO_APP = createRedirectResponse({
+	location: "https://app.test/session",
+	status: 302,
+	statusText: "Found",
+	url: "https://idp.test/login",
+});
+
 const emitRequestWillBeSent = (
 	client: FakeClient,
-	request: { method?: string; postData?: string; url: string },
+	request: { hasPostData?: boolean; method?: string; postData?: string; url: string },
 	redirectResponse?: Protocol.Network.Response,
 ): void => {
 	client.emit(
@@ -168,7 +182,7 @@ const emitRequestWillBeSent = (
 			loaderId: "loader-1",
 			redirectResponse,
 			request: {
-				hasPostData: request.postData !== undefined,
+				hasPostData: request.hasPostData ?? request.postData !== undefined,
 				headers: { accept: "text/html" },
 				initialPriority: "High",
 				method: request.method ?? "GET",
@@ -1024,27 +1038,9 @@ describe("CdpResponseLogger", () => {
 		await waitForAsyncEvent();
 		emitRequestWillBeSent(client, { url: "https://sso.test/authorize" });
 		await waitForAsyncEvent();
-		emitRequestWillBeSent(
-			client,
-			{ url: "https://idp.test/login" },
-			createRedirectResponse({
-				location: "https://idp.test/login",
-				status: 301,
-				statusText: "Moved Permanently",
-				url: "https://sso.test/authorize",
-			}),
-		);
+		emitRequestWillBeSent(client, { url: "https://idp.test/login" }, SSO_TO_IDP);
 		await waitForAsyncEvent();
-		emitRequestWillBeSent(
-			client,
-			{ url: "https://app.test/session" },
-			createRedirectResponse({
-				location: "https://app.test/session",
-				status: 302,
-				statusText: "Found",
-				url: "https://idp.test/login",
-			}),
-		);
+		emitRequestWillBeSent(client, { url: "https://app.test/session" }, IDP_TO_APP);
 		await waitForAsyncEvent();
 		emitFinalResponse(client, "https://app.test/session");
 		await waitForAsyncEvent();
@@ -1106,27 +1102,9 @@ describe("CdpResponseLogger", () => {
 		await waitForAsyncEvent();
 		emitRequestWillBeSent(client, { url: "https://sso.test/authorize" });
 		await waitForAsyncEvent();
-		emitRequestWillBeSent(
-			client,
-			{ url: "https://idp.test/login" },
-			createRedirectResponse({
-				location: "https://idp.test/login",
-				status: 301,
-				statusText: "Moved Permanently",
-				url: "https://sso.test/authorize",
-			}),
-		);
+		emitRequestWillBeSent(client, { url: "https://idp.test/login" }, SSO_TO_IDP);
 		await waitForAsyncEvent();
-		emitRequestWillBeSent(
-			client,
-			{ url: "https://app.test/session" },
-			createRedirectResponse({
-				location: "https://app.test/session",
-				status: 302,
-				statusText: "Found",
-				url: "https://idp.test/login",
-			}),
-		);
+		emitRequestWillBeSent(client, { url: "https://app.test/session" }, IDP_TO_APP);
 		await waitForAsyncEvent();
 		emitFinalResponse(client, "https://app.test/session");
 		await waitForAsyncEvent();
@@ -1135,6 +1113,8 @@ describe("CdpResponseLogger", () => {
 			"https://sso.test/authorize",
 			"https://app.test/session",
 		]);
+		// A filtered hop keeps its place in the chain instead of renumbering it.
+		expect(storage.metadata.map((record) => record.redirectIndex)).toEqual([0, 2]);
 	});
 
 	it("saves inline post data with the redirect hop that carried it", async () => {
@@ -1155,16 +1135,7 @@ describe("CdpResponseLogger", () => {
 			url: "https://idp.test/login",
 		});
 		await waitForAsyncEvent();
-		emitRequestWillBeSent(
-			client,
-			{ url: "https://app.test/session" },
-			createRedirectResponse({
-				location: "https://app.test/session",
-				status: 302,
-				statusText: "Found",
-				url: "https://idp.test/login",
-			}),
-		);
+		emitRequestWillBeSent(client, { url: "https://app.test/session" }, IDP_TO_APP);
 		await waitForAsyncEvent();
 		emitFinalResponse(client, "https://app.test/session");
 		await waitForAsyncEvent();
@@ -1185,5 +1156,143 @@ describe("CdpResponseLogger", () => {
 			requestMethod: "GET",
 			status: 200,
 		});
+	});
+
+	it("records hop post data the browser did not inline as a request body loss", async () => {
+		const client = new FakeClient();
+		const storage = createStorage();
+		const logger = new CdpResponseLogger(client as never, {
+			cdp: "http://127.0.0.1:9222",
+			storage,
+			verbose: false,
+		});
+
+		await logger.start();
+		attachPageTarget(client);
+		await waitForAsyncEvent();
+		emitRequestWillBeSent(client, {
+			hasPostData: true,
+			method: "POST",
+			url: "https://idp.test/login",
+		});
+		await waitForAsyncEvent();
+		emitRequestWillBeSent(client, { url: "https://app.test/session" }, IDP_TO_APP);
+		await waitForAsyncEvent();
+		emitFinalResponse(client, "https://app.test/session");
+		await waitForAsyncEvent();
+
+		expect(client.Network.getRequestPostData).not.toHaveBeenCalled();
+		expect(storage.recordRequestBody).not.toHaveBeenCalled();
+		expect(storage.metadata[0]).toMatchObject({
+			redirect: true,
+			requestBodyError:
+				"Redirect hop post data was not inlined; Network.getRequestPostData answers for the request now in flight.",
+			requestBodySaved: false,
+			requestBodySource: "requestWillBeSent",
+		});
+		expect(storage.errors[0]).toMatchObject({
+			event: "Network.requestWillBeSent.postData",
+			requestId: "request-1",
+			url: "https://idp.test/login",
+		});
+	});
+
+	it("keeps chain records in order when a hop request body write is slow", async () => {
+		const client = new FakeClient();
+		const storage = createStorage();
+		const recordRequestBody = storage.recordRequestBody as Mock<LoggerStorage["recordRequestBody"]>;
+		recordRequestBody.mockImplementationOnce(async (_, postData) => {
+			await Bun.sleep(20);
+
+			return {
+				bodyFile: "requests/request.json",
+				bodyLength: Buffer.byteLength(postData),
+				bodySaved: true,
+				bodySha256: "request-hash",
+				source: "requestWillBeSent",
+			};
+		});
+		const logger = new CdpResponseLogger(client as never, {
+			cdp: "http://127.0.0.1:9222",
+			storage,
+			verbose: false,
+		});
+
+		await logger.start();
+		attachPageTarget(client);
+		await waitForAsyncEvent();
+		// The whole chain arrives in one burst, as it does on a real connection.
+		emitRequestWillBeSent(client, {
+			method: "POST",
+			postData: '{"hello":"world"}',
+			url: "https://sso.test/authorize",
+		});
+		emitRequestWillBeSent(client, { url: "https://idp.test/login" }, SSO_TO_IDP);
+		emitRequestWillBeSent(client, { url: "https://app.test/session" }, IDP_TO_APP);
+		emitFinalResponse(client, "https://app.test/session");
+		await Bun.sleep(60);
+
+		expect(storage.metadata.map((record) => record.redirectIndex)).toEqual([0, 1, 2]);
+		expect(storage.metadata.map((record) => record.status)).toEqual([301, 302, 200]);
+	});
+
+	it("keeps capturing when a hop metadata write fails", async () => {
+		const client = new FakeClient();
+		const storage = createStorage();
+		const recordCompletedResponse = storage.recordCompletedResponse as Mock<
+			LoggerStorage["recordCompletedResponse"]
+		>;
+		recordCompletedResponse.mockRejectedValueOnce(new Error("metadata write failed"));
+		const logger = new CdpResponseLogger(client as never, {
+			cdp: "http://127.0.0.1:9222",
+			storage,
+			verbose: false,
+		});
+
+		await logger.start();
+		attachPageTarget(client);
+		await waitForAsyncEvent();
+		emitRequestWillBeSent(client, { url: "https://sso.test/authorize" });
+		await waitForAsyncEvent();
+		emitRequestWillBeSent(client, { url: "https://idp.test/login" }, SSO_TO_IDP);
+		await waitForAsyncEvent();
+		emitRequestWillBeSent(client, { url: "https://app.test/session" }, IDP_TO_APP);
+		await waitForAsyncEvent();
+		emitFinalResponse(client, "https://app.test/session");
+		await waitForAsyncEvent();
+
+		expect(storage.metadata.map((record) => record.redirectIndex)).toEqual([1, 2]);
+	});
+
+	it("skips a hop whose request state a target detach already dropped", async () => {
+		const client = new FakeClient();
+		const storage = createStorage();
+		const logger = new CdpResponseLogger(client as never, {
+			cdp: "http://127.0.0.1:9222",
+			storage,
+			verbose: false,
+		});
+
+		await logger.start();
+		attachPageTarget(client);
+		await waitForAsyncEvent();
+		emitRequestWillBeSent(client, { url: "https://sso.test/authorize" });
+		await waitForAsyncEvent();
+		// The detach lands while the first hop is still being written.
+		emitRequestWillBeSent(client, { url: "https://idp.test/login" }, SSO_TO_IDP);
+		client.emit("Target.detachedFromTarget", { sessionId: "session-1", targetId: "target-1" });
+		await waitForAsyncEvent();
+		emitRequestWillBeSent(client, { url: "https://app.test/session" }, IDP_TO_APP);
+		await waitForAsyncEvent();
+
+		expect(storage.metadata).toHaveLength(1);
+		expect(storage.metadata[0]).toMatchObject({
+			redirect: true,
+			redirectIndex: 0,
+			status: 301,
+		});
+		expect(storage.errors).toContainEqual(
+			expect.objectContaining({ event: "Target.detachedFromTarget" }),
+		);
 	});
 });
