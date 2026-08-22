@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { mkdir, mkdtemp, readdir } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -101,6 +101,14 @@ describe("createStorage", () => {
 
 		await storage.recordBody(state, { base64Encoded: false, body: '{"ok":true}' });
 		await storage.recordRequestBody(state, "hello");
+		await storage.recordWebSocketFrame({
+			direction: "received",
+			opcode: 1,
+			payloadData: "ping",
+			requestId: "request-2",
+			sessionId: "session-1",
+			timestamp: "2026-07-06T12:34:57Z",
+		});
 		await storage.recordError({
 			error: "No data found for resource with given identifier",
 			event: "Network.getResponseBody",
@@ -110,9 +118,48 @@ describe("createStorage", () => {
 		await storage.close();
 
 		expect(storage.summary.render().split("\n")).toEqual([
-			"summary responses=1 response_bytes=11 requests=1 request_bytes=5 errors=1",
+			"summary responses=1 response_bytes=11 requests=1 request_bytes=5",
+			"summary websocket_frames=1 errors=1",
 			"summary_errors host=example.test total=1 Network.getResponseBody=1",
 		]);
+	});
+
+	it("keeps unsaved bodies out of the summary totals", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "kuebiko-"));
+		const storage = await createStorage(dir, "http://127.0.0.1:9222", "2026-07-06T12:34:56Z");
+		const state: RequestState = {
+			requestId: "request-1",
+			session: { sessionId: "session-1" },
+		};
+		// A file where the bodies directory belongs makes every body write fail.
+		await rm(join(dir, "bodies"), { recursive: true });
+		await Bun.write(join(dir, "bodies"), "not a directory");
+
+		const result = await storage.recordBody(state, { base64Encoded: false, body: '{"ok":true}' });
+		await storage.close();
+
+		expect(result.bodySaved).toBe(false);
+		expect(storage.summary.render()).toContain("responses=0 response_bytes=0");
+	});
+
+	it("counts errors even when the error log write fails", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "kuebiko-"));
+		await mkdir(join(dir, "errors.ndjson"));
+		const storage = await createStorage(dir, "http://127.0.0.1:9222", "2026-07-06T12:34:56Z");
+
+		await expect(
+			storage.recordError({
+				error: "Target detached before all active requests completed.",
+				event: "Target.detachedFromTarget",
+				timestamp: "2026-07-06T12:34:57Z",
+				url: "https://example.test/api",
+			}),
+		).rejects.toThrow();
+		await storage.close();
+
+		expect(storage.summary.render()).toContain(
+			"summary_errors host=example.test total=1 Target.detachedFromTarget=1",
+		);
 	});
 
 	// Without a listener on the writer, a failing write emits an unhandled "error".

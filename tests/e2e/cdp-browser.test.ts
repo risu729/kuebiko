@@ -1,6 +1,12 @@
 import { afterEach, describe } from "bun:test";
 
-import { assertCapturedApi, assertNetLog, readCapturedBodies, readNetLog } from "./assertions";
+import {
+	assertCapturedApi,
+	assertNetLog,
+	assertRunSummary,
+	readCapturedBodies,
+	readNetLog,
+} from "./assertions";
 import {
 	cleanupRuns,
 	closeContext,
@@ -29,6 +35,7 @@ describe("CDP launch-mode browser e2e", () => {
 				await closeContext(context);
 			}
 
+			assertRunSummary(await context.loggerStdout.completed);
 			assertNetLog(await readNetLog(context.netLogPath));
 		},
 		BROWSER_E2E_TIMEOUT_MS,

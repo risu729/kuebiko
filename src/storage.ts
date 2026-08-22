@@ -8,6 +8,7 @@ import type { Protocol } from "devtools-protocol";
 import { TOOL_NAME, TOOL_VERSION } from "./constants";
 import { createBodyFilename, relativeBodyPath, timestampForFile } from "./sanitize";
 import { createCaptureSummary } from "./summary";
+import type { CaptureSummary } from "./summary";
 import type {
 	BodySaveResult,
 	CompletedResponseMetadata,
@@ -22,6 +23,11 @@ import type {
 type NdjsonWriter = {
 	append: (record: unknown) => Promise<void>;
 	close: () => Promise<void>;
+};
+
+// Only the run owner reads the summary, so it stays off the LoggerStorage contract.
+type RunStorage = LoggerStorage & {
+	summary: CaptureSummary;
 };
 
 const sha256 = (bytes: Uint8Array): string => createHash("sha256").update(bytes).digest("hex");
@@ -96,7 +102,7 @@ const createStorage = async (
 	runDirectory: string,
 	cdpEndpoint: string,
 	runTimestamp = new Date().toISOString(),
-): Promise<LoggerStorage> => {
+): Promise<RunStorage> => {
 	const bodiesDirectory = join(runDirectory, "bodies");
 	const requestsDirectory = join(runDirectory, "requests");
 	await mkdir(bodiesDirectory, { recursive: true });
@@ -210,6 +216,7 @@ const createStorage = async (
 			await errors.append(record);
 		},
 		recordWebSocketFrame: async (frame: WebSocketFrameRecord) => {
+			summary.recordWebSocketFrame();
 			await websocket.append(frame);
 		},
 		runDirectory,

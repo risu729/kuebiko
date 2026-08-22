@@ -39,6 +39,10 @@ const waitForShutdown = (): Promise<void> =>
 		});
 	});
 
+const reportTeardownError = (error: unknown): void => {
+	process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+};
+
 const getDefaultBrowserProfileDirectory = (): string =>
 	join(getDefaultBaseDirectory(), "browser-profile");
 
@@ -105,18 +109,15 @@ const runLogger = async (options: CliOptions): Promise<void> => {
 		process.stdout.write(`${READY_MESSAGE}\n`);
 		await Promise.race([waitForShutdown(), logger.closed]);
 	} finally {
-		await plugins?.stopping();
+		// Every teardown step is reported instead of thrown so the summary is always printed.
+		await plugins?.stopping().catch(reportTeardownError);
 		const activeLogger = logger;
 		const requestBrowserClose = activeLogger ? () => activeLogger.closeBrowser() : undefined;
 		// Close the browser first: closing the CDP client rejects Browser.close in flight.
-		await browser?.close(requestBrowserClose).catch((error: unknown) => {
-			process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-		});
-		await logger?.close().catch((error: unknown) => {
-			process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-		});
-		await plugins?.close();
-		await storage?.close();
+		await browser?.close(requestBrowserClose).catch(reportTeardownError);
+		await logger?.close().catch(reportTeardownError);
+		await plugins?.close().catch(reportTeardownError);
+		await storage?.close().catch(reportTeardownError);
 		if (storage) {
 			process.stdout.write(`${storage.summary.render()}\n`);
 		}

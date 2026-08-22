@@ -119,13 +119,6 @@ type ErrorRecord = {
 	url?: string | undefined;
 };
 
-type CaptureSummary = {
-	recordError: (record: ErrorRecord) => void;
-	recordSavedRequestBody: (byteLength: number) => void;
-	recordSavedResponseBody: (byteLength: number) => void;
-	render: () => string;
-};
-
 type WebSocketFrameRecord = {
 	direction: "received";
 	opcode: number;
@@ -266,7 +259,6 @@ type LoggerStorage = {
 	recordWebSocketFrame: (frame: WebSocketFrameRecord) => Promise<void>;
 	runDirectory: string;
 	runTimestamp: string;
-	summary: CaptureSummary;
 };
 
 type StartLoggerOptions = {
@@ -282,7 +274,6 @@ type StartLoggerOptions = {
 export type {
 	BodySaveResult,
 	CaptureErrorHookEvent,
-	CaptureSummary,
 	CliOptions,
 	CompletedResponseMetadata,
 	ErrorRecord,

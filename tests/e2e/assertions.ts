@@ -37,6 +37,11 @@ const assertCapturedApi = (
 	expect(JSON.parse(bodies.requestBody)).toEqual({ hello: "from-page" });
 };
 
+const assertRunSummary = (output: string): void => {
+	expect(output).toContain("summary responses=");
+	expect(output).toContain("summary websocket_frames=");
+};
+
 const readNetLog = async (path: string): Promise<NetLogRecord> => {
 	const file = Bun.file(path);
 	if (!(await file.exists())) {
@@ -62,5 +67,5 @@ const assertNetLog = (netLog: NetLogRecord): void => {
 	expect(Array.isArray(netLog.events)).toBe(true);
 };
 
-export { assertCapturedApi, assertNetLog, readCapturedBodies, readNetLog };
+export { assertCapturedApi, assertNetLog, assertRunSummary, readCapturedBodies, readNetLog };
 export type { CapturedApiRecord };
