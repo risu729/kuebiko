@@ -75,13 +75,6 @@
 			}
 		},
 		{
-			// Declarations only; length tracks the captured shapes, not complexity
-			"files": ["src/types.ts"],
-			"rules": {
-				"eslint/max-lines": "allow"
-			}
-		},
-		{
 			"files": ["src/index.ts", "src/sanitize.ts"],
 			"rules": {
 				"eslint/init-declarations": "allow",

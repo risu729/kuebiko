@@ -28,6 +28,7 @@ type LoadingFinishedEvent = Protocol.Network.LoadingFinishedEvent;
 type LoadingFailedEvent = Protocol.Network.LoadingFailedEvent;
 type WebSocketCreatedEvent = Protocol.Network.WebSocketCreatedEvent;
 type WebSocketClosedEvent = Protocol.Network.WebSocketClosedEvent;
+type WebSocketFrameErrorEvent = Protocol.Network.WebSocketFrameErrorEvent;
 // Both frame events carry the same requestId and response payload.
 type WebSocketFrameEvent =
 	| Protocol.Network.WebSocketFrameReceivedEvent
@@ -248,6 +249,11 @@ class CdpResponseLogger {
 		});
 		this.#client.on("Network.webSocketFrameSent", (event, sessionId) => {
 			this.#trackEvent(this.#handleWebSocketFrame("sent", event as WebSocketFrameEvent, sessionId));
+		});
+		this.#client.on("Network.webSocketFrameError", (event, sessionId) => {
+			this.#trackEvent(
+				this.#handleWebSocketFrameError(event as WebSocketFrameErrorEvent, sessionId),
+			);
 		});
 		this.#client.on("disconnect", () => {
 			this.#log("cdp disconnected");
@@ -715,6 +721,26 @@ class CdpResponseLogger {
 		};
 		await this.#options.storage.recordWebSocketFrame(frame);
 		await this.#options.hooks?.publish(createWebSocketFrameHookEvent(frame, this.#options.storage));
+	}
+
+	// A frame-level protocol error leaves no other trace.
+	// The socket may stay open, and no frame event follows for the failed frame.
+	async #handleWebSocketFrameError(
+		event: WebSocketFrameErrorEvent,
+		sessionId?: string,
+	): Promise<void> {
+		if (!sessionId) {
+			return;
+		}
+		await this.#recordCaptureError({
+			error: event.errorMessage,
+			event: "Network.webSocketFrameError",
+			requestId: event.requestId,
+			sessionId,
+			targetId: this.#sessions.get(sessionId)?.targetId,
+			timestamp: nowIso(),
+			url: this.#webSockets.get(requestKey(sessionId, event.requestId)),
+		});
 	}
 }
 

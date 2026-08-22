@@ -2,6 +2,7 @@ import { afterEach, describe } from "bun:test";
 
 import {
 	assertCapturedApi,
+	assertCapturedWebSocketFrames,
 	assertNetLog,
 	assertRunSummary,
 	readCapturedBodies,
@@ -11,6 +12,7 @@ import {
 	cleanupRuns,
 	closeContext,
 	findCapturedApiRecord,
+	findWebSocketFrames,
 	loadPageAndWaitForCapture,
 	maybeBrowserIt,
 	startContext,
@@ -31,6 +33,10 @@ describe("CDP launch-mode browser e2e", () => {
 				const metadata = await findCapturedApiRecord(context.captureDirectory);
 				const bodies = await readCapturedBodies(context.captureDirectory, metadata);
 				assertCapturedApi(metadata, bodies);
+				assertCapturedWebSocketFrames(
+					await findWebSocketFrames(context.captureDirectory),
+					`ws://127.0.0.1:${context.fixtureServer.port}/socket`,
+				);
 			} finally {
 				await closeContext(context);
 			}

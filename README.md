@@ -166,9 +166,13 @@ directions: `direction` is `"received"` for a server-to-browser frame and
 from the `Network.webSocketCreated` event of the socket its `requestId` belongs
 to. A frame the logger sees without that event, because the socket was opened
 before it attached or had already closed, is still recorded but has no `url`.
+`--include` and `--exclude` apply to response URLs only and never gate
+`websocket.ndjson`, because a frame without a URL could not be matched anyway.
 
 `errors.ndjson` contains per-request capture failures. Individual CDP failures
-do not stop the logger.
+do not stop the logger. WebSocket failures land here too: a frame the browser
+could not decode or send is recorded as a `Network.webSocketFrameError` event
+with the socket URL, since no frame line is written for it.
 
 `netlog.json` is Chromium NetLog for network-stack debugging.
 
@@ -186,10 +190,9 @@ summary_errors host=plugin:json-api-mirror total=1 Plugin.onEvent=1
 ```
 
 `responses` and `requests` count saved body files, and the byte totals are the
-bytes written for them. `websocket_frames` counts every frame written to
-`websocket.ndjson`, sent and received together. `redirects` counts recorded
-redirect hops, which have no body of their own and would otherwise be invisible
-in the totals. One
+bytes written for them. `websocket_frames` counts every frame recorded, sent and
+received together. `redirects` counts recorded redirect hops, which have no body
+of their own and would otherwise be invisible in the totals. One
 `summary_errors` line is printed per host with the `errors.ndjson` `event`
 counts behind it, ordered by failure count. Only the top 20 hosts get a line;
 the rest are collapsed into a final remainder line.

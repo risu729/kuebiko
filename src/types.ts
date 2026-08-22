@@ -139,8 +139,7 @@ type HookEventName =
 	| "run.stopping"
 	| "run.stopped"
 	| "response.completed"
-	| "websocket.frame.received"
-	| "websocket.frame.sent"
+	| `websocket.frame.${WebSocketFrameRecord["direction"]}`
 	| "capture.error";
 
 type RunHookEvent = {
@@ -189,8 +188,7 @@ type ResponseCompletedHookEvent = {
 };
 
 type WebSocketFrameHookEvent = {
-	// The event name follows the frame direction, so a plugin can subscribe to one side.
-	event: "websocket.frame.received" | "websocket.frame.sent";
+	event: `websocket.frame.${WebSocketFrameRecord["direction"]}`;
 	frame: WebSocketFrameRecord;
 	run: RunRef;
 	timestamp: string;
