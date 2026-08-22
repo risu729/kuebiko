@@ -60,6 +60,23 @@ const fetchBrowserVersion = async (cdpEndpoint: string): Promise<BrowserVersion>
 	return (await response.json()) as BrowserVersion;
 };
 
+// Chrome hands off and exits when another browser already holds the profile.
+// The browser already there keeps serving the port, so waitForCdp still succeeds.
+// Capture would then run against a browser this process does not own, and the
+// NetLog it asked for would never be written.
+const assertCdpEndpointFree = async (cdpEndpoint: string): Promise<void> => {
+	try {
+		await fetchBrowserVersion(cdpEndpoint);
+	} catch {
+		return;
+	}
+
+	throw new Error(
+		`A browser is already listening on ${cdpEndpoint}. Launch mode needs a port of its own; ` +
+			`stop that browser, pass a different --cdp-port, or attach to it with --cdp ${cdpEndpoint}.`,
+	);
+};
+
 const waitForCdp = async (
 	cdpEndpoint: string,
 	deadline = Date.now() + CDP_READY_TIMEOUT_MS,
@@ -179,8 +196,9 @@ const waitForStartedBrowser = async (
 };
 
 const startBrowser = async (options: BrowserLaunchOptions): Promise<StartedBrowser> => {
-	const browser = spawnBrowser(options);
 	const cdpEndpoint = createCdpEndpoint(options.cdpPort);
+	await assertCdpEndpointFree(cdpEndpoint);
+	const browser = spawnBrowser(options);
 	await waitForStartedBrowser(browser, cdpEndpoint);
 
 	return {
@@ -191,5 +209,5 @@ const startBrowser = async (options: BrowserLaunchOptions): Promise<StartedBrows
 	};
 };
 
-export { buildBrowserArgs, createCdpEndpoint, startBrowser };
+export { assertCdpEndpointFree, buildBrowserArgs, createCdpEndpoint, startBrowser };
 export type { BrowserLaunchOptions, StartedBrowser };
