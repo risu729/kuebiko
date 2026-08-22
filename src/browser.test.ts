@@ -95,4 +95,39 @@ describe("assertCdpEndpointFree", () => {
 			server.stop(true);
 		}
 	});
+
+	it("rejects when a listener answers without being a CDP endpoint", async () => {
+		const server = Bun.serve({
+			fetch: () => new Response("<html>", { status: 404 }),
+			hostname: "127.0.0.1",
+			port: 0,
+		});
+
+		try {
+			await expect(assertCdpEndpointFree(createCdpEndpoint(servePort(server)))).rejects.toThrow(
+				/already listening/u,
+			);
+		} finally {
+			server.stop(true);
+		}
+	});
+
+	it("rejects instead of hanging when a listener never answers", async () => {
+		const server = Bun.serve({
+			fetch: async () => {
+				await Bun.sleep(1_000);
+				return new Response("too late");
+			},
+			hostname: "127.0.0.1",
+			port: 0,
+		});
+
+		try {
+			await expect(
+				assertCdpEndpointFree(createCdpEndpoint(servePort(server)), 200),
+			).rejects.toThrow(/already listening/u);
+		} finally {
+			server.stop(true);
+		}
+	});
 });

@@ -24,6 +24,8 @@ type StartedBrowser = {
 const BROWSER_STOP_TIMEOUT_MS = 5_000;
 const CDP_READY_TIMEOUT_MS = 15_000;
 const CDP_READY_POLL_MS = 100;
+// Bound every probe so a stalled peer cannot hang startup past its deadline.
+const CDP_PROBE_TIMEOUT_MS = 2_000;
 
 const createCdpEndpoint = (port: number): string => `http://127.0.0.1:${port}`;
 
@@ -52,7 +54,9 @@ const buildBrowserArgs = (options: BrowserLaunchOptions): string[] => {
 };
 
 const fetchBrowserVersion = async (cdpEndpoint: string): Promise<BrowserVersion> => {
-	const response = await fetch(`${cdpEndpoint}/json/version`);
+	const response = await fetch(`${cdpEndpoint}/json/version`, {
+		signal: AbortSignal.timeout(CDP_PROBE_TIMEOUT_MS),
+	});
 	if (!response.ok) {
 		throw new Error(`CDP version endpoint returned ${response.status}.`);
 	}
@@ -64,11 +68,21 @@ const fetchBrowserVersion = async (cdpEndpoint: string): Promise<BrowserVersion>
 // The browser already there keeps serving the port, so waitForCdp still succeeds.
 // Capture would then run against a browser this process does not own, and the
 // NetLog it asked for would never be written.
-const assertCdpEndpointFree = async (cdpEndpoint: string): Promise<void> => {
+//
+// Any answer means the port is taken, so fetchBrowserVersion is not reused here.
+// A peer replying 404, serving HTML, or stalling still owns that port.
+// Only a connection that cannot be established is evidence the port is free.
+// An unrecognized transport failure therefore falls through to spawning.
+const assertCdpEndpointFree = async (
+	cdpEndpoint: string,
+	timeoutMs = CDP_PROBE_TIMEOUT_MS,
+): Promise<void> => {
 	try {
-		await fetchBrowserVersion(cdpEndpoint);
-	} catch {
-		return;
+		await fetch(`${cdpEndpoint}/json/version`, { signal: AbortSignal.timeout(timeoutMs) });
+	} catch (error) {
+		if ((error as { name?: string }).name !== "TimeoutError") {
+			return;
+		}
 	}
 
 	throw new Error(
