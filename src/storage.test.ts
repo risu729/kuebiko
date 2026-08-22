@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { bodyToBytes, createStorage, sha256 } from "./storage";
+import type { RunInfo } from "./storage";
 import type { RequestState } from "./types";
 
 describe("bodyToBytes", () => {
@@ -20,7 +21,7 @@ describe("bodyToBytes", () => {
 describe("createStorage", () => {
 	it("writes bodies and metadata records", async () => {
 		const dir = await mkdtemp(join(tmpdir(), "kuebiko-"));
-		const storage = await createStorage(dir, "http://127.0.0.1:9222", "2026-07-06T12:34:56Z");
+		const storage = await createStorage(dir, "http://127.0.0.1:9222", {}, "2026-07-06T12:34:56Z");
 		const state: RequestState = {
 			requestId: "request-1",
 			response: {
@@ -66,7 +67,7 @@ describe("createStorage", () => {
 
 	it("writes request bodies separately from response bodies", async () => {
 		const dir = await mkdtemp(join(tmpdir(), "kuebiko-"));
-		const storage = await createStorage(dir, "http://127.0.0.1:9222", "2026-07-06T12:34:56Z");
+		const storage = await createStorage(dir, "http://127.0.0.1:9222", {}, "2026-07-06T12:34:56Z");
 		const state: RequestState = {
 			requestContentType: "application/json",
 			requestHeaders: { "content-type": "application/json" },
@@ -93,7 +94,7 @@ describe("createStorage", () => {
 
 	it("tracks saved bodies and errors in the run summary", async () => {
 		const dir = await mkdtemp(join(tmpdir(), "kuebiko-"));
-		const storage = await createStorage(dir, "http://127.0.0.1:9222", "2026-07-06T12:34:56Z");
+		const storage = await createStorage(dir, "http://127.0.0.1:9222", {}, "2026-07-06T12:34:56Z");
 		const state: RequestState = {
 			requestId: "request-1",
 			session: { sessionId: "session-1" },
@@ -126,7 +127,7 @@ describe("createStorage", () => {
 
 	it("keeps unsaved bodies out of the summary totals", async () => {
 		const dir = await mkdtemp(join(tmpdir(), "kuebiko-"));
-		const storage = await createStorage(dir, "http://127.0.0.1:9222", "2026-07-06T12:34:56Z");
+		const storage = await createStorage(dir, "http://127.0.0.1:9222", {}, "2026-07-06T12:34:56Z");
 		const state: RequestState = {
 			requestId: "request-1",
 			session: { sessionId: "session-1" },
@@ -145,7 +146,7 @@ describe("createStorage", () => {
 	it("counts errors even when the error log write fails", async () => {
 		const dir = await mkdtemp(join(tmpdir(), "kuebiko-"));
 		await mkdir(join(dir, "errors.ndjson"));
-		const storage = await createStorage(dir, "http://127.0.0.1:9222", "2026-07-06T12:34:56Z");
+		const storage = await createStorage(dir, "http://127.0.0.1:9222", {}, "2026-07-06T12:34:56Z");
 
 		await expect(
 			storage.recordError({
@@ -167,7 +168,7 @@ describe("createStorage", () => {
 	it("reports write failures to the caller instead of terminating the process", async () => {
 		const dir = await mkdtemp(join(tmpdir(), "kuebiko-"));
 		await mkdir(join(dir, "metadata.ndjson"));
-		const storage = await createStorage(dir, "http://127.0.0.1:9222", "2026-07-06T12:34:56Z");
+		const storage = await createStorage(dir, "http://127.0.0.1:9222", {}, "2026-07-06T12:34:56Z");
 
 		await expect(
 			storage.recordCompletedResponse({
@@ -178,5 +179,33 @@ describe("createStorage", () => {
 			}),
 		).rejects.toThrow();
 		await expect(storage.close()).resolves.toBeUndefined();
+	});
+
+	it("writes labels and a note into run.json", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "kuebiko-"));
+		const storage = await createStorage(
+			dir,
+			"http://127.0.0.1:9222",
+			{ labels: ["account-a", "billing"], note: "manual sweep" },
+			"2026-07-06T12:34:56Z",
+		);
+		await storage.close();
+
+		const runInfo = (await Bun.file(join(dir, "run.json")).json()) as RunInfo;
+
+		expect(runInfo.labels).toEqual(["account-a", "billing"]);
+		expect(runInfo.note).toBe("manual sweep");
+		expect(runInfo.createdAt).toBe("2026-07-06T12:34:56Z");
+	});
+
+	it("omits labels and note from run.json when they are unset", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "kuebiko-"));
+		const storage = await createStorage(dir, "http://127.0.0.1:9222", {}, "2026-07-06T12:34:56Z");
+		await storage.close();
+
+		const runInfo = (await Bun.file(join(dir, "run.json")).json()) as Record<string, unknown>;
+
+		expect(Object.hasOwn(runInfo, "labels")).toBe(false);
+		expect(Object.hasOwn(runInfo, "note")).toBe(false);
 	});
 });

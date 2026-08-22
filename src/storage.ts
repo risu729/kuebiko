@@ -16,7 +16,6 @@ import type {
 	LoggerStorage,
 	RequestState,
 	RequestBodySaveResult,
-	RunInfo,
 	WebSocketFrameRecord,
 } from "./types";
 
@@ -24,6 +23,22 @@ type NdjsonWriter = {
 	append: (record: unknown) => Promise<void>;
 	close: () => Promise<void>;
 };
+
+// Only storage writes run.json, so its shape stays with the writer.
+type RunInfo = {
+	cdpEndpoint: string;
+	createdAt: string;
+	labels?: string[] | undefined;
+	nodePlatform: NodeJS.Platform;
+	note?: string | undefined;
+	pid: number;
+	runDirectory: string;
+	tool: string;
+	version: string;
+};
+
+// Free-form run description supplied by the run owner.
+type RunAnnotations = Pick<RunInfo, "labels" | "note">;
 
 // Only the run owner reads the summary, so it stays off the LoggerStorage contract.
 type RunStorage = LoggerStorage & {
@@ -88,10 +103,14 @@ const createRunInfo = (
 	runDirectory: string,
 	cdpEndpoint: string,
 	runTimestamp: string,
+	annotations: RunAnnotations,
 ): RunInfo => ({
 	cdpEndpoint,
 	createdAt: runTimestamp,
+	// JSON.stringify drops undefined, so unlabelled runs keep the original run.json shape.
+	labels: annotations.labels?.length ? annotations.labels : undefined,
 	nodePlatform: process.platform,
+	note: annotations.note,
 	pid: process.pid,
 	runDirectory,
 	tool: TOOL_NAME,
@@ -101,6 +120,7 @@ const createRunInfo = (
 const createStorage = async (
 	runDirectory: string,
 	cdpEndpoint: string,
+	annotations: RunAnnotations = {},
 	runTimestamp = new Date().toISOString(),
 ): Promise<RunStorage> => {
 	const bodiesDirectory = join(runDirectory, "bodies");
@@ -109,7 +129,7 @@ const createStorage = async (
 	await mkdir(requestsDirectory, { recursive: true });
 	await Bun.write(
 		join(runDirectory, "run.json"),
-		`${JSON.stringify(createRunInfo(runDirectory, cdpEndpoint, runTimestamp), null, "\t")}\n`,
+		`${JSON.stringify(createRunInfo(runDirectory, cdpEndpoint, runTimestamp, annotations), null, "\t")}\n`,
 	);
 
 	const metadata = createNdjsonWriter(join(runDirectory, "metadata.ndjson"));
@@ -226,3 +246,4 @@ const createStorage = async (
 };
 
 export { bodyToBytes, createNdjsonWriter, createStorage, sha256 };
+export type { RunAnnotations, RunInfo };

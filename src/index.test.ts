@@ -9,6 +9,7 @@ describe("parseArgs", () => {
 			cdp: DEFAULT_CDP_ENDPOINT,
 			cdpPort: 9222,
 			help: false,
+			labels: [],
 			launchBrowser: false,
 			netlog: true,
 			noPlugins: false,
@@ -65,6 +66,31 @@ describe("parseArgs", () => {
 		expect(options.browserCommand).toBe("chrome.exe");
 		expect(options.browserProfile).toBe("C:\\profile");
 		expect(options.netlog).toBe(false);
+	});
+
+	it("parses repeated labels and a note", () => {
+		const options = parseArgs([
+			"--label",
+			"account-a",
+			"--label=billing",
+			"--note",
+			"manual sweep",
+		]);
+
+		expect(options.labels).toEqual(["account-a", "billing"]);
+		expect(options.note).toBe("manual sweep");
+	});
+
+	it("leaves labels and note unset by default", () => {
+		const options = parseArgs([]);
+
+		expect(options.labels).toEqual([]);
+		expect(options.note).toBeUndefined();
+	});
+
+	it("rejects empty labels and notes", () => {
+		expect(() => parseArgs(["--label", ""])).toThrow();
+		expect(() => parseArgs(["--note", ""])).toThrow();
 	});
 
 	it("rejects unknown flags", () => {
