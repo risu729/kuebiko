@@ -2,6 +2,8 @@ import { describe, expect, it, mock } from "bun:test";
 import type { Mock } from "bun:test";
 import { EventEmitter } from "node:events";
 
+import type { Protocol } from "devtools-protocol";
+
 import { CdpResponseLogger, createCompletedMetadata } from "./cdp";
 import type {
 	CompletedResponseMetadata,
@@ -115,6 +117,100 @@ const waitForAsyncEvent = async (): Promise<void> => {
 	for (let index = 0; index < 6; index += 1) {
 		await Promise.resolve();
 	}
+};
+
+const attachPageTarget = (client: FakeClient): void => {
+	client.emit("Target.attachedToTarget", {
+		sessionId: "session-1",
+		targetInfo: {
+			attached: true,
+			browserContextId: "context-1",
+			canAccessOpener: false,
+			targetId: "target-1",
+			title: "Example",
+			type: "page",
+			url: "https://example.test",
+		},
+		waitingForDebugger: false,
+	});
+};
+
+const createRedirectResponse = (options: {
+	location: string;
+	status: number;
+	statusText: string;
+	url: string;
+}): Protocol.Network.Response => ({
+	charset: "",
+	connectionId: 1,
+	connectionReused: false,
+	encodedDataLength: 42,
+	headers: { location: options.location, "set-cookie": "session=abc" },
+	mimeType: "text/html",
+	securityState: "secure",
+	status: options.status,
+	statusText: options.statusText,
+	url: options.url,
+});
+
+const emitRequestWillBeSent = (
+	client: FakeClient,
+	request: { method?: string; postData?: string; url: string },
+	redirectResponse?: Protocol.Network.Response,
+): void => {
+	client.emit(
+		"Network.requestWillBeSent",
+		{
+			documentURL: "https://example.test",
+			frameId: "frame-1",
+			hasUserGesture: false,
+			initiator: { type: "other" },
+			loaderId: "loader-1",
+			redirectResponse,
+			request: {
+				hasPostData: request.postData !== undefined,
+				headers: { accept: "text/html" },
+				initialPriority: "High",
+				method: request.method ?? "GET",
+				mixedContentType: "none",
+				postData: request.postData,
+				referrerPolicy: "strict-origin-when-cross-origin",
+				url: request.url,
+			},
+			requestId: "request-1",
+			timestamp: 1,
+			type: "Document",
+			wallTime: 1,
+		},
+		"session-1",
+	);
+};
+
+const emitFinalResponse = (client: FakeClient, url: string): void => {
+	client.emit(
+		"Network.responseReceived",
+		{
+			frameId: "frame-1",
+			hasExtraInfo: false,
+			loaderId: "loader-1",
+			requestId: "request-1",
+			response: {
+				headers: { "content-type": "text/html" },
+				mimeType: "text/html",
+				status: 200,
+				statusText: "OK",
+				url,
+			},
+			timestamp: 4,
+			type: "Document",
+		},
+		"session-1",
+	);
+	client.emit(
+		"Network.loadingFinished",
+		{ encodedDataLength: 123, requestId: "request-1", timestamp: 5 },
+		"session-1",
+	);
 };
 
 describe("createCompletedMetadata", () => {
@@ -909,6 +1005,185 @@ describe("CdpResponseLogger", () => {
 			event: "Network.getResponseBody.skipped",
 			requestId: "request-1",
 			url: "https://example.test/large",
+		});
+	});
+
+	it("records every redirect hop of a chain before the final response", async () => {
+		const client = new FakeClient();
+		const storage = createStorage();
+		const hooks = createHooks();
+		const logger = new CdpResponseLogger(client as never, {
+			cdp: "http://127.0.0.1:9222",
+			hooks,
+			storage,
+			verbose: false,
+		});
+
+		await logger.start();
+		attachPageTarget(client);
+		await waitForAsyncEvent();
+		emitRequestWillBeSent(client, { url: "https://sso.test/authorize" });
+		await waitForAsyncEvent();
+		emitRequestWillBeSent(
+			client,
+			{ url: "https://idp.test/login" },
+			createRedirectResponse({
+				location: "https://idp.test/login",
+				status: 301,
+				statusText: "Moved Permanently",
+				url: "https://sso.test/authorize",
+			}),
+		);
+		await waitForAsyncEvent();
+		emitRequestWillBeSent(
+			client,
+			{ url: "https://app.test/session" },
+			createRedirectResponse({
+				location: "https://app.test/session",
+				status: 302,
+				statusText: "Found",
+				url: "https://idp.test/login",
+			}),
+		);
+		await waitForAsyncEvent();
+		emitFinalResponse(client, "https://app.test/session");
+		await waitForAsyncEvent();
+
+		expect(client.Network.getResponseBody).toHaveBeenCalledTimes(1);
+		expect(storage.metadata).toHaveLength(3);
+		expect(storage.metadata[0]).toMatchObject({
+			bodySaved: false,
+			encodedDataLength: 42,
+			redirect: true,
+			redirectIndex: 0,
+			responseHeaders: { location: "https://idp.test/login", "set-cookie": "session=abc" },
+			status: 301,
+			url: "https://sso.test/authorize",
+		});
+		expect(storage.metadata[1]).toMatchObject({
+			bodySaved: false,
+			redirect: true,
+			redirectIndex: 1,
+			responseHeaders: { location: "https://app.test/session", "set-cookie": "session=abc" },
+			status: 302,
+			url: "https://idp.test/login",
+		});
+		expect(storage.metadata[2]).toMatchObject({
+			bodyFile: "bodies/body.json",
+			bodySaved: true,
+			redirectIndex: 2,
+			status: 200,
+			url: "https://app.test/session",
+		});
+		// A terminal response never carries the redirect marker.
+		expect(storage.metadata[2]?.redirect).toBeUndefined();
+		expect(storage.errors).toHaveLength(0);
+		expect(hooks.events).toContainEqual(
+			expect.objectContaining({
+				event: "response.completed",
+				response: expect.objectContaining({
+					bodySaved: false,
+					redirect: true,
+					redirectIndex: 0,
+					status: 301,
+				}),
+			}),
+		);
+	});
+
+	it("applies url filters to redirect hops", async () => {
+		const client = new FakeClient();
+		const storage = createStorage();
+		const logger = new CdpResponseLogger(client as never, {
+			cdp: "http://127.0.0.1:9222",
+			exclude: /idp\.test/u,
+			storage,
+			verbose: false,
+		});
+
+		await logger.start();
+		attachPageTarget(client);
+		await waitForAsyncEvent();
+		emitRequestWillBeSent(client, { url: "https://sso.test/authorize" });
+		await waitForAsyncEvent();
+		emitRequestWillBeSent(
+			client,
+			{ url: "https://idp.test/login" },
+			createRedirectResponse({
+				location: "https://idp.test/login",
+				status: 301,
+				statusText: "Moved Permanently",
+				url: "https://sso.test/authorize",
+			}),
+		);
+		await waitForAsyncEvent();
+		emitRequestWillBeSent(
+			client,
+			{ url: "https://app.test/session" },
+			createRedirectResponse({
+				location: "https://app.test/session",
+				status: 302,
+				statusText: "Found",
+				url: "https://idp.test/login",
+			}),
+		);
+		await waitForAsyncEvent();
+		emitFinalResponse(client, "https://app.test/session");
+		await waitForAsyncEvent();
+
+		expect(storage.metadata.map((record) => record.url)).toEqual([
+			"https://sso.test/authorize",
+			"https://app.test/session",
+		]);
+	});
+
+	it("saves inline post data with the redirect hop that carried it", async () => {
+		const client = new FakeClient();
+		const storage = createStorage();
+		const logger = new CdpResponseLogger(client as never, {
+			cdp: "http://127.0.0.1:9222",
+			storage,
+			verbose: false,
+		});
+
+		await logger.start();
+		attachPageTarget(client);
+		await waitForAsyncEvent();
+		emitRequestWillBeSent(client, {
+			method: "POST",
+			postData: '{"hello":"world"}',
+			url: "https://idp.test/login",
+		});
+		await waitForAsyncEvent();
+		emitRequestWillBeSent(
+			client,
+			{ url: "https://app.test/session" },
+			createRedirectResponse({
+				location: "https://app.test/session",
+				status: 302,
+				statusText: "Found",
+				url: "https://idp.test/login",
+			}),
+		);
+		await waitForAsyncEvent();
+		emitFinalResponse(client, "https://app.test/session");
+		await waitForAsyncEvent();
+
+		expect(client.Network.getRequestPostData).not.toHaveBeenCalled();
+		expect(storage.recordRequestBody).toHaveBeenCalledTimes(1);
+		expect(storage.metadata[0]).toMatchObject({
+			redirect: true,
+			redirectIndex: 0,
+			requestBodyFile: "requests/request.json",
+			requestBodySaved: true,
+			requestBodySource: "requestWillBeSent",
+			requestMethod: "POST",
+			status: 302,
+		});
+		expect(storage.metadata[1]).toMatchObject({
+			requestBodySaved: undefined,
+			requestMethod: "GET",
+			status: 200,
 		});
 	});
 });

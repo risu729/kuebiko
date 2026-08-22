@@ -36,9 +36,21 @@ describe("createCaptureSummary", () => {
 		expect(summary.render()).toBe(
 			[
 				"summary responses=2 response_bytes=100 requests=1 request_bytes=17",
-				"summary websocket_frames=2 errors=0",
+				"summary websocket_frames=2 redirects=0 errors=0",
 			].join("\n"),
 		);
+	});
+
+	it("counts redirect hops separately from saved response bodies", () => {
+		const summary = createCaptureSummary();
+		summary.recordRedirectHop();
+		summary.recordRedirectHop();
+		summary.recordSavedResponseBody(11);
+
+		expect(summary.render().split("\n")).toEqual([
+			"summary responses=1 response_bytes=11 requests=0 request_bytes=0",
+			"summary websocket_frames=0 redirects=2 errors=0",
+		]);
 	});
 
 	it("groups errors by host and event", () => {

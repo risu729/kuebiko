@@ -36,6 +36,8 @@ type RequestState = {
 	hasPostData?: boolean | undefined;
 	initiator?: Protocol.Network.Initiator | undefined;
 	loaderId?: string | undefined;
+	// Position in the redirect chain, left undefined until the first redirect hop.
+	redirectIndex?: number | undefined;
 	requestContentType?: string | undefined;
 	requestHeaders?: Protocol.Network.Headers | undefined;
 	requestId: Protocol.Network.RequestId;
@@ -77,6 +79,11 @@ type CompletedResponseMetadata = {
 	loaderId?: string | undefined;
 	mimeType?: string | undefined;
 	protocol?: string | undefined;
+	// Set on redirect hops only; a terminal response never carries it.
+	redirect?: boolean | undefined;
+	// Present on every record of a request that redirected, hops being 0-based.
+	// The terminal response takes the index after the last hop.
+	redirectIndex?: number | undefined;
 	remoteIPAddress?: string | undefined;
 	remotePort?: number | undefined;
 	requestBodyError?: string | undefined;
@@ -165,6 +172,8 @@ type ResponseCompletedHookEvent = {
 		encodedDataLength?: number | undefined;
 		headers?: Protocol.Network.Headers | undefined;
 		mimeType?: string | undefined;
+		redirect?: boolean | undefined;
+		redirectIndex?: number | undefined;
 		status?: number | undefined;
 		statusText?: string | undefined;
 	};

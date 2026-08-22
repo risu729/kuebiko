@@ -150,6 +150,16 @@ was made. Both fields are omitted when the flags are not used.
 the filters. When available, the same metadata line links to both a saved
 request payload and a saved response body.
 
+A redirect chain reuses one CDP request ID, so it produces several metadata
+lines. Each `3xx` hop is written when the browser follows it, with
+`redirect: true` and a 0-based `redirectIndex`; the terminal response of the
+same chain takes the next `redirectIndex` and carries no `redirect` field.
+Requests that never redirected have neither field. Hops keep their own status,
+`location`, and `set-cookie` response headers, and an inline request payload
+when the browser reported one, but they never have a response body: redirects
+carry none, and CDP would only return the final hop's body. Filters apply to
+each hop URL, exactly as they apply to a terminal response.
+
 `errors.ndjson` contains per-request capture failures. Individual CDP failures
 do not stop the logger.
 
@@ -162,14 +172,16 @@ visible without opening `errors.ndjson`:
 
 ```text
 summary responses=482 response_bytes=19203112 requests=37 request_bytes=8241
-summary websocket_frames=126 errors=4
+summary websocket_frames=126 redirects=54 errors=4
 summary_errors host=example.test total=2 Network.getResponseBody=2
 summary_errors host=cdn.example.test total=1 Network.loadingFailed=1
 summary_errors host=plugin:json-api-mirror total=1 Plugin.onEvent=1
 ```
 
 `responses` and `requests` count saved body files, and the byte totals are the
-bytes written for them. One `summary_errors` line is printed per host with the
+bytes written for them. `redirects` counts recorded redirect hops, which have no
+body of their own and would otherwise be invisible in the totals. One
+`summary_errors` line is printed per host with the
 `errors.ndjson` `event` counts behind it, ordered by failure count. Only the top
 20 hosts get a line; the rest are collapsed into a final remainder line.
 
@@ -192,6 +204,7 @@ For completed responses, metadata includes request and response fields such as:
 - encoded data length
 - response body path, byte length, SHA-256, and CDP `base64Encoded`
 - request body path, byte length, SHA-256, and source when available
+- `redirect` and `redirectIndex` for requests that went through a redirect chain
 - any capture error for body retrieval
 
 Response bodies are saved exactly from CDP's body result:
@@ -303,6 +316,12 @@ Supported plugin events are:
 Hook events do not contain inline request or response bodies. Read saved files
 with `ctx.resolveRunPath(event.response.bodyFile)` or the request-body path when
 present.
+
+Redirect hops publish `response.completed` like any other recorded response, so
+plugins see the whole chain. Such an event has `response.redirect` set to `true`
+and `response.bodyFile` unset. Plugins that only care about bodies already skip
+it through the usual `event.response.bodyFile` check; plugins that follow login
+flows can use `response.redirect` and `response.redirectIndex` instead.
 
 ## Verify A Capture
 
@@ -532,8 +551,10 @@ mise run compile
 ## Known Limitations
 
 - CDP may fail to return bodies for downloads, streaming responses, very large
-  responses, redirects, cached responses, service-worker cases, or after
-  navigation races.
+  responses, cached responses, service-worker cases, or after navigation races.
+- Redirect hops are recorded as metadata only. Their status, `location`, and
+  `set-cookie` headers are saved, but no response body exists to save, and a
+  hop the logger did not observe from its start is skipped.
 - CDP may not expose every request payload. `Network.getRequestPostData` can
   fail after navigation races and does not include uploaded files for multipart
   form data.

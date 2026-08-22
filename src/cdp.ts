@@ -116,6 +116,7 @@ const createCompletedMetadata = (
 		loaderId: state.loaderId,
 		mimeType: response?.mimeType,
 		protocol: response?.protocol,
+		redirectIndex: state.redirectIndex,
 		remoteIPAddress: response?.remoteIPAddress,
 		remotePort: response?.remotePort,
 		requestBodyError: requestBodyResult.error,
@@ -208,7 +209,7 @@ class CdpResponseLogger {
 			this.#trackEvent(this.#handleDetached(event));
 		});
 		this.#client.on("Network.requestWillBeSent", (event, sessionId) => {
-			this.#handleRequestWillBeSent(event as RequestWillBeSentEvent, sessionId);
+			this.#trackEvent(this.#handleRequestWillBeSent(event as RequestWillBeSentEvent, sessionId));
 		});
 		this.#client.on("Network.responseReceived", (event, sessionId) => {
 			this.#handleResponseReceived(event as ResponseReceivedEvent, sessionId);
@@ -345,18 +346,25 @@ class CdpResponseLogger {
 		}
 	}
 
-	#handleRequestWillBeSent(event: RequestWillBeSentEvent, sessionId?: string): void {
+	async #handleRequestWillBeSent(event: RequestWillBeSentEvent, sessionId?: string): Promise<void> {
 		if (!sessionId) {
 			return;
 		}
 		const session = this.#sessions.get(sessionId) ?? { sessionId };
 		const key = requestKey(sessionId, event.requestId);
+		const previous = this.#requests.get(key);
+		const { redirectResponse } = event;
 
+		// CDP reuses the requestId across a redirect chain.
+		// Replace the state first so later events belong to the hop now in flight.
+		// The hop it replaced is finalized below.
 		this.#requests.set(key, {
 			frameId: event.frameId,
 			hasPostData: event.request.hasPostData,
 			initiator: event.initiator,
 			loaderId: event.loaderId,
+			redirectIndex:
+				redirectResponse === undefined ? undefined : (previous?.redirectIndex ?? 0) + 1,
 			requestContentType: headerValue(event.request.headers, "content-type"),
 			requestHeaders: event.request.headers,
 			requestId: event.requestId,
@@ -367,6 +375,68 @@ class CdpResponseLogger {
 			session,
 			type: event.type,
 		});
+
+		// Without the replaced state there is no request to attribute the hop to.
+		// That happens when the logger attaches in the middle of a chain.
+		if (redirectResponse === undefined || previous === undefined) {
+			return;
+		}
+
+		await this.#recordRedirectHop(previous, redirectResponse, event);
+	}
+
+	// A redirect hop never reaches loadingFinished.
+	// It is finalized from the redirectResponse of the request that replaced it.
+	// No body is fetched: redirects have none.
+	// Network.getResponseBody would answer for the final hop anyway.
+	async #recordRedirectHop(
+		state: RequestState,
+		response: Protocol.Network.Response,
+		event: RequestWillBeSentEvent,
+	): Promise<void> {
+		const hop: RequestState = {
+			...state,
+			redirectIndex: state.redirectIndex ?? 0,
+			response,
+		};
+		const url = response.url;
+		if (!matchesFilters(url, this.#options.include, this.#options.exclude)) {
+			return;
+		}
+
+		// Inline post data is the only request body the finalized hop can claim:
+		// Network.getRequestPostData answers for the hop now in flight.
+		const requestBodyResult: Partial<RequestBodySaveResult> =
+			hop.requestPostData === undefined
+				? {}
+				: await this.#options.storage.recordRequestBody(hop, hop.requestPostData);
+		const metadata: CompletedResponseMetadata = {
+			...createCompletedMetadata(
+				hop,
+				{
+					encodedDataLength: response.encodedDataLength,
+					requestId: event.requestId,
+					timestamp: event.timestamp,
+				},
+				{ bodySaved: false },
+				requestBodyResult,
+				this.#options.storage.runTimestamp,
+			),
+			redirect: true,
+		};
+		await this.#options.storage.recordCompletedResponse(metadata);
+		await this.#options.hooks?.publish(
+			createResponseCompletedHookEvent(metadata, this.#options.storage.runDirectory),
+		);
+
+		if (!requestBodyResult.bodySaved && requestBodyResult.error) {
+			await this.#recordRequestError(
+				requestBodyErrorEvent(requestBodyResult.source),
+				hop,
+				requestBodyResult.error,
+				url,
+			);
+		}
 	}
 
 	#handleResponseReceived(event: ResponseReceivedEvent, sessionId?: string): void {
