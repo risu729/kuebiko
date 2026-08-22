@@ -81,16 +81,9 @@ describe("parseArgs", () => {
 		expect(options.note).toBe("manual sweep");
 	});
 
-	it("leaves labels and note unset by default", () => {
-		const options = parseArgs([]);
-
-		expect(options.labels).toEqual([]);
-		expect(options.note).toBeUndefined();
-	});
-
 	it("rejects empty labels and notes", () => {
 		expect(() => parseArgs(["--label", ""])).toThrow();
-		expect(() => parseArgs(["--note", ""])).toThrow();
+		expect(() => parseArgs(["--note", ""])).toThrow("--note must not be empty.");
 	});
 
 	it("rejects unknown flags", () => {

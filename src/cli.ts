@@ -4,7 +4,12 @@ import { z } from "zod";
 
 import { DEFAULT_CDP_ENDPOINT, TOOL_NAME, TOOL_VERSION } from "./constants";
 import type { CliOptions } from "./types";
-import { optionalNonEmptyString, optionalStringArray, parseSafeInteger } from "./validation";
+import {
+	optionalNonEmptyString,
+	optionalStringArray,
+	parseNonEmptyText,
+	parseSafeInteger,
+} from "./validation";
 
 type CliArgDefinition = {
 	default?: boolean | string | undefined;
@@ -119,20 +124,15 @@ type LoggerArgs = {
 	version?: boolean | undefined;
 };
 
-const createValidFlags = (): Set<string> => {
-	const flags = new Set(["--help", "--version", "-h", "-v"]);
-
-	for (const [name, definition] of Object.entries(cliArgs)) {
-		flags.add(`--${name}`);
-		if (definition.type === "boolean") {
-			flags.add(`--no-${name}`);
-		}
-	}
-
-	return flags;
-};
-
-const validFlags = createValidFlags();
+const validFlags = new Set([
+	"--help",
+	"--version",
+	"-h",
+	"-v",
+	...Object.entries(cliArgs).flatMap(([name, definition]) =>
+		definition.type === "boolean" ? [`--${name}`, `--no-${name}`] : [`--${name}`],
+	),
+]);
 
 const parseRegex = (value: string, flag: string): RegExp => {
 	try {
@@ -172,8 +172,9 @@ const CliOptionsSchema: z.ZodType<CliOptions> = z
 		),
 		netlog: z.boolean(),
 		noPlugins: z.boolean(),
-		// Kept as a plain string so an empty --note is rejected instead of dropped.
-		note: z.string().min(1).optional(),
+		// A blank --note is rejected instead of dropped, so a mistyped note cannot vanish.
+		// That deviates on purpose from the optionalNonEmptyString flags such as --out.
+		note: z.optional(z.string()).transform((value) => parseNonEmptyText(value, "--note")),
 		out: optionalNonEmptyString,
 		verbose: z.boolean(),
 		version: z.boolean(),

@@ -110,7 +110,7 @@ const createRunInfo = (
 	// JSON.stringify drops undefined, so unlabelled runs keep the original run.json shape.
 	labels: annotations.labels?.length ? annotations.labels : undefined,
 	nodePlatform: process.platform,
-	note: annotations.note,
+	note: annotations.note?.trim() ? annotations.note : undefined,
 	pid: process.pid,
 	runDirectory,
 	tool: TOOL_NAME,

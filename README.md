@@ -470,7 +470,7 @@ Options:
   --include <regex>        Only persist matching response URLs
   --exclude <regex>        Do not persist matching response URLs
   --max-body-bytes <num>   Skip body retrieval above encoded byte length
-  --label <label>          Label recorded in run.json, may be repeated
+  --label <label>          Label recorded in run.json
   --note <text>            Free-form note recorded in run.json
   --config <path>          TS/JS logger config with plugin modules
   --no-plugins             Disable plugin loading from --config
