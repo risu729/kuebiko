@@ -52,18 +52,16 @@ const createStorage = (runDirectory: string): LoggerStorage & { errors: ErrorRec
 	return {
 		close: mock(() => Promise.resolve()),
 		errors,
-		recordBody: mock(
-			(): Promise<BodySaveResult & { base64Encoded: boolean }> =>
-				Promise.resolve({ base64Encoded: false, bodySaved: true }),
+		recordBody: mock((): Promise<BodySaveResult & { base64Encoded: boolean }> =>
+			Promise.resolve({ base64Encoded: false, bodySaved: true }),
 		),
 		recordCompletedResponse: mock(() => Promise.resolve()),
 		recordError: mock((error) => {
 			errors.push(error);
 			return Promise.resolve();
 		}),
-		recordRequestBody: mock(
-			(_state: RequestState): Promise<RequestBodySaveResult> =>
-				Promise.resolve({ bodySaved: true, source: "requestWillBeSent" }),
+		recordRequestBody: mock((_state: RequestState): Promise<RequestBodySaveResult> =>
+			Promise.resolve({ bodySaved: true, source: "requestWillBeSent" }),
 		),
 		recordWebSocketFrame: mock((_frame: WebSocketFrameRecord) => Promise.resolve()),
 		runDirectory,
