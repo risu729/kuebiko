@@ -208,16 +208,15 @@ const startLogger = (options: {
 		options.captureDirectory,
 	]);
 
+// The logger appends to metadata.ndjson while this polls it, so a read can land mid-line.
+// Bun.JSONL.parse drops an incomplete trailing value instead of throwing on it.
 const readMetadata = async (path: string): Promise<MetadataRecord[]> => {
-	if (!(await Bun.file(path).exists())) {
+	const file = Bun.file(path);
+	if (!(await file.exists())) {
 		return [];
 	}
 
-	const text = await Bun.file(path).text();
-	return text
-		.split("\n")
-		.filter(Boolean)
-		.map((line) => JSON.parse(line) as MetadataRecord);
+	return Bun.JSONL.parse(await file.bytes()) as MetadataRecord[];
 };
 
 const isCapturedApiRecord = (record: MetadataRecord | undefined): record is CapturedApiRecord =>
