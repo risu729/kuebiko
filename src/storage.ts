@@ -30,6 +30,10 @@ const errorMessage = (error: unknown): string =>
 
 const createNdjsonWriter = (path: string): NdjsonWriter => {
 	const stream = createWriteStream(path, { flags: "a" });
+	// A failing write both rejects the write callback and emits "error".
+	// The callback is what append() and close() already report through.
+	// The event only needs a listener so it cannot take the capture down.
+	stream.on("error", () => undefined);
 	let pending = Promise.resolve();
 
 	const writeLine = (line: string): Promise<void> =>
@@ -187,7 +191,9 @@ const createStorage = async (
 
 	return {
 		close: async () => {
-			await Promise.all([metadata.close(), errors.close(), websocket.close()]);
+			// Shutdown runs from a finally block, where a rejection becomes an unhandled one.
+			// Settle all three so a writer that already failed cannot stop the others closing.
+			await Promise.allSettled([metadata.close(), errors.close(), websocket.close()]);
 		},
 		recordRequestBody,
 		recordBody,

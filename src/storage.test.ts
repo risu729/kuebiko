@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { mkdtemp, readdir } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -89,5 +89,23 @@ describe("createStorage", () => {
 			'{"hello":"world"}',
 		);
 		await expect(readdir(join(dir, "requests"))).resolves.toHaveLength(1);
+	});
+
+	// Without a listener on the writer, a failing write emits an unhandled "error".
+	// That terminates the process, so reaching the end of this test is the assertion.
+	it("reports write failures to the caller instead of terminating the process", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "kuebiko-"));
+		await mkdir(join(dir, "metadata.ndjson"));
+		const storage = await createStorage(dir, "http://127.0.0.1:9222", "2026-07-06T12:34:56Z");
+
+		await expect(
+			storage.recordCompletedResponse({
+				bodySaved: false,
+				requestId: "request-1",
+				runTimestamp: "2026-07-06T12:34:56Z",
+				sessionId: "session-1",
+			}),
+		).rejects.toThrow();
+		await expect(storage.close()).resolves.toBeUndefined();
 	});
 });
