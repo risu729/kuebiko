@@ -6,6 +6,7 @@ describe("parseArgs", () => {
 	it("uses defaults", () => {
 		expect(parseArgs([])).toEqual({
 			browserArgs: [],
+			captureCookies: false,
 			cdp: DEFAULT_CDP_ENDPOINT,
 			cdpPort: 9222,
 			help: false,
@@ -84,6 +85,10 @@ describe("parseArgs", () => {
 	it("rejects empty labels and notes", () => {
 		expect(() => parseArgs(["--label", ""])).toThrow();
 		expect(() => parseArgs(["--note", ""])).toThrow("--note must not be empty.");
+	});
+
+	it("parses the raw header opt-in", () => {
+		expect(parseArgs(["--capture-cookies"]).captureCookies).toBe(true);
 	});
 
 	it("rejects unknown flags", () => {

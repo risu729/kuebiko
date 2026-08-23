@@ -199,6 +199,8 @@ const emitRequestWillBeSent = (
 				referrerPolicy: "strict-origin-when-cross-origin",
 				url: request.url,
 			},
+			// Chrome sets this on the event that follows a hop, never on the first request.
+			redirectHasExtraInfo: redirectResponse !== undefined,
 			requestId: "request-1",
 			timestamp: 1,
 			type: "Document",
@@ -208,7 +210,41 @@ const emitRequestWillBeSent = (
 	);
 };
 
-const emitFinalResponse = (client: FakeClient, url: string): void => {
+const emitRequestExtraInfo = (client: FakeClient, headers: Record<string, string>): void => {
+	client.emit(
+		"Network.requestWillBeSentExtraInfo",
+		{
+			associatedCookies: [],
+			connectTiming: { requestTime: 1 },
+			headers,
+			requestId: "request-1",
+		},
+		"session-1",
+	);
+};
+
+type ResponseExtraInfo = {
+	blockedCookies?: { blockedReasons: string[]; cookieLine: string }[];
+	cookiePartitionKey?: { hasCrossSiteAncestor: boolean; topLevelSite: string };
+	headers: Record<string, string>;
+};
+
+const emitResponseExtraInfo = (client: FakeClient, extra: ResponseExtraInfo): void => {
+	client.emit(
+		"Network.responseReceivedExtraInfo",
+		{
+			blockedCookies: extra.blockedCookies ?? [],
+			cookiePartitionKey: extra.cookiePartitionKey,
+			headers: extra.headers,
+			requestId: "request-1",
+			resourceIPAddressSpace: "Public",
+			statusCode: 200,
+		},
+		"session-1",
+	);
+};
+
+const emitResponseReceived = (client: FakeClient, url: string): void => {
 	client.emit(
 		"Network.responseReceived",
 		{
@@ -228,11 +264,19 @@ const emitFinalResponse = (client: FakeClient, url: string): void => {
 		},
 		"session-1",
 	);
+};
+
+const emitLoadingFinished = (client: FakeClient): void => {
 	client.emit(
 		"Network.loadingFinished",
 		{ encodedDataLength: 123, requestId: "request-1", timestamp: 5 },
 		"session-1",
 	);
+};
+
+const emitFinalResponse = (client: FakeClient, url: string): void => {
+	emitResponseReceived(client, url);
+	emitLoadingFinished(client);
 };
 
 // Sockets are keyed by session and request id, so both are addressable per emit.
@@ -1682,5 +1726,216 @@ describe("CdpResponseLogger", () => {
 			"https://stream.test/prices",
 			undefined,
 		]);
+	});
+
+	it("joins raw headers that arrive before the base event", async () => {
+		const client = new FakeClient();
+		const storage = createStorage();
+		const logger = new CdpResponseLogger(client as never, {
+			captureCookies: true,
+			cdp: "http://127.0.0.1:9222",
+			storage,
+			verbose: false,
+		});
+
+		await logger.start();
+		attachPageTarget(client);
+		await waitForAsyncEvent();
+		emitRequestExtraInfo(client, { cookie: "session=abc" });
+		emitRequestWillBeSent(client, { url: "https://example.test/api" });
+		await waitForAsyncEvent();
+		emitResponseExtraInfo(client, { headers: { "set-cookie": "session=def" } });
+		emitFinalResponse(client, "https://example.test/api");
+		await waitForAsyncEvent();
+
+		expect(storage.metadata[0]).toMatchObject({
+			rawRequestHeaders: { cookie: "session=abc" },
+			rawResponseHeaders: { "set-cookie": "session=def" },
+			// The refined headers stay exactly as they were.
+			requestHeaders: { accept: "text/html" },
+			responseHeaders: { "content-type": "text/html" },
+		});
+	});
+
+	it("joins raw headers that arrive after the base event", async () => {
+		const client = new FakeClient();
+		const storage = createStorage();
+		const logger = new CdpResponseLogger(client as never, {
+			captureCookies: true,
+			cdp: "http://127.0.0.1:9222",
+			storage,
+			verbose: false,
+		});
+
+		await logger.start();
+		attachPageTarget(client);
+		await waitForAsyncEvent();
+		emitRequestWillBeSent(client, { url: "https://example.test/api" });
+		await waitForAsyncEvent();
+		emitRequestExtraInfo(client, { cookie: "session=abc" });
+		emitResponseReceived(client, "https://example.test/api");
+		emitResponseExtraInfo(client, { headers: { "set-cookie": "session=def" } });
+		emitLoadingFinished(client);
+		await waitForAsyncEvent();
+
+		expect(storage.metadata[0]).toMatchObject({
+			rawRequestHeaders: { cookie: "session=abc" },
+			rawResponseHeaders: { "set-cookie": "session=def" },
+		});
+	});
+
+	it("records the cookies a response could not store", async () => {
+		const client = new FakeClient();
+		const storage = createStorage();
+		const logger = new CdpResponseLogger(client as never, {
+			captureCookies: true,
+			cdp: "http://127.0.0.1:9222",
+			storage,
+			verbose: false,
+		});
+
+		await logger.start();
+		attachPageTarget(client);
+		await waitForAsyncEvent();
+		emitRequestWillBeSent(client, { url: "https://example.test/api" });
+		await waitForAsyncEvent();
+		emitResponseExtraInfo(client, {
+			blockedCookies: [
+				{ blockedReasons: ["SameSiteNoneInsecure"], cookieLine: "session=def; SameSite=None" },
+			],
+			cookiePartitionKey: { hasCrossSiteAncestor: false, topLevelSite: "https://example.test" },
+			headers: { "set-cookie": "session=def; SameSite=None" },
+		});
+		emitFinalResponse(client, "https://example.test/api");
+		await waitForAsyncEvent();
+
+		expect(storage.metadata[0]).toMatchObject({
+			blockedCookies: [
+				{ blockedReasons: ["SameSiteNoneInsecure"], cookieLine: "session=def; SameSite=None" },
+			],
+			cookiePartitionKey: { hasCrossSiteAncestor: false, topLevelSite: "https://example.test" },
+		});
+	});
+
+	it("leaves the ExtraInfo events unsubscribed without --capture-cookies", async () => {
+		const client = new FakeClient();
+		const storage = createStorage();
+		const logger = new CdpResponseLogger(client as never, {
+			cdp: "http://127.0.0.1:9222",
+			storage,
+			verbose: false,
+		});
+
+		await logger.start();
+		expect(client.listenerCount("Network.requestWillBeSentExtraInfo")).toBe(0);
+		expect(client.listenerCount("Network.responseReceivedExtraInfo")).toBe(0);
+
+		attachPageTarget(client);
+		await waitForAsyncEvent();
+		emitRequestWillBeSent(client, { url: "https://example.test/api" });
+		await waitForAsyncEvent();
+		emitRequestExtraInfo(client, { cookie: "session=abc" });
+		emitResponseExtraInfo(client, { headers: { "set-cookie": "session=def" } });
+		emitFinalResponse(client, "https://example.test/api");
+		await waitForAsyncEvent();
+
+		expect(storage.metadata[0]?.rawRequestHeaders).toBeUndefined();
+		expect(storage.metadata[0]?.rawResponseHeaders).toBeUndefined();
+	});
+
+	it("gives every redirect hop the raw headers of its own hop", async () => {
+		const client = new FakeClient();
+		const storage = createStorage();
+		const logger = new CdpResponseLogger(client as never, {
+			captureCookies: true,
+			cdp: "http://127.0.0.1:9222",
+			storage,
+			verbose: false,
+		});
+
+		await logger.start();
+		attachPageTarget(client);
+		await waitForAsyncEvent();
+		emitRequestWillBeSent(client, { url: "https://sso.test/authorize" });
+		await waitForAsyncEvent();
+		emitRequestExtraInfo(client, { cookie: "hop=0" });
+		emitResponseExtraInfo(client, { headers: { "set-cookie": "hop0=1" } });
+		emitRequestWillBeSent(client, { url: "https://idp.test/login" }, SSO_TO_IDP);
+		await waitForAsyncEvent();
+		emitRequestExtraInfo(client, { cookie: "hop=1" });
+		emitResponseExtraInfo(client, { headers: { "set-cookie": "hop1=1" } });
+		emitRequestWillBeSent(client, { url: "https://app.test/session" }, IDP_TO_APP);
+		await waitForAsyncEvent();
+		emitRequestExtraInfo(client, { cookie: "hop=2" });
+		emitResponseExtraInfo(client, { headers: { "set-cookie": "final=1" } });
+		emitFinalResponse(client, "https://app.test/session");
+		await waitForAsyncEvent();
+
+		expect(
+			storage.metadata.map((record) => [
+				record.rawRequestHeaders?.["cookie"],
+				record.rawResponseHeaders?.["set-cookie"],
+			]),
+		).toEqual([
+			["hop=0", "hop0=1"],
+			["hop=1", "hop1=1"],
+			["hop=2", "final=1"],
+		]);
+	});
+
+	// The hop is recorded without them rather than crediting them to the next hop.
+	it("drops raw response headers that arrive after their hop was recorded", async () => {
+		const client = new FakeClient();
+		const storage = createStorage();
+		const logger = new CdpResponseLogger(client as never, {
+			captureCookies: true,
+			cdp: "http://127.0.0.1:9222",
+			storage,
+			verbose: false,
+		});
+
+		await logger.start();
+		attachPageTarget(client);
+		await waitForAsyncEvent();
+		emitRequestWillBeSent(client, { url: "https://sso.test/authorize" });
+		await waitForAsyncEvent();
+		emitRequestWillBeSent(client, { url: "https://idp.test/login" }, SSO_TO_IDP);
+		await waitForAsyncEvent();
+		emitResponseExtraInfo(client, { headers: { "set-cookie": "hop0=1" } });
+		emitResponseExtraInfo(client, { headers: { "set-cookie": "hop1=1" } });
+		emitFinalResponse(client, "https://idp.test/login");
+		await waitForAsyncEvent();
+
+		expect(storage.metadata.map((record) => record.rawResponseHeaders?.["set-cookie"])).toEqual([
+			undefined,
+			"hop1=1",
+		]);
+	});
+
+	it("drops buffered raw headers when the target detaches", async () => {
+		const client = new FakeClient();
+		const storage = createStorage();
+		const logger = new CdpResponseLogger(client as never, {
+			captureCookies: true,
+			cdp: "http://127.0.0.1:9222",
+			storage,
+			verbose: false,
+		});
+
+		await logger.start();
+		attachPageTarget(client);
+		await waitForAsyncEvent();
+		// No base event ever claims this one.
+		emitRequestExtraInfo(client, { cookie: "stale=1" });
+		client.emit("Target.detachedFromTarget", { sessionId: "session-1", targetId: "target-1" });
+		await waitForAsyncEvent();
+		attachPageTarget(client);
+		await waitForAsyncEvent();
+		emitRequestWillBeSent(client, { url: "https://example.test/api" });
+		await waitForAsyncEvent();
+		emitFinalResponse(client, "https://example.test/api");
+		await waitForAsyncEvent();
+
+		expect(storage.metadata[0]?.rawRequestHeaders).toBeUndefined();
 	});
 });

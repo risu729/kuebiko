@@ -4,6 +4,8 @@ import { join } from "node:path";
 type CapturedApiRecord = {
 	bodyFile: string;
 	bodySaved?: boolean | undefined;
+	rawRequestHeaders?: Record<string, string> | undefined;
+	rawResponseHeaders?: Record<string, string> | undefined;
 	requestBodyFile: string;
 	requestBodySaved?: boolean | undefined;
 	requestMethod?: string | undefined;
@@ -48,6 +50,16 @@ const assertCapturedApi = (
 		source: "cdp-e2e",
 	});
 	expect(JSON.parse(bodies.requestBody)).toEqual({ hello: "from-page" });
+};
+
+// Raw headers keep the casing they had on the wire, which varies by protocol.
+const rawHeader = (headers: Record<string, string> | undefined, name: string): string =>
+	Object.entries(headers ?? {}).find(([key]) => key.toLowerCase() === name)?.[1] ?? "";
+
+// Only the ExtraInfo events carry Cookie and Set-Cookie, and only with --capture-cookies.
+const assertCapturedRawHeaders = (metadata: CapturedApiRecord): void => {
+	expect(rawHeader(metadata.rawRequestHeaders, "cookie")).toContain("e2e=1");
+	expect(rawHeader(metadata.rawResponseHeaders, "set-cookie")).toContain("e2e-response=1");
 };
 
 const assertCapturedWebSocketFrames = (
@@ -107,6 +119,7 @@ const assertNetLog = (netLog: NetLogRecord): void => {
 export {
 	assertCapturedApi,
 	assertCapturedEventSourceMessages,
+	assertCapturedRawHeaders,
 	assertCapturedWebSocketFrames,
 	assertNetLog,
 	assertRunSummary,

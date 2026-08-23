@@ -49,6 +49,10 @@ const cliArgs = {
 		type: "string",
 		valueHint: "dir",
 	},
+	"capture-cookies": {
+		description: "Also record raw wire headers, including live cookies.",
+		type: "boolean",
+	},
 	config: {
 		description: "TS/JS logger config with plugin modules.",
 		type: "string",
@@ -148,6 +152,7 @@ const CliOptionsSchema: z.ZodType<CliOptions> = z
 		browserCommand: optionalNonEmptyString,
 		browserPath: optionalNonEmptyString,
 		browserProfile: optionalNonEmptyString,
+		captureCookies: z.boolean(),
 		config: optionalNonEmptyString,
 		cdp: z.url(),
 		cdpPort: optionalNonEmptyString.transform((value) => {
@@ -219,6 +224,7 @@ const normalizeArgs = (args: LoggerArgs): CliOptions =>
 		browserCommand: args["browser-command"],
 		browserPath: args["browser-path"],
 		browserProfile: args["browser-profile"],
+		captureCookies: args["capture-cookies"] ?? false,
 		config: args.config,
 		cdp: args.cdp,
 		cdpPort: args["cdp-port"],
@@ -242,18 +248,13 @@ const createParseOption = (definition: CliArgDefinition): ParseOption => ({
 	type: definition.type,
 });
 
-const createParseOptions = (): Record<string, ParseOption> => {
-	const options: Record<string, ParseOption> = {
-		help: { short: "h", type: "boolean" },
-		version: { short: "v", type: "boolean" },
-	};
-
-	for (const [name, definition] of Object.entries(cliArgs)) {
-		options[name] = createParseOption(definition);
-	}
-
-	return options;
-};
+const createParseOptions = (): Record<string, ParseOption> => ({
+	help: { short: "h", type: "boolean" },
+	version: { short: "v", type: "boolean" },
+	...Object.fromEntries(
+		Object.entries(cliArgs).map(([name, definition]) => [name, createParseOption(definition)]),
+	),
+});
 
 const parseRawArgs = (argv: string[]): LoggerArgs => {
 	const { values } = parseNodeArgs({

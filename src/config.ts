@@ -1,6 +1,17 @@
 import { z } from "zod";
 
-import type { LoggerConfig } from "./types";
+// The config shapes live next to their only validator, as RunInfo does in storage.ts.
+type LoggerPluginConfig = {
+	enabled?: boolean | undefined;
+	module: string;
+	options?: unknown;
+	queueSize?: number | undefined;
+	timeoutMs?: number | undefined;
+};
+
+type LoggerConfig = {
+	plugins?: LoggerPluginConfig[] | undefined;
+};
 
 const PluginConfigSchema = z
 	.object({
@@ -27,3 +38,4 @@ const defineConfig = <const T extends LoggerConfig>(config: T): T => {
 };
 
 export { defineConfig, parseLoggerConfig };
+export type { LoggerConfig, LoggerPluginConfig };

@@ -13,6 +13,7 @@ import type {
 	CompletedResponseMetadata,
 	ErrorRecord,
 	EventSourceMessageRecord,
+	ExtraInfoState,
 	RequestState,
 	RequestBodySaveResult,
 	RequestBodySource,
@@ -26,7 +27,9 @@ type TerminableSocket = { terminate?: () => void };
 type TargetAttachedEvent = Protocol.Target.AttachedToTargetEvent;
 type TargetDetachedEvent = Protocol.Target.DetachedFromTargetEvent;
 type RequestWillBeSentEvent = Protocol.Network.RequestWillBeSentEvent;
+type RequestWillBeSentExtraInfoEvent = Protocol.Network.RequestWillBeSentExtraInfoEvent;
 type ResponseReceivedEvent = Protocol.Network.ResponseReceivedEvent;
+type ResponseReceivedExtraInfoEvent = Protocol.Network.ResponseReceivedExtraInfoEvent;
 type LoadingFinishedEvent = Protocol.Network.LoadingFinishedEvent;
 type LoadingFailedEvent = Protocol.Network.LoadingFailedEvent;
 type WebSocketCreatedEvent = Protocol.Network.WebSocketCreatedEvent;
@@ -41,6 +44,9 @@ type CompletedBodyResult = Omit<ResponseBodyResult, "skipped">;
 type WebSocketFrameEvent =
 	| Protocol.Network.WebSocketFrameReceivedEvent
 	| Protocol.Network.WebSocketFrameSentEvent;
+// Raw headers waiting for the base event they belong to.
+// The count is of responseReceivedExtraInfo events owed to hops already recorded.
+type PendingExtraInfo = ExtraInfoState & { orphanedResponses: number };
 
 const TARGET_TYPES = new Set(["page", "iframe", "worker", "shared_worker", "service_worker"]);
 
@@ -51,6 +57,11 @@ const NETWORK_BUFFER_OPTIONS = {
 
 const CDP_CLOSE_TIMEOUT_MS = 5_000;
 const CDP_DRAIN_TIMEOUT_MS = 1_000;
+
+// A WebSocket handshake gets ExtraInfo events but never a requestWillBeSent.
+// Those entries are only cleaned up by the socket closing or the target detaching.
+// The cap keeps a long capture bounded even when neither happens.
+const MAX_PENDING_EXTRA_INFO = 1_000;
 
 const HOP_POST_DATA_ERROR =
 	"Redirect hop post data was not inlined; Network.getRequestPostData answers for the request now in flight.";
@@ -88,6 +99,26 @@ const requestBodyErrorEvent = (source: RequestBodySource | undefined): string =>
 const responseBodyErrorEvent = (skipped: boolean | undefined): string =>
 	skipped === true ? "Network.getResponseBody.skipped" : "Network.getResponseBody";
 
+// Empty cookie diagnostics are the normal case, and JSON.stringify drops undefined.
+// A response that blocked nothing keeps the record shape it had before the flag.
+const applyResponseExtraInfo = (
+	target: ExtraInfoState,
+	event: ResponseReceivedExtraInfoEvent,
+): void => {
+	target.rawResponseHeaders = event.headers;
+	if (event.blockedCookies.length > 0) {
+		target.blockedCookies = event.blockedCookies;
+	}
+	if (event.cookiePartitionKey) {
+		target.cookiePartitionKey = event.cookiePartitionKey;
+	}
+};
+
+const hasBufferedExtraInfo = (pending: PendingExtraInfo): boolean =>
+	pending.orphanedResponses > 0 ||
+	pending.rawRequestHeaders !== undefined ||
+	pending.rawResponseHeaders !== undefined;
+
 const createErrorRecord = (
 	event: string,
 	session: SessionInfo | undefined,
@@ -115,10 +146,12 @@ const createCompletedMetadata = (
 
 	return {
 		base64Encoded: bodyResult.base64Encoded,
+		blockedCookies: state.blockedCookies,
 		bodyFile: bodyResult.bodyFile,
 		bodyLength: bodyResult.bodyLength,
 		bodySaved: bodyResult.bodySaved,
 		bodySha256: bodyResult.bodySha256,
+		cookiePartitionKey: state.cookiePartitionKey,
 		encodedDataLength: finished.encodedDataLength,
 		error: bodyResult.error,
 		fromDiskCache: response?.fromDiskCache,
@@ -127,6 +160,9 @@ const createCompletedMetadata = (
 		loaderId: state.loaderId,
 		mimeType: response?.mimeType,
 		protocol: response?.protocol,
+		// Recorded next to the refined headers, never in place of them.
+		rawRequestHeaders: state.rawRequestHeaders,
+		rawResponseHeaders: state.rawResponseHeaders,
 		redirectIndex: state.redirectIndex,
 		remoteIPAddress: response?.remoteIPAddress,
 		remotePort: response?.remotePort,
@@ -172,6 +208,9 @@ const headerValue = (
 
 class CdpResponseLogger {
 	readonly #client: CdpClient;
+	// Raw headers with no request state to live on yet, keyed like #requests.
+	// Only populated with --capture-cookies, since nothing else subscribes ExtraInfo.
+	readonly #extraInfo = new Map<string, PendingExtraInfo>();
 	// Redirect hop writes in flight, keyed like #requests so a chain appends in order.
 	readonly #hopWrites = new Map<string, Promise<void>>();
 	readonly #options: StartLoggerOptions;
@@ -231,6 +270,24 @@ class CdpResponseLogger {
 		this.#client.on("Network.responseReceived", (event, sessionId) => {
 			this.#handleResponseReceived(event as ResponseReceivedEvent, sessionId);
 		});
+		// The ExtraInfo events are the only source of Cookie and Set-Cookie headers.
+		// A run without --capture-cookies never subscribes them and buffers nothing.
+		// The chrome-remote-interface types bundle an older devtools-protocol copy.
+		// Its cookie shapes no longer line up with the pinned one, hence the widening.
+		if (this.#options.captureCookies) {
+			this.#client.on("Network.requestWillBeSentExtraInfo", (event, sessionId) => {
+				this.#handleRequestExtraInfo(
+					event as unknown as RequestWillBeSentExtraInfoEvent,
+					sessionId,
+				);
+			});
+			this.#client.on("Network.responseReceivedExtraInfo", (event, sessionId) => {
+				this.#handleResponseExtraInfo(
+					event as unknown as ResponseReceivedExtraInfoEvent,
+					sessionId,
+				);
+			});
+		}
 		this.#client.on("Network.loadingFinished", (event, sessionId) => {
 			this.#trackEvent(this.#handleLoadingFinished(event as LoadingFinishedEvent, sessionId));
 		});
@@ -370,10 +427,14 @@ class CdpResponseLogger {
 			}
 		}
 
-		const socketPrefix = `${event.sessionId}:`;
-		for (const key of this.#webSockets.keys()) {
-			if (key.startsWith(socketPrefix)) {
-				this.#webSockets.delete(key);
+		// Neither map is keyed by session.
+		// Buffered ExtraInfo whose base event never arrives would outlive its session.
+		const sessionPrefix = `${event.sessionId}:`;
+		for (const keyed of [this.#webSockets, this.#extraInfo]) {
+			for (const key of keyed.keys()) {
+				if (key.startsWith(sessionPrefix)) {
+					keyed.delete(key);
+				}
 			}
 		}
 
@@ -403,6 +464,8 @@ class CdpResponseLogger {
 		// Replace the state first so later events belong to the hop now in flight.
 		// The hop it replaced is finalized below.
 		this.#requests.set(key, {
+			// ExtraInfo that ran ahead of this event was waiting for exactly this hop.
+			...this.#takeExtraInfo(key),
 			frameId: event.frameId,
 			hasPostData: event.request.hasPostData,
 			initiator: event.initiator,
@@ -419,6 +482,20 @@ class CdpResponseLogger {
 			session,
 			type: event.type,
 		});
+
+		// Every hop of a chain gets its own pair of ExtraInfo events under one requestId.
+		// A hop's responseReceivedExtraInfo usually arrives before the next base event.
+		// Each hop therefore keeps the raw headers of its own response.
+		// A late one instead arrives once the hop record has already been written.
+		// Dropping it beats putting one hop's Set-Cookie on the hop that follows.
+		if (
+			this.#options.captureCookies &&
+			redirectResponse !== undefined &&
+			event.redirectHasExtraInfo &&
+			previous?.rawResponseHeaders === undefined
+		) {
+			this.#pendingExtraInfo(key).orphanedResponses += 1;
+		}
 
 		// Without the replaced state there is no request to attribute the hop to.
 		// That happens when the logger attaches in the middle of a chain.
@@ -504,12 +581,92 @@ class CdpResponseLogger {
 		});
 	}
 
+	#pendingExtraInfo(key: string): PendingExtraInfo {
+		const existing = this.#extraInfo.get(key);
+		if (existing) {
+			return existing;
+		}
+
+		// Insertion order makes the first key the oldest buffered entry.
+		if (this.#extraInfo.size >= MAX_PENDING_EXTRA_INFO) {
+			const oldest = this.#extraInfo.keys().next();
+			if (!oldest.done) {
+				this.#extraInfo.delete(oldest.value);
+			}
+		}
+
+		const created: PendingExtraInfo = { orphanedResponses: 0 };
+		this.#extraInfo.set(key, created);
+		return created;
+	}
+
+	// The base event claims what was buffered for it; the orphan count is not its to take.
+	#takeExtraInfo(key: string): ExtraInfoState {
+		const pending = this.#extraInfo.get(key);
+		if (!pending) {
+			return {};
+		}
+
+		const { orphanedResponses, ...buffered } = pending;
+		if (orphanedResponses > 0) {
+			this.#extraInfo.set(key, { orphanedResponses });
+		} else {
+			this.#extraInfo.delete(key);
+		}
+
+		return buffered;
+	}
+
+	// Raw request headers belong to the hop in flight while its slot is still empty.
+	// A filled slot means the event ran ahead of the next hop's base event.
+	// It then waits in the buffer for that hop instead.
+	#handleRequestExtraInfo(event: RequestWillBeSentExtraInfoEvent, sessionId?: string): void {
+		if (!sessionId) {
+			return;
+		}
+		const key = requestKey(sessionId, event.requestId);
+		const state = this.#requests.get(key);
+		if (state && state.rawRequestHeaders === undefined) {
+			state.rawRequestHeaders = event.headers;
+			return;
+		}
+
+		this.#pendingExtraInfo(key).rawRequestHeaders = event.headers;
+	}
+
+	#handleResponseExtraInfo(event: ResponseReceivedExtraInfoEvent, sessionId?: string): void {
+		if (!sessionId) {
+			return;
+		}
+		const key = requestKey(sessionId, event.requestId);
+		const pending = this.#extraInfo.get(key);
+		// The hop this belongs to was already recorded without it.
+		// State under this requestId is the next hop, whose own event is still to come.
+		if (pending && pending.orphanedResponses > 0) {
+			pending.orphanedResponses -= 1;
+			if (!hasBufferedExtraInfo(pending)) {
+				this.#extraInfo.delete(key);
+			}
+			return;
+		}
+
+		const state = this.#requests.get(key);
+		if (state && state.rawResponseHeaders === undefined) {
+			applyResponseExtraInfo(state, event);
+			return;
+		}
+
+		applyResponseExtraInfo(this.#pendingExtraInfo(key), event);
+	}
+
 	async #handleLoadingFinished(event: LoadingFinishedEvent, sessionId?: string): Promise<void> {
 		if (!sessionId) {
 			return;
 		}
 		const key = requestKey(sessionId, event.requestId);
 		const state = this.#requests.get(key);
+		// The request is over either way, so nothing buffered under it can still be joined.
+		this.#extraInfo.delete(key);
 		if (!state) {
 			return;
 		}
@@ -666,6 +823,7 @@ class CdpResponseLogger {
 		const hopWrites = this.#hopWrites.get(key);
 		this.#requests.delete(key);
 		this.#hopWrites.delete(key);
+		this.#extraInfo.delete(key);
 
 		// Hops that already completed belong in the capture before the failure.
 		await hopWrites;
@@ -693,7 +851,10 @@ class CdpResponseLogger {
 		if (!sessionId) {
 			return;
 		}
-		this.#webSockets.delete(requestKey(sessionId, event.requestId));
+		const key = requestKey(sessionId, event.requestId);
+		this.#webSockets.delete(key);
+		// A handshake buffers ExtraInfo that no requestWillBeSent will ever claim.
+		this.#extraInfo.delete(key);
 	}
 
 	async #handleWebSocketFrame(

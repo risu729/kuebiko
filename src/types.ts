@@ -7,6 +7,7 @@ type CliOptions = {
 	browserCommand?: string | undefined;
 	browserPath?: string | undefined;
 	browserProfile?: string | undefined;
+	captureCookies: boolean;
 	config?: string | undefined;
 	cdp: string;
 	cdpPort: number;
@@ -31,7 +32,17 @@ type SessionInfo = {
 	targetUrl?: string | undefined;
 };
 
-type RequestState = {
+// Raw wire headers and cookie diagnostics, only collected with --capture-cookies.
+// Both ExtraInfo events can arrive before or after the base event they belong to.
+// The logger therefore buffers this same shape while waiting for that base event.
+type ExtraInfoState = {
+	blockedCookies?: Protocol.Network.BlockedSetCookieWithReason[] | undefined;
+	cookiePartitionKey?: Protocol.Network.CookiePartitionKey | undefined;
+	rawRequestHeaders?: Protocol.Network.Headers | undefined;
+	rawResponseHeaders?: Protocol.Network.Headers | undefined;
+};
+
+type RequestState = ExtraInfoState & {
 	frameId?: string | undefined;
 	hasPostData?: boolean | undefined;
 	initiator?: Protocol.Network.Initiator | undefined;
@@ -64,6 +75,8 @@ type RequestBodySource = "requestWillBeSent" | "getRequestPostData";
 type RequestBodySaveResult = BodySaveResult & { source: RequestBodySource };
 
 // Carries the response body result verbatim; only the skip flag stays internal.
+// The raw header fields are written next to the refined ones, never in place of them.
+// They stay absent unless --capture-cookies collected them.
 type CompletedResponseMetadata = Omit<BodySaveResult, "skipped"> & {
 	base64Encoded?: boolean | undefined;
 	encodedDataLength?: number | undefined;
@@ -99,7 +112,7 @@ type CompletedResponseMetadata = Omit<BodySaveResult, "skipped"> & {
 	targetUrl?: string | undefined;
 	type?: string | undefined;
 	url?: string | undefined;
-};
+} & ExtraInfoState;
 
 type ErrorRecord = {
 	error: string;
@@ -226,18 +239,6 @@ type LoggerPlugin = {
 	version: string;
 };
 
-type LoggerPluginConfig = {
-	enabled?: boolean | undefined;
-	module: string;
-	options?: unknown;
-	queueSize?: number | undefined;
-	timeoutMs?: number | undefined;
-};
-
-type LoggerConfig = {
-	plugins?: LoggerPluginConfig[] | undefined;
-};
-
 type HookPublisher = {
 	close: () => Promise<void>;
 	publish: (event: HookEvent) => Promise<void>;
@@ -259,6 +260,8 @@ type LoggerStorage = {
 };
 
 type StartLoggerOptions = {
+	// Subscribes the ExtraInfo events, which is the only way raw cookies are recorded.
+	captureCookies?: boolean | undefined;
 	cdp: string;
 	exclude?: RegExp | undefined;
 	hooks?: HookPublisher | undefined;
@@ -276,12 +279,11 @@ export type {
 	ErrorRecord,
 	EventSourceMessageHookEvent,
 	EventSourceMessageRecord,
+	ExtraInfoState,
 	HookEvent,
 	HookEventName,
 	HookPublisher,
-	LoggerConfig,
 	LoggerPlugin,
-	LoggerPluginConfig,
 	LoggerStorage,
 	MaybePromise,
 	PluginContext,
