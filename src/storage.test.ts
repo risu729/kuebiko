@@ -456,6 +456,31 @@ describe("createStorage", () => {
 		expect(runInfo.createdAt).toBe("2026-07-06T12:34:56Z");
 	});
 
+	// A capture directory has to say how complete it is: without the filters and the body
+	// Cap, nothing distinguishes a site that asked for nothing else from a filtered run.
+	it("writes the filters, the body cap, and the NetLog flag into run.json", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "kuebiko-"));
+		const storage = await createStorage(
+			dir,
+			"http://127.0.0.1:9222",
+			{
+				exclude: "tracking",
+				include: "^https://api\\.",
+				maxBodyBytes: 2048,
+				netlog: true,
+			},
+			"2026-07-06T12:34:56Z",
+		);
+		await storage.close();
+
+		const runInfo = (await Bun.file(join(dir, "run.json")).json()) as RunInfo;
+
+		expect(runInfo.exclude).toBe("tracking");
+		expect(runInfo.include).toBe("^https://api\\.");
+		expect(runInfo.maxBodyBytes).toBe(2048);
+		expect(runInfo.netlog).toBe(true);
+	});
+
 	it("omits labels and note but always records the capture flags in run.json", async () => {
 		for (const annotations of [{}, { labels: [], note: "  " }]) {
 			const dir = await mkdtemp(join(tmpdir(), "kuebiko-"));
@@ -476,6 +501,11 @@ describe("createStorage", () => {
 			expect(runInfo["captureDownloads"]).toBe(false);
 			expect(runInfo["snapshotStorage"]).toBe(false);
 			expect(runInfo["streamBodies"]).toBe(false);
+			expect(runInfo["netlog"]).toBe(false);
+			// An unfiltered run leaves them out rather than recording a filter it never had.
+			expect(Object.hasOwn(runInfo, "include")).toBe(false);
+			expect(Object.hasOwn(runInfo, "exclude")).toBe(false);
+			expect(Object.hasOwn(runInfo, "maxBodyBytes")).toBe(false);
 		}
 	});
 

@@ -3,6 +3,7 @@ import { describe, expect, it } from "bun:test";
 import {
 	DEFAULT_CDP_ENDPOINT,
 	awaitShutdown,
+	getRunAnnotations,
 	parseArgs,
 	renderHelp,
 	stopRun,
@@ -192,6 +193,37 @@ describe("parseArgs", () => {
 		expect(described.length).toBeGreaterThan(0);
 		expect(columns.size).toBe(1);
 		expect(columns.has(undefined)).toBe(false);
+	});
+});
+
+describe("getRunAnnotations", () => {
+	// A filtered run used to write a run.json byte-identical to an unfiltered one, so
+	// Nothing in the directory said whether what is missing was ever requested.
+	it("records the flags that decide how complete the capture is", () => {
+		const options = parseArgs([
+			"--include",
+			"^https://api\\.",
+			"--exclude",
+			"tracking",
+			"--max-body-bytes",
+			"2048",
+			"--launch-browser",
+			"--browser-command",
+			"chrome",
+		]);
+
+		expect(getRunAnnotations(options)).toMatchObject({
+			exclude: "tracking",
+			// RegExp.source escapes the separators, and it still recompiles as written.
+			include: "^https:\\/\\/api\\.",
+			maxBodyBytes: 2_048,
+			netlog: true,
+		});
+	});
+
+	// Only launch mode writes one, so the default --netlog alone must not claim it did.
+	it("reports no NetLog for an attach-mode run", () => {
+		expect(getRunAnnotations(parseArgs([]))).toMatchObject({ netlog: false });
 	});
 });
 
