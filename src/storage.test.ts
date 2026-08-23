@@ -116,6 +116,86 @@ describe("createStorage", () => {
 		await expect(readdir(join(dir, "requests"))).resolves.toHaveLength(1);
 	});
 
+	// The browser names a download after its GUID, so only the record maps it back.
+	it("hashes a completed download and records where it was saved", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "kuebiko-"));
+		const storage = await createStorage(
+			dir,
+			"http://127.0.0.1:9222",
+			{ captureDownloads: true },
+			"2026-07-06T12:34:56Z",
+		);
+		const bytes = Buffer.from("%PDF-1.7 statement");
+		await Bun.write(join(dir, "downloads", "download-1"), bytes);
+
+		const record = await storage.recordDownload({
+			guid: "download-1",
+			receivedBytes: bytes.byteLength,
+			state: "completed",
+			suggestedFilename: "statement.pdf",
+			timestamp: "2026-07-06T12:34:57Z",
+			totalBytes: bytes.byteLength,
+			url: "https://bank.test/statements/2026-07.pdf",
+		});
+		await storage.close();
+
+		expect(record).toMatchObject({
+			file: join("downloads", "download-1"),
+			sha256: sha256(bytes),
+			state: "completed",
+			suggestedFilename: "statement.pdf",
+		});
+		const downloads = await Bun.file(join(dir, "downloads.ndjson")).text();
+		expect(downloads.trim()).toContain(sha256(bytes));
+		expect(storage.summary.render()).toContain("downloads=1");
+	});
+
+	it("records a canceled download and a download whose file is gone as losses", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "kuebiko-"));
+		const storage = await createStorage(
+			dir,
+			"http://127.0.0.1:9222",
+			{ captureDownloads: true },
+			"2026-07-06T12:34:56Z",
+		);
+
+		const canceled = await storage.recordDownload({
+			guid: "download-1",
+			state: "canceled",
+			timestamp: "2026-07-06T12:34:57Z",
+		});
+		// Nothing was ever written under this GUID, which must not take the capture down.
+		const missing = await storage.recordDownload({
+			guid: "download-2",
+			state: "completed",
+			timestamp: "2026-07-06T12:34:58Z",
+		});
+		await storage.close();
+
+		expect(canceled.error).toBeUndefined();
+		expect(canceled.file).toBeUndefined();
+		expect(missing.file).toBeUndefined();
+		expect(missing.sha256).toBeUndefined();
+		expect(missing.error).toBeDefined();
+		// Both are still recorded, so neither loss is silent.
+		expect(storage.summary.render()).toContain("downloads=2");
+	});
+
+	it("creates the download directory only when downloads are captured", async () => {
+		const withFlag = await mkdtemp(join(tmpdir(), "kuebiko-"));
+		const withoutFlag = await mkdtemp(join(tmpdir(), "kuebiko-"));
+		await createStorage(
+			withFlag,
+			"http://127.0.0.1:9222",
+			{ captureDownloads: true },
+			"2026-07-06T12:34:56Z",
+		);
+		await createStorage(withoutFlag, "http://127.0.0.1:9222", {}, "2026-07-06T12:34:56Z");
+
+		await expect(readdir(join(withFlag, "downloads"))).resolves.toEqual([]);
+		await expect(readdir(join(withoutFlag, "downloads"))).rejects.toThrow();
+	});
+
 	it("tracks saved bodies and errors in the run summary", async () => {
 		const dir = await mkdtemp(join(tmpdir(), "kuebiko-"));
 		const storage = await createStorage(dir, "http://127.0.0.1:9222", {}, "2026-07-06T12:34:56Z");
@@ -153,7 +233,8 @@ describe("createStorage", () => {
 
 		expect(storage.summary.render().split("\n")).toEqual([
 			"summary responses=1 response_bytes=11 requests=1 request_bytes=5",
-			"summary websocket_frames=1 eventsource_messages=1 redirects=0 errors=1",
+			"summary websocket_frames=1 eventsource_messages=1 downloads=0 redirects=0",
+			"summary errors=1",
 			"summary_errors host=example.test total=1 Network.getResponseBody=1",
 		]);
 	});
@@ -183,7 +264,8 @@ describe("createStorage", () => {
 
 		expect(storage.summary.render().split("\n")).toEqual([
 			"summary responses=0 response_bytes=0 requests=0 request_bytes=0",
-			"summary websocket_frames=0 eventsource_messages=0 redirects=1 errors=0",
+			"summary websocket_frames=0 eventsource_messages=0 downloads=0 redirects=1",
+			"summary errors=0",
 		]);
 	});
 
@@ -250,6 +332,7 @@ describe("createStorage", () => {
 			"http://127.0.0.1:9222",
 			{
 				captureCookies: true,
+				captureDownloads: true,
 				labels: ["account-a", "billing"],
 				note: "manual sweep",
 				streamBodies: true,
@@ -264,6 +347,7 @@ describe("createStorage", () => {
 		expect(runInfo.note).toBe("manual sweep");
 		expect(runInfo.captureCookies).toBe(true);
 		expect(runInfo.streamBodies).toBe(true);
+		expect(runInfo.captureDownloads).toBe(true);
 		expect(runInfo.createdAt).toBe("2026-07-06T12:34:56Z");
 	});
 
@@ -284,6 +368,7 @@ describe("createStorage", () => {
 			expect(Object.hasOwn(runInfo, "note")).toBe(false);
 			// Plain booleans, so they stay in run.json even when the flags are off.
 			expect(runInfo["captureCookies"]).toBe(false);
+			expect(runInfo["captureDownloads"]).toBe(false);
 			expect(runInfo["streamBodies"]).toBe(false);
 		}
 	});

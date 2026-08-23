@@ -3,6 +3,7 @@ import type { ErrorRecord } from "./types";
 type EventCounts = Map<string, number>;
 
 type CaptureSummary = {
+	recordDownload: () => void;
 	recordError: (record: ErrorRecord) => void;
 	recordEventSourceMessage: () => void;
 	recordRedirectHop: () => void;
@@ -72,10 +73,31 @@ const renderHostLines = (errorsByHost: Map<string, EventCounts>): string[] => {
 	return [...lines, `summary_errors (${remaining.length} more hosts, ${remainingErrors} errors)`];
 };
 
+// One tally keeps the counters together as more record kinds are captured.
+type RecordCounts = {
+	downloads: number;
+	errors: number;
+	eventSourceMessages: number;
+	redirectHops: number;
+	requestBodies: number;
+	requestBytes: number;
+	responseBodies: number;
+	responseBytes: number;
+	webSocketFrames: number;
+};
+
+// Saved bodies first, then the records that have no body of their own.
+// The error total comes last, heading the per-host breakdown printed below it.
+const renderTotals = (counts: RecordCounts): string[] => [
+	`summary responses=${counts.responseBodies} response_bytes=${counts.responseBytes} requests=${counts.requestBodies} request_bytes=${counts.requestBytes}`,
+	`summary websocket_frames=${counts.webSocketFrames} eventsource_messages=${counts.eventSourceMessages} downloads=${counts.downloads} redirects=${counts.redirectHops}`,
+	`summary errors=${counts.errors}`,
+];
+
 const createCaptureSummary = (): CaptureSummary => {
 	const errorsByHost = new Map<string, EventCounts>();
-	// One tally keeps the counters together as more record kinds are captured.
-	const counts = {
+	const counts: RecordCounts = {
+		downloads: 0,
 		errors: 0,
 		eventSourceMessages: 0,
 		redirectHops: 0,
@@ -86,12 +108,11 @@ const createCaptureSummary = (): CaptureSummary => {
 		webSocketFrames: 0,
 	};
 
-	const renderTotals = (): string[] => [
-		`summary responses=${counts.responseBodies} response_bytes=${counts.responseBytes} requests=${counts.requestBodies} request_bytes=${counts.requestBytes}`,
-		`summary websocket_frames=${counts.webSocketFrames} eventsource_messages=${counts.eventSourceMessages} redirects=${counts.redirectHops} errors=${counts.errors}`,
-	];
-
 	return {
+		// Every recorded download counts, canceled ones included: the record says which.
+		recordDownload: (): void => {
+			counts.downloads += 1;
+		},
 		recordError: (record: ErrorRecord): void => {
 			counts.errors += 1;
 			const bucket = errorBucket(record);
@@ -118,7 +139,7 @@ const createCaptureSummary = (): CaptureSummary => {
 		recordWebSocketFrame: (): void => {
 			counts.webSocketFrames += 1;
 		},
-		render: (): string => [...renderTotals(), ...renderHostLines(errorsByHost)].join("\n"),
+		render: (): string => [...renderTotals(counts), ...renderHostLines(errorsByHost)].join("\n"),
 	};
 };
 

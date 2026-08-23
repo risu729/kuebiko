@@ -4,5 +4,7 @@ declare const KUEBIKO_BUILD_VERSION: string;
 const TOOL_VERSION =
 	typeof KUEBIKO_BUILD_VERSION === "undefined" ? "0.0.0-development" : KUEBIKO_BUILD_VERSION;
 const READY_MESSAGE = `${TOOL_NAME} running; press Ctrl-C to stop`;
+// Where the browser writes downloads, and where storage looks for them afterwards.
+const DOWNLOADS_DIRECTORY = "downloads";
 
-export { DEFAULT_CDP_ENDPOINT, READY_MESSAGE, TOOL_NAME, TOOL_VERSION };
+export { DEFAULT_CDP_ENDPOINT, DOWNLOADS_DIRECTORY, READY_MESSAGE, TOOL_NAME, TOOL_VERSION };

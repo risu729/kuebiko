@@ -1,6 +1,8 @@
-// The page under capture drives one request/response pair, one WebSocket, and one
-// Server-Sent Events stream, so a run exercises every record file the logger writes.
-// It sets a cookie first so the request it makes carries one over the wire.
+// The page under capture drives one request/response pair, one WebSocket, one
+// Server-Sent Events stream, and one download.
+// A run therefore exercises every record file the logger writes.
+// A cookie is set first so the request the page makes carries one over the wire.
+// The download starts from a link click, which is what a real export button does.
 const PAGE_HTML = `<!doctype html>
 <meta charset="utf-8">
 <script>
@@ -13,7 +15,16 @@ void fetch("/api/data", {
 const socket = new WebSocket("ws://" + location.host + "/socket");
 socket.onopen = () => socket.send("hello-from-page");
 const events = new EventSource("/events");
+addEventListener("load", () => {
+  const link = document.createElement("a");
+  link.href = "/statement.csv";
+  link.download = "statement.csv";
+  document.body.append(link);
+  link.click();
+});
 </script>`;
+
+const DOWNLOAD_CSV = "date,amount\n2026-07-06,12.34\n";
 
 // The stream is never closed, so it behaves like a real SSE endpoint:
 // Network.loadingFinished never fires and only the message events carry the payloads.
@@ -34,6 +45,15 @@ const eventStreamResponse = (): Response =>
 		},
 	);
 
+// Content-Disposition is what turns the link click into a browser download.
+const downloadResponse = (): Response =>
+	new Response(DOWNLOAD_CSV, {
+		headers: {
+			"content-disposition": 'attachment; filename="statement.csv"',
+			"content-type": "text/csv",
+		},
+	});
+
 const startFixtureServer = (): ReturnType<typeof Bun.serve> =>
 	Bun.serve({
 		fetch: async (request, server) => {
@@ -46,6 +66,10 @@ const startFixtureServer = (): ReturnType<typeof Bun.serve> =>
 				return server.upgrade(request, { data: undefined })
 					? undefined
 					: new Response("upgrade failed", { status: 400 });
+			}
+
+			if (url.pathname === "/statement.csv") {
+				return downloadResponse();
 			}
 
 			if (url.pathname === "/api/data") {
@@ -78,3 +102,4 @@ const startFixtureServer = (): ReturnType<typeof Bun.serve> =>
 	});
 
 export default startFixtureServer;
+export { DOWNLOAD_CSV };

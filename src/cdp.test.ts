@@ -1,12 +1,14 @@
 import { describe, expect, it, mock } from "bun:test";
 import type { Mock } from "bun:test";
 import { EventEmitter } from "node:events";
+import { resolve } from "node:path";
 
 import type { Protocol } from "devtools-protocol";
 
 import { CdpResponseLogger, NETWORK_BUFFER_OPTIONS, createCompletedMetadata } from "./cdp";
 import type {
 	CompletedResponseMetadata,
+	DownloadRecord,
 	ErrorRecord,
 	EventSourceMessageRecord,
 	HookEvent,
@@ -18,6 +20,10 @@ import type {
 } from "./types";
 
 class FakeClient extends EventEmitter {
+	Browser = {
+		close: mock(() => Promise.resolve()),
+	};
+
 	Network = {
 		enable: mock(() => Promise.resolve()),
 		getRequestPostData: mock(() =>
@@ -47,18 +53,21 @@ class FakeClient extends EventEmitter {
 }
 
 const createStorage = (): LoggerStorage & {
+	downloads: DownloadRecord[];
 	errors: ErrorRecord[];
 	eventSource: EventSourceMessageRecord[];
 	metadata: CompletedResponseMetadata[];
 	websocket: WebSocketFrameRecord[];
 } => {
 	const metadata: CompletedResponseMetadata[] = [];
+	const downloads: DownloadRecord[] = [];
 	const errors: ErrorRecord[] = [];
 	const eventSource: EventSourceMessageRecord[] = [];
 	const websocket: WebSocketFrameRecord[] = [];
 
 	return {
 		close: mock(() => Promise.resolve()),
+		downloads,
 		errors,
 		eventSource,
 		metadata,
@@ -98,6 +107,15 @@ const createStorage = (): LoggerStorage & {
 		recordCompletedResponse: mock((record) => {
 			metadata.push(record);
 			return Promise.resolve();
+		}),
+		// Mirrors storage: a completed download is hashed and keeps its saved path.
+		recordDownload: mock((download: DownloadRecord) => {
+			const record: DownloadRecord =
+				download.state === "completed"
+					? { ...download, file: `downloads/${download.guid}`, sha256: "download-hash" }
+					: download;
+			downloads.push(record);
+			return Promise.resolve(record);
 		}),
 		recordError: mock((record) => {
 			errors.push(record);
@@ -407,6 +425,57 @@ const emitEventSourceMessage = (
 		sessionId,
 	);
 };
+
+const emitDownloadWillBegin = (
+	client: FakeClient,
+	download: { guid?: string; sessionId?: string; suggestedFilename?: string; url: string },
+): void => {
+	client.emit(
+		"Page.downloadWillBegin",
+		{
+			frameId: "frame-1",
+			guid: download.guid ?? "download-1",
+			suggestedFilename: download.suggestedFilename ?? "statement.pdf",
+			url: download.url,
+		},
+		download.sessionId ?? "session-1",
+	);
+};
+
+const emitDownloadProgress = (
+	client: FakeClient,
+	progress: {
+		guid?: string;
+		receivedBytes?: number;
+		sessionId?: string;
+		state: "inProgress" | "completed" | "canceled";
+		totalBytes?: number;
+	},
+): void => {
+	client.emit(
+		"Page.downloadProgress",
+		{
+			guid: progress.guid ?? "download-1",
+			receivedBytes: progress.receivedBytes ?? 1024,
+			state: progress.state,
+			totalBytes: progress.totalBytes ?? 1024,
+		},
+		progress.sessionId ?? "session-1",
+	);
+};
+
+const createDownloadLogger = (
+	client: FakeClient,
+	storage: ReturnType<typeof createStorage>,
+	hooks?: HookPublisher,
+): CdpResponseLogger =>
+	new CdpResponseLogger(client as never, {
+		captureDownloads: true,
+		cdp: "http://127.0.0.1:9222",
+		hooks,
+		storage,
+		verbose: false,
+	});
 
 describe("createCompletedMetadata", () => {
 	it("creates one appendable metadata object per response", () => {
@@ -2504,5 +2573,150 @@ describe("CdpResponseLogger", () => {
 		expect(storage.errors).toContainEqual(
 			expect.objectContaining({ event: "Target.detachedFromTarget" }),
 		);
+	});
+
+	it("leaves browser download behavior alone without --capture-downloads", async () => {
+		const client = new FakeClient();
+		const storage = createStorage();
+		const logger = new CdpResponseLogger(client as never, {
+			cdp: "http://127.0.0.1:9222",
+			storage,
+			verbose: false,
+		});
+
+		await logger.start();
+		attachPageTarget(client);
+		await waitForAsyncEvent();
+		// Nothing is subscribed, so an event from another CDP client changes nothing either.
+		emitDownloadWillBegin(client, { url: "https://example.test/statement.pdf" });
+		emitDownloadProgress(client, { state: "completed" });
+		await waitForAsyncEvent();
+
+		expect(client.listenerCount("Page.downloadWillBegin")).toBe(0);
+		expect(client.listenerCount("Page.downloadProgress")).toBe(0);
+		expect(client.send).not.toHaveBeenCalledWith("Browser.setDownloadBehavior", expect.anything());
+		expect(client.send).not.toHaveBeenCalledWith("Page.enable", undefined, "session-1");
+		expect(storage.downloads).toHaveLength(0);
+	});
+
+	it("records a completed download with the name and url of the download that began", async () => {
+		const client = new FakeClient();
+		const storage = createStorage();
+		const hooks = createHooks();
+		const logger = createDownloadLogger(client, storage, hooks);
+
+		await logger.start();
+		attachPageTarget(client);
+		await waitForAsyncEvent();
+		emitDownloadWillBegin(client, {
+			suggestedFilename: "statement-2026-07.pdf",
+			url: "https://bank.test/statements/2026-07.pdf",
+		});
+		emitDownloadProgress(client, { receivedBytes: 512, state: "inProgress", totalBytes: 1024 });
+		emitDownloadProgress(client, { receivedBytes: 1024, state: "completed", totalBytes: 1024 });
+		await waitForAsyncEvent();
+
+		expect(client.send).toHaveBeenCalledWith("Browser.setDownloadBehavior", {
+			behavior: "allowAndName",
+			downloadPath: resolve("/captures/run", "downloads"),
+			eventsEnabled: true,
+		});
+		expect(client.send).toHaveBeenCalledWith("Page.enable", undefined, "session-1");
+		// Only the terminal event is recorded; the in-progress one writes nothing.
+		expect(storage.downloads).toHaveLength(1);
+		expect(storage.downloads[0]).toMatchObject({
+			file: "downloads/download-1",
+			guid: "download-1",
+			receivedBytes: 1024,
+			sessionId: "session-1",
+			sha256: "download-hash",
+			state: "completed",
+			suggestedFilename: "statement-2026-07.pdf",
+			targetId: "target-1",
+			totalBytes: 1024,
+			url: "https://bank.test/statements/2026-07.pdf",
+		});
+		expect(storage.downloads[0]?.startedAt).toBeDefined();
+		expect(hooks.events).toContainEqual(
+			expect.objectContaining({
+				download: expect.objectContaining({ file: "downloads/download-1" }),
+				event: "download.completed",
+			}),
+		);
+		expect(storage.errors).toHaveLength(0);
+	});
+
+	it("records a canceled download without a file so the loss stays visible", async () => {
+		const client = new FakeClient();
+		const storage = createStorage();
+		const hooks = createHooks();
+		const logger = createDownloadLogger(client, storage, hooks);
+
+		await logger.start();
+		attachPageTarget(client);
+		await waitForAsyncEvent();
+		emitDownloadWillBegin(client, { url: "https://bank.test/statements/2026-07.pdf" });
+		emitDownloadProgress(client, { receivedBytes: 64, state: "canceled", totalBytes: 1024 });
+		await waitForAsyncEvent();
+
+		expect(storage.downloads[0]).toMatchObject({
+			receivedBytes: 64,
+			state: "canceled",
+			suggestedFilename: "statement.pdf",
+			url: "https://bank.test/statements/2026-07.pdf",
+		});
+		expect(storage.downloads[0]?.file).toBeUndefined();
+		expect(storage.downloads[0]?.sha256).toBeUndefined();
+		// No file exists, so a path-based hook event would have nothing to point at.
+		expect(hooks.events.map((event) => event.event)).not.toContain("download.completed");
+	});
+
+	it("drops a download whose target detached before it finished", async () => {
+		const client = new FakeClient();
+		const storage = createStorage();
+		const logger = createDownloadLogger(client, storage);
+
+		await logger.start();
+		attachPageTarget(client);
+		await waitForAsyncEvent();
+		emitDownloadWillBegin(client, { url: "https://bank.test/statements/2026-07.pdf" });
+		client.emit("Target.detachedFromTarget", { sessionId: "session-1", targetId: "target-1" });
+		await waitForAsyncEvent();
+		// A late terminal event finds no pending download, so it can name neither url nor file.
+		emitDownloadProgress(client, { state: "completed" });
+		await waitForAsyncEvent();
+
+		expect(storage.downloads[0]).toMatchObject({ guid: "download-1", state: "completed" });
+		expect(storage.downloads[0]?.suggestedFilename).toBeUndefined();
+		expect(storage.downloads[0]?.url).toBeUndefined();
+	});
+
+	it("records a completed download whose file storage could not read", async () => {
+		const client = new FakeClient();
+		const storage = createStorage();
+		const hooks = createHooks();
+		const recordDownload = storage.recordDownload as Mock<LoggerStorage["recordDownload"]>;
+		recordDownload.mockImplementationOnce((download) =>
+			Promise.resolve({ ...download, error: "ENOENT: no such file or directory" }),
+		);
+		const logger = createDownloadLogger(client, storage, hooks);
+
+		await logger.start();
+		attachPageTarget(client);
+		await waitForAsyncEvent();
+		emitDownloadWillBegin(client, { url: "https://bank.test/statements/2026-07.pdf" });
+		emitDownloadProgress(client, { state: "completed" });
+		await waitForAsyncEvent();
+
+		expect(storage.errors).toEqual([
+			expect.objectContaining({
+				error: "ENOENT: no such file or directory",
+				event: "Page.downloadProgress",
+				sessionId: "session-1",
+				targetId: "target-1",
+				url: "https://bank.test/statements/2026-07.pdf",
+			}),
+		]);
+		expect(hooks.events.map((event) => event.event)).not.toContain("download.completed");
 	});
 });

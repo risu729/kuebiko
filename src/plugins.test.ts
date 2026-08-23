@@ -7,6 +7,7 @@ import { pathToFileURL } from "node:url";
 import { createPluginHost } from "./plugins";
 import type {
 	BodySaveResult,
+	DownloadRecord,
 	ErrorRecord,
 	EventSourceMessageRecord,
 	HookEvent,
@@ -58,6 +59,7 @@ const createStorage = (runDirectory: string): LoggerStorage & { errors: ErrorRec
 		),
 		recordBodyBytes: mock((): Promise<BodySaveResult> => Promise.resolve({ bodySaved: true })),
 		recordCompletedResponse: mock(() => Promise.resolve()),
+		recordDownload: mock((download: DownloadRecord) => Promise.resolve(download)),
 		recordError: mock((error) => {
 			errors.push(error);
 			return Promise.resolve();

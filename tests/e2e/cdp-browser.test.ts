@@ -2,6 +2,7 @@ import { afterEach, describe } from "bun:test";
 
 import {
 	assertCapturedApi,
+	assertCapturedDownload,
 	assertCapturedEventSourceMessages,
 	assertCapturedRawHeaders,
 	assertCapturedWebSocketFrames,
@@ -14,6 +15,7 @@ import {
 	cleanupRuns,
 	closeContext,
 	findCapturedApiRecord,
+	findDownloads,
 	findEventSourceMessages,
 	findWebSocketFrames,
 	loadPageAndWaitForCapture,
@@ -21,6 +23,7 @@ import {
 	startContext,
 } from "./cdp-fixture";
 import type { TestContext } from "./cdp-fixture";
+import { DOWNLOAD_CSV } from "./fixture-server";
 
 const BROWSER_E2E_TIMEOUT_MS = 30_000;
 
@@ -36,6 +39,11 @@ const assertCapturedTraffic = async (context: TestContext): Promise<void> => {
 		await findEventSourceMessages(context.captureDirectory),
 		`http://127.0.0.1:${context.fixtureServer.port}/events`,
 	);
+	await assertCapturedDownload(await findDownloads(context.captureDirectory), {
+		captureDirectory: context.captureDirectory,
+		contents: DOWNLOAD_CSV,
+		url: `http://127.0.0.1:${context.fixtureServer.port}/statement.csv`,
+	});
 };
 
 describe("CDP launch-mode browser e2e", () => {

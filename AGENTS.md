@@ -6,7 +6,8 @@ These instructions apply to agent work in this repository.
 
 This project is a local Chrome CDP/NetLog capture tool. Keep it focused on
 saving raw request/response bodies, metadata, errors, WebSocket frames in both
-directions, Server-Sent Events messages, and Chrome NetLog files.
+directions, Server-Sent Events messages, browser downloads, and Chrome NetLog
+files.
 
 Do not add analytics, parser UIs, dashboards, HAR viewers, browser automation,
 login automation, stealth/evasion code, request interception, packet capture,
@@ -83,6 +84,9 @@ Keep CDP use passive by default:
 - Do not inject page scripts.
 - Do not add Runtime or Debugger usage unless there is a narrow, documented
   reason.
+- Keep anything that changes browser behavior behind an explicit off-by-default
+  flag, and say so in the README. `--capture-downloads` is the only such flag:
+  it enables the `Page` domain and sets `Browser.setDownloadBehavior`.
 
 Preserve normal browser behavior in launch mode:
 
@@ -99,8 +103,8 @@ Treat it as sensitive.
 
 Keep output append-only and durable enough for long captures:
 
-- Keep `metadata.ndjson`, `errors.ndjson`, `websocket.ndjson`, and
-  `eventsource.ndjson` append-only.
+- Keep `metadata.ndjson`, `errors.ndjson`, `websocket.ndjson`,
+  `eventsource.ndjson`, and `downloads.ndjson` append-only.
 - Do not keep all completed metadata in memory.
 - Clean up active request state after completion or failure.
 - Do not put URL text directly in filenames.
