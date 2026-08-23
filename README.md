@@ -212,6 +212,12 @@ its bodies were retrieved, a `captureDownloads` boolean says whether browser
 download behavior was changed for the run, and a `snapshotStorage` boolean says
 whether the directory may hold a whole stored session.
 
+`run.json` also records how complete the capture is: `include` and `exclude`
+hold the filter sources, `maxBodyBytes` the cap above which a body was never
+retrieved, and a `netlog` boolean says whether a NetLog was written beside the
+capture. The three filter fields are omitted when the flags are not used, so
+nothing distinguishes an unfiltered run by their absence alone.
+
 `metadata.ndjson` contains one JSON object per completed response that passed
 the filters. When available, the same metadata line links to both a saved
 request payload and a saved response body.
