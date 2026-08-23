@@ -10,6 +10,7 @@ import {
 	renderHelp,
 	stopRun,
 } from "./index";
+import { settlesWithin } from "./timeout";
 
 describe("parseArgs", () => {
 	it("uses defaults", () => {
@@ -213,6 +214,9 @@ describe("stopRun", () => {
 	});
 });
 
+// Long enough that a slow machine never trips it, short enough to land before the test timeout.
+const EXIT_TIMEOUT_MS = 3_000;
+
 describe("forceQuitOnSignal", () => {
 	// Teardown takes as long as the browser makes it take, so a second signal leaves at once.
 	// That drops the summary and aborts the writes in flight, which is the trade asked for.
@@ -233,18 +237,26 @@ describe("forceQuitOnSignal", () => {
 		if (!(child.stdout instanceof ReadableStream) || !(child.stderr instanceof ReadableStream)) {
 			throw new Error("The helper process was spawned without pipes.");
 		}
-		const reader = child.stdout.getReader();
-		await reader.read();
-		reader.releaseLock();
+		// A handler that stopped exiting would hang this wait forever.
+		// So would a platform that never delivers the signal at all.
+		// Bounding the wait fails the assertion instead of taking the test process down.
+		try {
+			const reader = child.stdout.getReader();
+			await reader.read();
+			reader.releaseLock();
 
-		child.kill("SIGINT");
-		await child.exited;
+			child.kill("SIGINT");
 
-		// 130 is the shell's own code for a process ended by SIGINT.
-		expect(child.exitCode).toBe(130);
-		await expect(new Response(child.stderr).text()).resolves.toContain(
-			"shutdown interrupted; exiting now",
-		);
+			expect(await settlesWithin(child.exited, EXIT_TIMEOUT_MS)).toBe(true);
+			// 130 is the shell's own code for a process ended by SIGINT.
+			expect(child.exitCode).toBe(130);
+			await expect(new Response(child.stderr).text()).resolves.toContain(
+				"shutdown interrupted; exiting now",
+			);
+		} finally {
+			// A helper left running would outlive the suite whatever the assertions did.
+			child.kill("SIGKILL");
+		}
 	});
 
 	// The handler is removed once teardown is over.
