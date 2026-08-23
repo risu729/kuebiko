@@ -6,13 +6,7 @@ import { cliArgs } from "./cli-args";
 import type { CliArgDefinition, LoggerArgs } from "./cli-args";
 import { DEFAULT_CDP_ENDPOINT, TOOL_NAME, TOOL_VERSION } from "./constants";
 import type { CliOptions } from "./types";
-import {
-	optionalNonEmptyString,
-	optionalStringArray,
-	parseNonEmptyText,
-	parseRegex,
-	parseSafeInteger,
-} from "./validation";
+import { nonEmptyString, optionalStringArray, parseRegex, parseSafeInteger } from "./validation";
 
 type ParseOption = {
 	default?: boolean | string;
@@ -34,14 +28,16 @@ const validFlags = new Set([
 const CliOptionsSchema: z.ZodType<CliOptions> = z
 	.object({
 		browserArgs: optionalStringArray,
-		browserCommand: optionalNonEmptyString,
-		browserPath: optionalNonEmptyString,
-		browserProfile: optionalNonEmptyString,
+		browserCommand: nonEmptyString("--browser-command"),
+		browserPath: nonEmptyString("--browser-path"),
+		// Blank would silently launch into the default browser profile directory.
+		browserProfile: nonEmptyString("--browser-profile"),
 		captureCookies: z.boolean(),
 		captureDownloads: z.boolean(),
-		config: optionalNonEmptyString,
+		// Blank would otherwise run with every plugin silently disabled.
+		config: nonEmptyString("--config"),
 		cdp: z.url(),
-		cdpPort: optionalNonEmptyString.transform((value) => {
+		cdpPort: nonEmptyString("--cdp-port").transform((value) => {
 			const port = parseSafeInteger(value, "--cdp-port", 1);
 			if (port === undefined || port > 65_535) {
 				throw new Error("--cdp-port must be an integer between 1 and 65535.");
@@ -49,24 +45,27 @@ const CliOptionsSchema: z.ZodType<CliOptions> = z
 
 			return port;
 		}),
-		exclude: optionalNonEmptyString.transform((value) =>
+		// Blank would capture exactly the traffic the caller meant to leave out.
+		exclude: nonEmptyString("--exclude").transform((value) =>
 			value ? parseRegex(value, "--exclude") : undefined,
 		),
 		help: z.boolean(),
-		include: optionalNonEmptyString.transform((value) =>
+		include: nonEmptyString("--include").transform((value) =>
 			value ? parseRegex(value, "--include") : undefined,
 		),
 		labels: optionalStringArray,
 		launchBrowser: z.boolean(),
-		maxBodyBytes: optionalNonEmptyString.transform((value) =>
+		// Blank would retrieve every body however large, with no cap recorded anywhere.
+		maxBodyBytes: nonEmptyString("--max-body-bytes").transform((value) =>
 			parseSafeInteger(value, "--max-body-bytes", 0),
 		),
 		netlog: z.boolean(),
 		noPlugins: z.boolean(),
-		// A blank --note is rejected instead of dropped, so a mistyped note cannot vanish.
-		// That deviates on purpose from the optionalNonEmptyString flags such as --out.
-		note: z.optional(z.string()).transform((value) => parseNonEmptyText(value, "--note")),
-		out: optionalNonEmptyString,
+		// Blank would drop a mistyped note without a word.
+		note: nonEmptyString("--note"),
+		// Blank would fall back to the default capture root.
+		// The run would then be written somewhere the caller never named.
+		out: nonEmptyString("--out"),
 		snapshotStorage: z.boolean(),
 		streamBodies: z.boolean(),
 		verbose: z.boolean(),
@@ -93,21 +92,51 @@ const CliOptionsSchema: z.ZodType<CliOptions> = z
 		}
 	});
 
+const valueFlags = new Set(
+	Object.entries(cliArgs)
+		.filter(([, definition]) => definition.type === "string")
+		.map(([name]) => `--${name}`),
+);
+
+// The token after a value-taking flag is that flag's argument, whatever it looks like.
+// Every browser arg starts with a dash, so treating those as flags here was wrong.
+// `--browser-arg --no-sandbox` answered "Unknown argument: --no-sandbox" instead.
+// That hid node:util's advice about the `--browser-arg=-XYZ` spelling, which is the fix.
+const flagOf = (arg: string): string => (arg.includes("=") ? (arg.split("=", 1)[0] ?? arg) : arg);
+
 const assertKnownFlags = (argv: string[]): void => {
+	let expectsValue = false;
 	for (const arg of argv) {
-		if (!arg.startsWith("-")) {
+		const isValue = expectsValue;
+		expectsValue = false;
+		if (isValue || !arg.startsWith("-")) {
 			continue;
 		}
 
-		const flag = arg.includes("=") ? (arg.split("=", 1)[0] ?? arg) : arg;
+		const flag = flagOf(arg);
 		if (!validFlags.has(flag)) {
 			throw new Error(`Unknown argument: ${flag}`);
 		}
+		expectsValue = arg === flag && valueFlags.has(flag);
 	}
 };
 
-const normalizeArgs = (args: LoggerArgs): CliOptions =>
-	CliOptionsSchema.parse({
+// Launch mode connects to the port it started the browser on.
+// An endpoint given here was discarded: the run and run.json both used --cdp-port.
+// Passing the flag is what conflicts, not the endpoint it names.
+// Comparing values accepted --cdp with the default spelled out.
+// It rejected --cdp matching --cdp-port, the one spelling that is internally consistent.
+// Presence is only visible before the default is applied, so this runs on the raw args.
+const assertNoCdpEndpoint = (args: LoggerArgs): void => {
+	if (args["launch-browser"] === true && args.cdp !== undefined) {
+		throw new Error("Use --cdp-port instead of --cdp with --launch-browser.");
+	}
+};
+
+const normalizeArgs = (args: LoggerArgs): CliOptions => {
+	assertNoCdpEndpoint(args);
+
+	return CliOptionsSchema.parse({
 		browserArgs: args["browser-arg"],
 		browserCommand: args["browser-command"],
 		browserPath: args["browser-path"],
@@ -115,7 +144,7 @@ const normalizeArgs = (args: LoggerArgs): CliOptions =>
 		captureCookies: args["capture-cookies"] ?? false,
 		captureDownloads: args["capture-downloads"] ?? false,
 		config: args.config,
-		cdp: args.cdp,
+		cdp: args.cdp ?? DEFAULT_CDP_ENDPOINT,
 		cdpPort: args["cdp-port"],
 		exclude: args.exclude,
 		help: args.help ?? false,
@@ -132,6 +161,7 @@ const normalizeArgs = (args: LoggerArgs): CliOptions =>
 		verbose: args.verbose ?? false,
 		version: args.version ?? false,
 	});
+};
 
 const createParseOption = (definition: CliArgDefinition): ParseOption => ({
 	...(definition.default === undefined ? {} : { default: definition.default }),
@@ -163,12 +193,30 @@ const parseArgs = (argv: string[]): CliOptions => {
 	return normalizeArgs(parseRawArgs(argv));
 };
 
+// Wide enough for the longest flag, --browser-command <command>.
+// The value-taking flags then keep their descriptions in the same column as the rest.
+const OPTION_COLUMN_WIDTH = 28;
+
+const formatOptionLine = (flag: string, description: string): string =>
+	`  ${flag.padEnd(OPTION_COLUMN_WIDTH)} ${description}`;
+
+// A flag defaulting to true is only spelled negated, so it says what turning it off does.
+// Printing the affirmative description against --no-<flag> stated the opposite.
+// A definition without a negated description shows both spellings instead.
 const formatOption = (name: string, definition: CliArgDefinition): string => {
-	const flag =
-		definition.type === "boolean"
-			? `--${definition.default === true ? "no-" : ""}${name}`
-			: `--${name} <${definition.valueHint ?? "value"}>`;
-	return `  ${flag.padEnd(24)} ${definition.description}`;
+	if (definition.type !== "boolean") {
+		return formatOptionLine(
+			`--${name} <${definition.valueHint ?? "value"}>`,
+			definition.description,
+		);
+	}
+	if (definition.default !== true) {
+		return formatOptionLine(`--${name}`, definition.description);
+	}
+
+	return definition.negatedDescription === undefined
+		? formatOptionLine(`--[no-]${name}`, definition.description)
+		: formatOptionLine(`--no-${name}`, definition.negatedDescription);
 };
 
 const renderHelp = (): string =>
@@ -179,8 +227,8 @@ const renderHelp = (): string =>
 		"",
 		"Options:",
 		...Object.entries(cliArgs).map(([name, definition]) => formatOption(name, definition)),
-		"  --help, -h               Show help",
-		"  --version, -v            Show version",
+		formatOptionLine("--help, -h", "Show help"),
+		formatOptionLine("--version, -v", "Show version"),
 	].join("\n")}\n`;
 
 export { DEFAULT_CDP_ENDPOINT, TOOL_VERSION, cliArgs, normalizeArgs, parseArgs, renderHelp };

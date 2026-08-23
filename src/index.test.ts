@@ -116,6 +116,72 @@ describe("parseArgs", () => {
 		expect(() => parseArgs(["--wat"])).toThrow("Unknown argument: --wat");
 	});
 
+	// Every browser arg starts with a dash, so treating the value as a flag was wrong.
+	// It replaced node:util's advice about the `--flag=-value` spelling with a wrong one.
+	it("leaves a dashed flag value to node:util to diagnose", () => {
+		expect(() => parseArgs(["--browser-arg", "--no-sandbox"])).toThrow(/ambiguous/u);
+		expect(() => parseArgs(["--exclude", "-tracking"])).toThrow(/ambiguous/u);
+		expect(() => parseArgs(["--note", "-note text"])).toThrow(/ambiguous/u);
+		expect(() => parseArgs(["--browser-arg=--no-sandbox", "--wat"])).toThrow(
+			"Unknown argument: --wat",
+		);
+	});
+
+	// Blank disabled every plugin, and --out fell back to the default capture root.
+	// A wrapper passing an unset variable lost either one without a word.
+	it("rejects a blank config path and capture directory", () => {
+		expect(() => parseArgs(["--config", ""])).toThrow("--config must not be empty.");
+		expect(() => parseArgs(["--out", ""])).toThrow("--out must not be empty.");
+	});
+
+	// The same unset variable in a wrapper captured exactly the traffic --exclude named.
+	// It also lifted the body cap and launched into the default browser profile.
+	it("rejects a blank value for every flag that takes one", () => {
+		for (const flag of [
+			"--browser-command",
+			"--browser-path",
+			"--browser-profile",
+			"--cdp-port",
+			"--exclude",
+			"--include",
+			"--max-body-bytes",
+		]) {
+			expect(() => parseArgs([flag, ""])).toThrow(`${flag} must not be empty.`);
+		}
+	});
+
+	// Launch mode connects to --cdp-port, so an endpoint given here was discarded.
+	// Run.json then recorded a port the invocation never named.
+	// The flag is what conflicts, not the endpoint it carries.
+	// Comparing values accepted the default spelled out and rejected --cdp matching the port.
+	it("rejects an endpoint given together with launch mode", () => {
+		const launch = ["--launch-browser", "--browser-command", "chrome"];
+		for (const endpoint of ["http://127.0.0.1:9999", "http://127.0.0.1:9222"]) {
+			expect(() => parseArgs([...launch, "--cdp", endpoint])).toThrow(
+				"Use --cdp-port instead of --cdp with --launch-browser.",
+			);
+		}
+		expect(() =>
+			parseArgs([...launch, "--cdp-port", "9333", "--cdp", "http://127.0.0.1:9333"]),
+		).toThrow("Use --cdp-port instead of --cdp with --launch-browser.");
+		// Attach mode still takes the flag, and launch mode without it still parses.
+		expect(parseArgs([...launch, "--cdp-port", "9333"]).cdpPort).toBe(9333);
+		expect(parseArgs(["--cdp", "http://127.0.0.1:9333"]).cdp).toBe("http://127.0.0.1:9333");
+	});
+
+	// Number() also accepts exponents, hex, and padding, so a typo became a silent cap.
+	it("rejects integers that are not written in decimal", () => {
+		for (const value of ["1e3", "0x10", " 12 ", "12.0"]) {
+			expect(() => parseArgs(["--max-body-bytes", value])).toThrow(
+				"--max-body-bytes must be an integer greater than or equal to 0.",
+			);
+		}
+		expect(() => parseArgs(["--cdp-port", "0x10"])).toThrow(
+			"--cdp-port must be an integer greater than or equal to 1.",
+		);
+		expect(parseArgs(["--max-body-bytes", "1000"]).maxBodyBytes).toBe(1_000);
+	});
+
 	it("rejects launch mode without an explicit browser", () => {
 		expect(() => parseArgs(["--launch-browser"])).toThrow(
 			"--launch-browser requires --browser-command or --browser-path.",
@@ -130,6 +196,27 @@ describe("parseArgs", () => {
 	it("renders local help output", () => {
 		expect(renderHelp()).toContain("kuebiko [options]");
 		expect(renderHelp()).toContain("--no-plugins");
+	});
+
+	// The flag name was negated but its description was not, so help stated the opposite.
+	// The widest flags also pushed their descriptions out of line.
+	it("describes negated flags by what turning them off does", () => {
+		const lines = renderHelp().split("\n");
+		const lineFor = (flag: string): string =>
+			lines.find((line) => line.trimStart().startsWith(`${flag} `)) ?? "";
+
+		expect(lineFor("--no-plugins")).toContain("Disable plugin loading from --config.");
+		expect(lineFor("--no-netlog")).toContain("Disable netlog.json in --launch-browser mode.");
+		expect(lineFor("--no-netlog")).not.toContain("Write netlog.json");
+
+		// The width used to cut off at the flag, so the widest ones ran into their text.
+		const described = lines.filter((line) => line.startsWith("  --"));
+		const columns = new Set(
+			described.map((line) => /^ {2}\S.*? {2,}(?=\S)/u.exec(line)?.[0].length),
+		);
+		expect(described.length).toBeGreaterThan(0);
+		expect(columns.size).toBe(1);
+		expect(columns.has(undefined)).toBe(false);
 	});
 });
 
