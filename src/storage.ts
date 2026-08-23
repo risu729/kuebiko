@@ -22,11 +22,20 @@ import type {
 	WebSocketFrameRecord,
 } from "./types";
 
+// What a writer has to say about itself once the run is over.
+// A file that lost one line and kept recording is not a file that stopped.
+// Reporting both the same way told the run its capture had ended when it had not.
+type WriterFailure = {
+	// The first failure this writer hit, kept so a loss stays visible after the run.
+	message: string;
+	// True when the writer's last write never reached the file, so it records nothing more.
+	stopped: boolean;
+};
+
 type NdjsonWriter = {
 	append: (record: unknown) => Promise<void>;
 	close: () => Promise<void>;
-	// The first failure this writer hit, kept so a dead file stays visible after the run.
-	failure: () => string | undefined;
+	failure: () => WriterFailure | undefined;
 };
 
 // Only storage writes run.json, so its shape stays with the writer.
@@ -106,8 +115,19 @@ const createNdjsonWriter = (path: string): NdjsonWriter => {
 	// Never rejects: a failed append must not become the error every later one reports.
 	let pending = Promise.resolve();
 	let failure: string | undefined = undefined;
+	// Tracks the last write rather than any write, so a recovered file is not called dead.
+	let stopped = false;
+	// Set by close(), which is what keeps a late append from reopening a finished file.
+	let closed = false;
 
 	const writeLine = (line: string): Promise<void> => {
+		// A record appended after close() would land in a file the summary already reported.
+		// Reopening for it is invisible loss, so a closed writer refuses the record instead.
+		// The refusal is a lost record, not a dead file: the file itself closed cleanly.
+		if (closed) {
+			failure ??= `Record appended after ${path} was closed.`;
+			return Promise.reject(new Error(`Cannot append to ${path} after it was closed.`));
+		}
 		// A write error destroys the stream, so the file needs a new one to stay recording.
 		// Without this the first failure would end this file for the rest of the run.
 		if (stream.destroyed) {
@@ -119,9 +139,12 @@ const createNdjsonWriter = (path: string): NdjsonWriter => {
 			target.write(line, (error) => {
 				if (error) {
 					failure ??= errorMessage(error);
+					stopped = true;
 					reject(error);
 					return;
 				}
+				// The reopen worked, so the file is recording again whatever it lost before.
+				stopped = false;
 				resolve();
 			});
 		});
@@ -141,6 +164,9 @@ const createNdjsonWriter = (path: string): NdjsonWriter => {
 			await result;
 		},
 		close: async () => {
+			// Closed before the drain, so an append racing this close is refused rather than
+			// Reopening the stream being ended or failing with "write after end".
+			closed = true;
 			await pending;
 			// A destroyed stream is already closed, and ending it again only errors.
 			if (stream.destroyed) {
@@ -150,6 +176,8 @@ const createNdjsonWriter = (path: string): NdjsonWriter => {
 				stream.end((error?: Error | null) => {
 					if (error) {
 						failure ??= errorMessage(error);
+						// Whatever the stream still held never reached the file, and nothing follows it.
+						stopped = true;
 						reject(error);
 						return;
 					}
@@ -157,7 +185,7 @@ const createNdjsonWriter = (path: string): NdjsonWriter => {
 				});
 			});
 		},
-		failure: () => failure,
+		failure: () => (failure === undefined ? undefined : { message: failure, stopped }),
 	};
 };
 
@@ -354,18 +382,22 @@ const createStorage = async (
 			// Shutdown runs from a finally block, where a rejection becomes an unhandled one.
 			// Settle them all so a writer that already failed cannot stop the others closing.
 			const results = await Promise.allSettled(writers.map(([, writer]) => writer.close()));
-			// A settled rejection is discarded unless it is read, and a writer that died
-			// Mid-run never rejects here at all. Both are reported, so the run says which
-			// File stopped recording instead of leaving it to be noticed later.
+			// A settled rejection is discarded unless it is read, and a writer that lost a
+			// Record mid-run never rejects here at all.
+			// Both are reported, so the run says what a file is missing rather than leaving
+			// It to be noticed later.
 			for (const [index, [name, writer]] of writers.entries()) {
 				const result = results[index];
+				const failure = writer.failure();
 				const error =
-					result?.status === "rejected" ? errorMessage(result.reason) : writer.failure();
+					result?.status === "rejected" ? errorMessage(result.reason) : failure?.message;
 				if (error === undefined) {
 					continue;
 				}
-				process.stderr.write(`writer ${name}.ndjson failed: ${error}\n`);
-				summary.recordWriterFailure(name);
+				const stopped = failure?.stopped ?? true;
+				const what = stopped ? "stopped recording" : "lost a record";
+				process.stderr.write(`writer ${name}.ndjson ${what}: ${error}\n`);
+				summary.recordWriterFailure(name, stopped);
 			}
 		},
 		recordRequestBody,

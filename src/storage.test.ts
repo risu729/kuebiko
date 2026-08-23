@@ -57,7 +57,43 @@ describe("createNdjsonWriter", () => {
 
 		await expect(Bun.file(path).text()).resolves.toBe('{"line":2}\n{"line":3}\n');
 		// Recovering does not erase the loss: the failed line is still gone.
-		expect(writer.failure()).toContain("ENOENT");
+		expect(writer.failure()?.message).toContain("ENOENT");
+		// The file is recording again, so the run must not report it as one that stopped.
+		expect(writer.failure()?.stopped).toBe(false);
+	});
+
+	// Reopening for a record appended after close() wrote it behind the summary that had
+	// Already reported the run, so a failure there reached no one at all.
+	it("refuses a record appended after close instead of reopening the file", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "kuebiko-"));
+		const path = join(dir, "metadata.ndjson");
+		const writer = createNdjsonWriter(path);
+
+		await writer.append({ line: 1 });
+		await writer.close();
+		await expect(writer.append({ line: 2 })).rejects.toThrow(/after it was closed/u);
+
+		await expect(Bun.file(path).text()).resolves.toBe('{"line":1}\n');
+		// The record is lost, but the file itself closed cleanly and is not dead.
+		expect(writer.failure()?.message).toContain("appended after");
+		expect(writer.failure()?.stopped).toBe(false);
+	});
+
+	// An append racing close() failed with "write after end", which reported a healthy
+	// File as one that had stopped recording for the whole run.
+	it("refuses an append that races close without calling the file dead", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "kuebiko-"));
+		const path = join(dir, "metadata.ndjson");
+		const writer = createNdjsonWriter(path);
+
+		await writer.append({ line: 1 });
+		const closing = writer.close();
+		const late = writer.append({ line: 2 });
+		await closing;
+
+		await expect(late).rejects.toThrow(/after it was closed/u);
+		await expect(Bun.file(path).text()).resolves.toBe('{"line":1}\n');
+		expect(writer.failure()?.stopped).toBe(false);
 	});
 
 	// A poisoned chain reported the first failure again for every later append.
@@ -74,7 +110,10 @@ describe("createNdjsonWriter", () => {
 		expect(first).toBeInstanceOf(Error);
 		expect(second).toBeInstanceOf(Error);
 		expect(second).not.toBe(first);
-		expect(writer.failure()).toContain("EISDIR");
+		expect(writer.failure()?.message).toContain("EISDIR");
+		// Nothing ever reached this file, so it is a file that stopped rather than one
+		// That lost a line.
+		expect(writer.failure()?.stopped).toBe(true);
 	});
 });
 
@@ -404,10 +443,44 @@ describe("createStorage", () => {
 		const written = stderr.mock.calls.map(([line]) => String(line)).join("");
 		stderr.mockRestore();
 
-		expect(written).toContain("writer errors.ndjson failed:");
+		expect(written).toContain("writer errors.ndjson stopped recording:");
 		expect(written).toContain("EISDIR");
-		expect(storage.summary.render()).toContain("summary_writers errors=failed");
-		expect(storage.summary.render()).not.toContain("websocket=failed");
+		expect(storage.summary.render()).toContain("summary_writers errors=stopped");
+		expect(storage.summary.render()).not.toContain("websocket=");
+	});
+
+	// An abandoned event handler keeps recording while the writers close, and reopening
+	// The file for it wrote a line behind the summary that had already been printed.
+	it("refuses a record written after the writers closed", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "kuebiko-"));
+		const storage = await createStorage(dir, "http://127.0.0.1:9222", {}, "2026-07-06T12:34:56Z");
+		const stderr = spyOn(process.stderr, "write").mockReturnValue(true);
+
+		await storage.recordError({
+			error: "first",
+			event: "Network.getResponseBody",
+			timestamp: "2026-07-06T12:34:57Z",
+			url: "https://example.test/api",
+		});
+		await storage.close();
+		await expect(
+			storage.recordError({
+				error: "late",
+				event: "Network.getResponseBody",
+				timestamp: "2026-07-06T12:34:58Z",
+				url: "https://example.test/api",
+			}),
+		).rejects.toThrow(/after it was closed/u);
+		const written = stderr.mock.calls.map(([line]) => String(line)).join("");
+		stderr.mockRestore();
+
+		// The refused record never reached the file the summary had already reported on.
+		const lines = (await Bun.file(join(dir, "errors.ndjson")).text()).trim().split("\n");
+		expect(lines).toHaveLength(1);
+		expect(lines[0]).toContain("first");
+		// Nothing failed while the writers were open, so the run reports no failure at all.
+		expect(written).toBe("");
+		expect(storage.summary.render()).not.toContain("summary_writers");
 	});
 
 	// Without a listener on the writer, a failing write emits an unhandled "error".

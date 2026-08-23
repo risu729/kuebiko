@@ -11,8 +11,9 @@ type CaptureSummary = {
 	recordSavedResponseBody: (byteLength: number) => void;
 	recordStorageSnapshot: (counts: StorageSnapshotCounts) => void;
 	recordWebSocketFrame: () => void;
-	// A record file that stopped recording, named after the writer that failed.
-	recordWriterFailure: (name: string) => void;
+	// A record file that lost something, named after the writer that failed.
+	// `stopped` says whether the file also stopped recording rather than only losing a line.
+	recordWriterFailure: (name: string, stopped: boolean) => void;
 	render: () => string;
 };
 
@@ -100,8 +101,9 @@ type RecordCounts = {
 	downloads: number;
 	errors: number;
 	eventSourceMessages: number;
-	// Names of the record files that stopped recording, empty in a healthy run.
-	failedWriters: Set<string>;
+	// Record files that lost something, empty in a healthy run.
+	// True means the file stopped recording; false means it lost a record and kept going.
+	failedWriters: Map<string, boolean>;
 	redirectHops: number;
 	requestBodies: number;
 	requestBytes: number;
@@ -112,10 +114,15 @@ type RecordCounts = {
 
 // A failed writer means the run counted records that its file never received.
 // The line is printed only when one failed, so a healthy run reads as before.
-const renderWriterFailures = (failed: Set<string>): string[] =>
+// `lost` is a file that missed a record and kept recording; `stopped` is one that did not.
+const renderWriterFailures = (failed: Map<string, boolean>): string[] =>
 	failed.size === 0
 		? []
-		: [`summary_writers ${[...failed].map((name) => `${name}=failed`).join(" ")}`];
+		: [
+				`summary_writers ${[...failed]
+					.map(([name, stopped]) => `${name}=${stopped ? "stopped" : "lost"}`)
+					.join(" ")}`,
+			];
 
 // Saved bodies first, then the records that have no body of their own.
 // The snapshot line is printed only when one was taken, so a normal run is unchanged.
@@ -139,7 +146,7 @@ const createRecordCounts = (): RecordCounts => ({
 	downloads: 0,
 	errors: 0,
 	eventSourceMessages: 0,
-	failedWriters: new Set<string>(),
+	failedWriters: new Map<string, boolean>(),
 	redirectHops: 0,
 	requestBodies: 0,
 	requestBytes: 0,
@@ -190,8 +197,9 @@ const createCaptureSummary = (): CaptureSummary => {
 			counts.webSocketFrames += 1;
 		},
 		// One line per run whatever a writer failed on, so repeats do not accumulate.
-		recordWriterFailure: (name: string): void => {
-			counts.failedWriters.add(name);
+		// A file reported both ways keeps the worse of the two.
+		recordWriterFailure: (name: string, stopped: boolean): void => {
+			counts.failedWriters.set(name, stopped || (counts.failedWriters.get(name) ?? false));
 		},
 		render: (): string =>
 			[...renderTotals(counts, snapshotCounts), ...renderHostLines(errorsByHost)].join("\n"),

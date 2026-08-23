@@ -907,8 +907,9 @@ class CdpResponseLogger {
 	}
 
 	// A handler that outlived both budgets is abandoned here, and the writers close next.
-	// Its append would then be refused, so the record is lost with nothing to say so.
-	// This is that record, written while the writers are still open.
+	// One that finishes before they do still records; one that finishes after is refused.
+	// Which of the two it was is not knowable here, so the record says only that much.
+	// It is written while the writers are still open, whichever way the handlers go.
 	async #recordAbandonedEvents(): Promise<void> {
 		const abandoned = this.#pendingEvents.size;
 		if (abandoned === 0) {
@@ -919,7 +920,7 @@ class CdpResponseLogger {
 			createErrorRecord(
 				"Cdp.drainTimeout",
 				undefined,
-				`Shutdown abandoned ${abandoned} event handler(s) still running; their records were dropped.`,
+				`Shutdown abandoned ${abandoned} event handler(s) still running; their records may not have been recorded.`,
 			),
 		);
 	}
