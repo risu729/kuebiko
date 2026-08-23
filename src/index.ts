@@ -112,7 +112,14 @@ const startConfiguredBrowser = async (
 const getRunAnnotations = (options: CliOptions): RunAnnotations => ({
 	captureCookies: options.captureCookies,
 	captureDownloads: options.captureDownloads,
+	// The filters and the body cap decide what the capture leaves out.
+	// They belong in the directory that has to explain itself months later.
+	exclude: options.exclude?.source,
+	include: options.include?.source,
 	labels: options.labels,
+	maxBodyBytes: options.maxBodyBytes,
+	// Only launch mode writes a NetLog, so --netlog alone does not mean one is here.
+	netlog: options.launchBrowser && options.netlog,
 	note: options.note,
 	snapshotStorage: options.snapshotStorage,
 	streamBodies: options.streamBodies,
