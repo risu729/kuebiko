@@ -455,8 +455,19 @@ of their own and would otherwise be invisible in the totals. The
 `summary snapshot_` line is printed only when `--snapshot-storage` wrote a
 snapshot, and counts what landed in it: origins, cookies, `localStorage` and
 `sessionStorage` items together, IndexedDB databases, and object store entries.
-A run without the flag keeps the three-line summary it had before. One
-`summary_errors` line is printed per host with the `errors.ndjson` `event`
+A run without the flag prints no `summary snapshot_` line at all.
+
+`summary_writers` is printed only when a record file lost something, so a
+healthy run does not have the line. Each name is one of the NDJSON files without
+its extension, and says which of two things happened to it. `metadata=lost`
+means at least one record never reached the file and the file kept recording
+afterwards. `metadata=stopped` means its last write failed, so the file recorded
+nothing after that point and the counts above cover records it never received.
+Each one also writes a line to stderr naming the file and the first error behind
+it. A record appended after the writers close is refused rather than written
+behind the summary that already reported the run.
+
+One `summary_errors` line is printed per host with the `errors.ndjson` `event`
 counts behind it, ordered by failure count. Only the top 20 hosts get a line;
 the rest are collapsed into a final remainder line.
 
