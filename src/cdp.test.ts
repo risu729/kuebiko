@@ -324,7 +324,7 @@ const emitResponseExtraInfo = (client: FakeClient, extra: ResponseExtraInfo): vo
 const emitResponseReceived = (
 	client: FakeClient,
 	url: string,
-	kind?: { mimeType?: string; type?: string },
+	kind?: { mimeType?: string; sessionId?: string; type?: string },
 ): void => {
 	const mimeType = kind?.mimeType ?? "text/html";
 	client.emit(
@@ -344,7 +344,7 @@ const emitResponseReceived = (
 			timestamp: 4,
 			type: kind?.type ?? "Document",
 		},
-		"session-1",
+		kind?.sessionId ?? "session-1",
 	);
 };
 
@@ -2861,6 +2861,113 @@ describe("CdpResponseLogger", () => {
 			}),
 		]);
 		expect(hooks.events.map((event) => event.event)).not.toContain("download.completed");
+	});
+
+	// Messages arrive in wire order and a detach sweeps its state synchronously.
+	// An event after it belongs to a target Chrome destroyed, so nothing can complete it.
+	// Recording one used to leave a request entry no event will ever remove.
+	it("ignores network events for a session that already detached", async () => {
+		const client = new FakeClient();
+		const storage = createStorage();
+		const logger = new CdpResponseLogger(client as never, {
+			cdp: "http://127.0.0.1:9222",
+			storage,
+			verbose: false,
+		});
+
+		await logger.start();
+		attachPageTarget(client);
+		await waitForAsyncEvent();
+		client.emit("Target.detachedFromTarget", { sessionId: "session-1", targetId: "target-1" });
+		await waitForAsyncEvent();
+		emitRequestWillBeSent(client, { url: "https://sso.test/authorize" });
+		await waitForAsyncEvent();
+		// The hop would be written off the state the first event resurrected.
+		emitRequestWillBeSent(client, { url: "https://idp.test/login" }, SSO_TO_IDP);
+		await waitForAsyncEvent();
+		// Nothing was resurrected, so the finish that follows finds no state to complete.
+		emitFinalResponse(client, "https://idp.test/login");
+		await waitForAsyncEvent();
+
+		expect(storage.metadata).toHaveLength(0);
+		expect(client.Network.getResponseBody).not.toHaveBeenCalled();
+		// The detach dropped nothing either, so it is not an error of its own.
+		expect(storage.errors).toHaveLength(0);
+	});
+
+	// Streaming a detached session sends a command the browser refuses.
+	// The one record the run keeps for a stream failure would then describe that refusal.
+	// The first real failure would be the one lost.
+	it("never streams a response for a session that already detached", async () => {
+		const client = new FakeClient();
+		client.Network.streamResourceContent.mockImplementation(() =>
+			Promise.reject(new Error("Network.streamResourceContent is not supported")),
+		);
+		const storage = createStorage();
+		const logger = new CdpResponseLogger(client as never, {
+			cdp: "http://127.0.0.1:9222",
+			storage,
+			streamBodies: true,
+			verbose: false,
+		});
+
+		await logger.start();
+		attachPageTarget(client);
+		attachPageTarget(client, "session-2", "target-2");
+		await waitForAsyncEvent();
+		client.emit("Target.detachedFromTarget", { sessionId: "session-1", targetId: "target-1" });
+		await waitForAsyncEvent();
+		emitResponseReceived(client, "https://example.test/gone");
+		await waitForAsyncEvent();
+
+		expect(client.Network.streamResourceContent).not.toHaveBeenCalled();
+
+		// The first genuine failure of the run is what the one record must describe.
+		emitResponseReceived(client, "https://example.test/api", { sessionId: "session-2" });
+		await waitForAsyncEvent();
+
+		expect(client.Network.streamResourceContent).toHaveBeenCalledTimes(1);
+		expect(storage.errors).toEqual([
+			expect.objectContaining({
+				event: "Network.streamResourceContent",
+				sessionId: "session-2",
+				url: "https://example.test/api",
+			}),
+		]);
+	});
+
+	// A tab closing with nothing in flight is ordinary.
+	// An error record for it inflates the error total and crowds out the real failures.
+	it("records a detach only when it dropped capture state", async () => {
+		const client = new FakeClient();
+		const storage = createStorage();
+		const logger = new CdpResponseLogger(client as never, {
+			cdp: "http://127.0.0.1:9222",
+			storage,
+			verbose: false,
+		});
+
+		await logger.start();
+		attachPageTarget(client);
+		attachPageTarget(client, "session-2", "target-2");
+		await waitForAsyncEvent();
+		client.emit("Target.detachedFromTarget", { sessionId: "session-2", targetId: "target-2" });
+		await waitForAsyncEvent();
+
+		expect(storage.errors).toHaveLength(0);
+
+		emitRequestWillBeSent(client, { url: "https://example.test/api" });
+		await waitForAsyncEvent();
+		client.emit("Target.detachedFromTarget", { sessionId: "session-1", targetId: "target-1" });
+		await waitForAsyncEvent();
+
+		expect(storage.errors).toEqual([
+			expect.objectContaining({
+				error: "Target detached before 1 active request(s) completed.",
+				event: "Target.detachedFromTarget",
+				sessionId: "session-1",
+			}),
+		]);
 	});
 });
 
