@@ -9,6 +9,7 @@ import {
 } from "./plugins";
 import { matchesFilters } from "./sanitize";
 import type {
+	BodySaveResult,
 	CompletedResponseMetadata,
 	ErrorRecord,
 	EventSourceMessageRecord,
@@ -32,6 +33,10 @@ type WebSocketCreatedEvent = Protocol.Network.WebSocketCreatedEvent;
 type WebSocketClosedEvent = Protocol.Network.WebSocketClosedEvent;
 type WebSocketFrameErrorEvent = Protocol.Network.WebSocketFrameErrorEvent;
 type EventSourceMessageReceivedEvent = Protocol.Network.EventSourceMessageReceivedEvent;
+// CDP reports whether the saved bytes were base64 encoded alongside the save result.
+type ResponseBodyResult = BodySaveResult & { base64Encoded?: boolean | undefined };
+// The skip flag drives an error record instead of reaching metadata.
+type CompletedBodyResult = Omit<ResponseBodyResult, "skipped">;
 // Both frame events carry the same requestId and response payload.
 type WebSocketFrameEvent =
 	| Protocol.Network.WebSocketFrameReceivedEvent
@@ -102,14 +107,7 @@ const createErrorRecord = (
 const createCompletedMetadata = (
 	state: RequestState,
 	finished: LoadingFinishedEvent,
-	bodyResult: {
-		base64Encoded?: boolean | undefined;
-		bodyFile?: string | undefined;
-		bodyLength?: number | undefined;
-		bodySaved: boolean;
-		bodySha256?: string | undefined;
-		error?: string | undefined;
-	},
+	bodyResult: CompletedBodyResult,
 	requestBodyResult: Partial<RequestBodySaveResult>,
 	runTimestamp: string,
 ): CompletedResponseMetadata => {
@@ -630,15 +628,7 @@ class CdpResponseLogger {
 	async #getBodyResult(
 		state: RequestState,
 		event: LoadingFinishedEvent,
-	): Promise<{
-		base64Encoded?: boolean | undefined;
-		bodyFile?: string | undefined;
-		bodyLength?: number | undefined;
-		bodySaved: boolean;
-		bodySha256?: string | undefined;
-		error?: string | undefined;
-		skipped?: boolean | undefined;
-	}> {
+	): Promise<ResponseBodyResult> {
 		if (
 			this.#options.maxBodyBytes !== undefined &&
 			event.encodedDataLength > this.#options.maxBodyBytes
@@ -731,9 +721,11 @@ class CdpResponseLogger {
 		await this.#options.hooks?.publish(createWebSocketFrameHookEvent(frame, this.#options.storage));
 	}
 
-	// An EventSource connection stays open for the life of the page.
-	// Network.loadingFinished never fires for it, so no response body is ever retrieved.
-	// Each message arrives as its own event instead, and is recorded on its own.
+	// An EventSource connection normally stays open for the life of the page, so
+	// Network.loadingFinished usually never fires and no response body is retrieved.
+	// It does fire when the server ends the stream or the page closes it.
+	// A normal response is recorded then, with the messages still in their own file.
+	// Each message arrives as its own event regardless, and is recorded on its own.
 	//
 	// Unlike a WebSocket handshake, an EventSource connection does emit
 	// Network.requestWillBeSent, so #requests holds the stream while it is open.

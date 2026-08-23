@@ -112,8 +112,7 @@ type ErrorRecord = {
 	url?: string | undefined;
 };
 
-// Long-lived streams are recorded per frame or message instead of per response.
-// Records keep no url when the requestId cannot be mapped back to a stream.
+// Streams are recorded per frame or message, with no url when the stream is unknown.
 type StreamRecord = {
 	requestId: string;
 	sessionId: string;
@@ -139,7 +138,6 @@ type RunRef = {
 	runTimestamp: string;
 };
 
-// Every hook event names its run the same way.
 type HookEventBase = {
 	run: RunRef;
 	timestamp: string;
@@ -149,9 +147,7 @@ type HookEventBase = {
 // Derived from the events so no plugin can subscribe to a name never published.
 type HookEventName = HookEvent["event"];
 
-type RunHookEvent = HookEventBase & {
-	event: "run.started" | "run.stopping" | "run.stopped";
-};
+type RunHookEvent = HookEventBase & { event: "run.started" | "run.stopping" | "run.stopped" };
 
 type ResponseCompletedHookEvent = HookEventBase & {
 	event: "response.completed";
@@ -181,7 +177,12 @@ type ResponseCompletedHookEvent = HookEventBase & {
 		status?: number | undefined;
 		statusText?: string | undefined;
 	};
-	target: Omit<SessionInfo, "sessionId">;
+	// Written out, not derived from SessionInfo, so no internal field widens it.
+	target: {
+		targetId?: string | undefined;
+		targetType?: string | undefined;
+		targetUrl?: string | undefined;
+	};
 };
 
 type WebSocketFrameHookEvent = HookEventBase & {
@@ -194,10 +195,7 @@ type EventSourceMessageHookEvent = HookEventBase & {
 	message: EventSourceMessageRecord;
 };
 
-type CaptureErrorHookEvent = HookEventBase & {
-	error: ErrorRecord;
-	event: "capture.error";
-};
+type CaptureErrorHookEvent = HookEventBase & { error: ErrorRecord; event: "capture.error" };
 
 type HookEvent =
 	| CaptureErrorHookEvent

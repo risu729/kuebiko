@@ -286,8 +286,9 @@ const emitWebSocketFrameError = (
 
 const emitEventSourceMessage = (
 	client: FakeClient,
-	message: { data: string; eventId?: string; eventName?: string; requestId?: string },
+	message: SocketRef & { data: string; eventId?: string; eventName?: string },
 ): void => {
+	const { sessionId } = socketRef(message);
 	client.emit(
 		"Network.eventSourceMessageReceived",
 		{
@@ -297,7 +298,7 @@ const emitEventSourceMessage = (
 			requestId: message.requestId ?? "request-1",
 			timestamp: 9,
 		},
-		"session-1",
+		sessionId,
 	);
 };
 
@@ -1625,6 +1626,35 @@ describe("CdpResponseLogger", () => {
 			eventName: "message",
 			url: undefined,
 		});
+	});
+
+	// The lookup is keyed by session and request id.
+	// No stream URL leaks onto a message of another request or another session.
+	it("attributes an eventsource message only to its own request", async () => {
+		const client = new FakeClient();
+		const storage = createStorage();
+		const logger = new CdpResponseLogger(client as never, {
+			cdp: "http://127.0.0.1:9222",
+			storage,
+			verbose: false,
+		});
+
+		await logger.start();
+		attachPageTarget(client);
+		attachPageTarget(client, "session-2", "target-2");
+		await waitForAsyncEvent();
+		emitRequestWillBeSent(client, { url: "https://stream.test/prices" });
+		await waitForAsyncEvent();
+		emitEventSourceMessage(client, { data: '{"btc":1}' });
+		emitEventSourceMessage(client, { data: '{"btc":2}', requestId: "request-2" });
+		emitEventSourceMessage(client, { data: '{"btc":3}', sessionId: "session-2" });
+		await waitForAsyncEvent();
+
+		expect(storage.eventSource.map((message) => [message.sessionId, message.url])).toEqual([
+			["session-1", "https://stream.test/prices"],
+			["session-1", undefined],
+			["session-2", undefined],
+		]);
 	});
 
 	// Detaching drops the request state, so later messages lose the URL but are still recorded.

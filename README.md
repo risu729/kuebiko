@@ -170,17 +170,22 @@ before it attached or had already closed, is still recorded but has no `url`.
 
 `eventsource.ndjson` contains one JSON object per Server-Sent Events message,
 with the `eventName`, `eventId`, and `data` the browser parsed out of the
-stream. An SSE connection stays open for the life of the page, so it never
-reaches `Network.loadingFinished` and has no saved response body; the messages
-are the capture. Each message carries the stream `url`, which is recoverable
+stream. An SSE connection normally stays open for the life of the page, so it
+usually never reaches `Network.loadingFinished` and has no saved response body;
+the messages are the capture. A stream the server ends, or the page closes, does
+reach it and adds a normal `metadata.ndjson` record for the connection itself,
+while the messages stay in `eventsource.ndjson` either way. Each message carries
+the stream `url`, which is recoverable
 because an `EventSource` connection does produce `Network.requestWillBeSent`,
 unlike a WebSocket handshake. A message recorded after the logger lost that
 request state, because the target detached or the stream started before it
 attached, is still written but has no `url`.
 
-`--include` and `--exclude` apply to response URLs only and never gate
-`websocket.ndjson` or `eventsource.ndjson`, because a record without a URL could
-not be matched anyway.
+`--include` and `--exclude` apply to response URLs only. They never gate
+`websocket.ndjson`, because a frame without a URL could not be matched anyway,
+and they never gate `eventsource.ndjson` either, even though its messages do
+carry a URL: that is a deliberate choice, because filtering part of a live
+stream would be more confusing than not filtering it at all.
 
 `errors.ndjson` contains per-request capture failures. Individual CDP failures
 do not stop the logger. WebSocket failures land here too: a frame the browser
@@ -602,9 +607,10 @@ mise run compile
   written to `websocket.ndjson` as individual frames, not reassembled messages,
   and a frame on a socket the logger never saw open has no `url`.
 - Server-Sent Events are captured as individual messages in
-  `eventsource.ndjson`, not as a response body. The connection stays open for
-  the life of the page, so CDP never has a body to return for it, and a message
-  recorded after the logger lost the stream's request state has no `url`.
+  `eventsource.ndjson`, not as a response body. The connection normally stays
+  open for the life of the page, so CDP usually has no body to return for it,
+  and a message recorded after the logger lost the stream's request state has no
+  `url`.
 - This tool does not parse, analyze, classify, or display responses.
 - Plugins are trusted local code running in the logger process. They are useful
   for local real-time consumers, but they are not sandboxed.

@@ -59,6 +59,10 @@ const startFixtureServer = (): ReturnType<typeof Bun.serve> =>
 			});
 		},
 		hostname: "127.0.0.1",
+		// The SSE route holds a response open with no traffic on it.
+		// Disabling the default 10s idle timeout keeps that response from being closed.
+		// A closed stream would make the page reconnect and replay the events.
+		idleTimeout: 0,
 		port: 0,
 		websocket: {
 			message: (socket, message) => {
