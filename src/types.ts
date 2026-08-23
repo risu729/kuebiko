@@ -145,18 +145,19 @@ type WebSocketFrameRecord = StreamRecord & {
 
 // One record per browser download, written only with --capture-downloads.
 // A canceled download is recorded too, without a file, so the loss stays visible.
+// The Browser download events are browser-wide and name only the frame behind one.
+// A record is therefore tied to its origin by frameId, not by CDP session.
 type DownloadRecord = {
 	error?: string | undefined;
 	// Saved file relative to the run directory, absent unless the file was hashed.
 	file?: string | undefined;
+	frameId?: string | undefined;
 	guid: string;
 	receivedBytes?: number | undefined;
-	sessionId?: string | undefined;
 	sha256?: string | undefined;
 	startedAt?: string | undefined;
 	state: "canceled" | "completed";
 	suggestedFilename?: string | undefined;
-	targetId?: string | undefined;
 	timestamp: string;
 	totalBytes?: number | undefined;
 	url?: string | undefined;

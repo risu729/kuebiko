@@ -71,6 +71,9 @@ const sha256File = async (path: string): Promise<string> => {
 	return hash.digest("hex");
 };
 
+// Chromium identifies a download by a UUID, which is all this path segment may be.
+const DOWNLOAD_GUID_PATTERN = /^[0-9A-Fa-f-]{36}$/u;
+
 const errorMessage = (error: unknown): string =>
 	error instanceof Error ? error.message : String(error);
 
@@ -257,9 +260,15 @@ const createStorage = async (
 	// Under Browser.setDownloadBehavior "allowAndName" the browser names the file by GUID.
 	// The file keeps that name: renaming it would race the browser's own writes.
 	// This record is what maps the GUID back to the suggested filename instead.
+	// The GUID is browser-supplied and ends up in a path that plugins resolve.
+	// Anything that is not the UUID Chromium sends is rejected before it is joined.
 	const hashDownload = async (
 		guid: string,
 	): Promise<Pick<DownloadRecord, "error" | "file" | "sha256">> => {
+		if (!DOWNLOAD_GUID_PATTERN.test(guid)) {
+			return { error: `Download guid ${guid} is not a download identifier.` };
+		}
+
 		const relativePath = join(DOWNLOADS_DIRECTORY, guid);
 		try {
 			return { file: relativePath, sha256: await sha256File(join(runDirectory, relativePath)) };

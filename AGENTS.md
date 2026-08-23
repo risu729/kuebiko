@@ -86,7 +86,8 @@ Keep CDP use passive by default:
   reason.
 - Keep anything that changes browser behavior behind an explicit off-by-default
   flag, and say so in the README. `--capture-downloads` is the only such flag:
-  it enables the `Page` domain and sets `Browser.setDownloadBehavior`.
+  it sets `Browser.setDownloadBehavior` and subscribes the browser-wide
+  `Browser` download events, and it restores the default behavior on shutdown.
 
 Preserve normal browser behavior in launch mode:
 

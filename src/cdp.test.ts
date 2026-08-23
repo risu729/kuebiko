@@ -22,6 +22,7 @@ import type {
 class FakeClient extends EventEmitter {
 	Browser = {
 		close: mock(() => Promise.resolve()),
+		setDownloadBehavior: mock(() => Promise.resolve()),
 	};
 
 	Network = {
@@ -426,20 +427,17 @@ const emitEventSourceMessage = (
 	);
 };
 
+// The Browser download events are browser-wide, so neither carries a sessionId.
 const emitDownloadWillBegin = (
 	client: FakeClient,
-	download: { guid?: string; sessionId?: string; suggestedFilename?: string; url: string },
+	download: { frameId?: string; guid?: string; suggestedFilename?: string; url: string },
 ): void => {
-	client.emit(
-		"Page.downloadWillBegin",
-		{
-			frameId: "frame-1",
-			guid: download.guid ?? "download-1",
-			suggestedFilename: download.suggestedFilename ?? "statement.pdf",
-			url: download.url,
-		},
-		download.sessionId ?? "session-1",
-	);
+	client.emit("Browser.downloadWillBegin", {
+		frameId: download.frameId ?? "frame-1",
+		guid: download.guid ?? "download-1",
+		suggestedFilename: download.suggestedFilename ?? "statement.pdf",
+		url: download.url,
+	});
 };
 
 const emitDownloadProgress = (
@@ -447,21 +445,16 @@ const emitDownloadProgress = (
 	progress: {
 		guid?: string;
 		receivedBytes?: number;
-		sessionId?: string;
 		state: "inProgress" | "completed" | "canceled";
 		totalBytes?: number;
 	},
 ): void => {
-	client.emit(
-		"Page.downloadProgress",
-		{
-			guid: progress.guid ?? "download-1",
-			receivedBytes: progress.receivedBytes ?? 1024,
-			state: progress.state,
-			totalBytes: progress.totalBytes ?? 1024,
-		},
-		progress.sessionId ?? "session-1",
-	);
+	client.emit("Browser.downloadProgress", {
+		guid: progress.guid ?? "download-1",
+		receivedBytes: progress.receivedBytes ?? 1024,
+		state: progress.state,
+		totalBytes: progress.totalBytes ?? 1024,
+	});
 };
 
 const createDownloadLogger = (
@@ -2591,11 +2584,12 @@ describe("CdpResponseLogger", () => {
 		emitDownloadWillBegin(client, { url: "https://example.test/statement.pdf" });
 		emitDownloadProgress(client, { state: "completed" });
 		await waitForAsyncEvent();
+		await logger.close();
 
-		expect(client.listenerCount("Page.downloadWillBegin")).toBe(0);
-		expect(client.listenerCount("Page.downloadProgress")).toBe(0);
-		expect(client.send).not.toHaveBeenCalledWith("Browser.setDownloadBehavior", expect.anything());
-		expect(client.send).not.toHaveBeenCalledWith("Page.enable", undefined, "session-1");
+		expect(client.listenerCount("Browser.downloadWillBegin")).toBe(0);
+		expect(client.listenerCount("Browser.downloadProgress")).toBe(0);
+		// Nothing was overridden, so shutdown has nothing to put back either.
+		expect(client.Browser.setDownloadBehavior).not.toHaveBeenCalled();
 		expect(storage.downloads).toHaveLength(0);
 	});
 
@@ -2616,23 +2610,21 @@ describe("CdpResponseLogger", () => {
 		emitDownloadProgress(client, { receivedBytes: 1024, state: "completed", totalBytes: 1024 });
 		await waitForAsyncEvent();
 
-		expect(client.send).toHaveBeenCalledWith("Browser.setDownloadBehavior", {
+		expect(client.Browser.setDownloadBehavior).toHaveBeenCalledWith({
 			behavior: "allowAndName",
 			downloadPath: resolve("/captures/run", "downloads"),
 			eventsEnabled: true,
 		});
-		expect(client.send).toHaveBeenCalledWith("Page.enable", undefined, "session-1");
 		// Only the terminal event is recorded; the in-progress one writes nothing.
 		expect(storage.downloads).toHaveLength(1);
 		expect(storage.downloads[0]).toMatchObject({
 			file: "downloads/download-1",
+			frameId: "frame-1",
 			guid: "download-1",
 			receivedBytes: 1024,
-			sessionId: "session-1",
 			sha256: "download-hash",
 			state: "completed",
 			suggestedFilename: "statement-2026-07.pdf",
-			targetId: "target-1",
 			totalBytes: 1024,
 			url: "https://bank.test/statements/2026-07.pdf",
 		});
@@ -2671,7 +2663,8 @@ describe("CdpResponseLogger", () => {
 		expect(hooks.events.map((event) => event.event)).not.toContain("download.completed");
 	});
 
-	it("drops a download whose target detached before it finished", async () => {
+	// The Browser events are browser-wide, so a closing tab no longer loses the download.
+	it("records a download whose target detached before it finished", async () => {
 		const client = new FakeClient();
 		const storage = createStorage();
 		const logger = createDownloadLogger(client, storage);
@@ -2682,13 +2675,116 @@ describe("CdpResponseLogger", () => {
 		emitDownloadWillBegin(client, { url: "https://bank.test/statements/2026-07.pdf" });
 		client.emit("Target.detachedFromTarget", { sessionId: "session-1", targetId: "target-1" });
 		await waitForAsyncEvent();
-		// A late terminal event finds no pending download, so it can name neither url nor file.
 		emitDownloadProgress(client, { state: "completed" });
 		await waitForAsyncEvent();
 
-		expect(storage.downloads[0]).toMatchObject({ guid: "download-1", state: "completed" });
-		expect(storage.downloads[0]?.suggestedFilename).toBeUndefined();
-		expect(storage.downloads[0]?.url).toBeUndefined();
+		expect(storage.downloads).toHaveLength(1);
+		expect(storage.downloads[0]).toMatchObject({
+			file: "downloads/download-1",
+			guid: "download-1",
+			state: "completed",
+			suggestedFilename: "statement.pdf",
+			url: "https://bank.test/statements/2026-07.pdf",
+		});
+	});
+
+	// Chrome dispatches on every update of a finished download, terminal ones included.
+	it("records a repeated terminal download progress event only once", async () => {
+		const client = new FakeClient();
+		const storage = createStorage();
+		const hooks = createHooks();
+		const logger = createDownloadLogger(client, storage, hooks);
+
+		await logger.start();
+		attachPageTarget(client);
+		await waitForAsyncEvent();
+		emitDownloadWillBegin(client, { url: "https://bank.test/statements/2026-07.pdf" });
+		emitDownloadProgress(client, { state: "completed" });
+		await waitForAsyncEvent();
+		emitDownloadProgress(client, { state: "completed" });
+		emitDownloadProgress(client, { state: "canceled" });
+		await waitForAsyncEvent();
+
+		expect(storage.downloads).toHaveLength(1);
+		expect(storage.downloads[0]).toMatchObject({ state: "completed" });
+		expect(hooks.events.filter((event) => event.event === "download.completed")).toHaveLength(1);
+	});
+
+	// An interrupted download is reported as canceled and may still complete afterwards.
+	it("supersedes a canceled download with the completion that follows it", async () => {
+		const client = new FakeClient();
+		const storage = createStorage();
+		const logger = createDownloadLogger(client, storage);
+
+		await logger.start();
+		attachPageTarget(client);
+		await waitForAsyncEvent();
+		emitDownloadWillBegin(client, { url: "https://bank.test/statements/2026-07.pdf" });
+		emitDownloadProgress(client, { receivedBytes: 64, state: "canceled" });
+		await waitForAsyncEvent();
+		emitDownloadProgress(client, { receivedBytes: 1024, state: "completed" });
+		await waitForAsyncEvent();
+
+		// Both lines stay, the later one superseding the loss the earlier one recorded.
+		expect(storage.downloads.map((download) => download.state)).toEqual(["canceled", "completed"]);
+		expect(storage.downloads[1]).toMatchObject({
+			file: "downloads/download-1",
+			suggestedFilename: "statement.pdf",
+			url: "https://bank.test/statements/2026-07.pdf",
+		});
+	});
+
+	it("keeps concurrent downloads apart by guid", async () => {
+		const client = new FakeClient();
+		const storage = createStorage();
+		const logger = createDownloadLogger(client, storage);
+
+		await logger.start();
+		attachPageTarget(client);
+		await waitForAsyncEvent();
+		emitDownloadWillBegin(client, {
+			guid: "download-1",
+			suggestedFilename: "statement.pdf",
+			url: "https://bank.test/statements/2026-07.pdf",
+		});
+		emitDownloadWillBegin(client, {
+			frameId: "frame-2",
+			guid: "download-2",
+			suggestedFilename: "export.csv",
+			url: "https://bank.test/exports/2026-07.csv",
+		});
+		emitDownloadProgress(client, { guid: "download-2", state: "completed" });
+		emitDownloadProgress(client, { guid: "download-1", state: "completed" });
+		await waitForAsyncEvent();
+
+		expect(storage.downloads).toHaveLength(2);
+		expect(storage.downloads[0]).toMatchObject({
+			file: "downloads/download-2",
+			frameId: "frame-2",
+			suggestedFilename: "export.csv",
+			url: "https://bank.test/exports/2026-07.csv",
+		});
+		expect(storage.downloads[1]).toMatchObject({
+			file: "downloads/download-1",
+			frameId: "frame-1",
+			suggestedFilename: "statement.pdf",
+			url: "https://bank.test/statements/2026-07.pdf",
+		});
+	});
+
+	// In attach mode the browser keeps running, so the override must not outlive the run.
+	it("restores the default download behavior when the run ends", async () => {
+		const client = new FakeClient();
+		const storage = createStorage();
+		const logger = createDownloadLogger(client, storage);
+
+		await logger.start();
+		await logger.close();
+
+		expect(client.Browser.setDownloadBehavior).toHaveBeenLastCalledWith({
+			behavior: "default",
+		});
+		expect(storage.errors).toHaveLength(0);
 	});
 
 	it("records a completed download whose file storage could not read", async () => {
@@ -2711,9 +2807,7 @@ describe("CdpResponseLogger", () => {
 		expect(storage.errors).toEqual([
 			expect.objectContaining({
 				error: "ENOENT: no such file or directory",
-				event: "Page.downloadProgress",
-				sessionId: "session-1",
-				targetId: "target-1",
+				event: "Browser.downloadProgress",
 				url: "https://bank.test/statements/2026-07.pdf",
 			}),
 		]);

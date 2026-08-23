@@ -15,6 +15,7 @@ import { matchesFilters } from "./sanitize";
 import type {
 	BodySaveResult,
 	CompletedResponseMetadata,
+	DownloadRecord,
 	ErrorRecord,
 	EventSourceMessageRecord,
 	ExtraInfoState,
@@ -31,7 +32,7 @@ import type {
 type StartLoggerOptions = {
 	// Subscribes the ExtraInfo events, which is the only way raw cookies are recorded.
 	captureCookies?: boolean | undefined;
-	// Enables the Page domain and points browser downloads at the run directory.
+	// Points browser downloads at the run directory and subscribes the Browser events.
 	captureDownloads?: boolean | undefined;
 	cdp: string;
 	exclude?: RegExp | undefined;
@@ -64,16 +65,20 @@ type WebSocketCreatedEvent = Protocol.Network.WebSocketCreatedEvent;
 type WebSocketClosedEvent = Protocol.Network.WebSocketClosedEvent;
 type WebSocketFrameErrorEvent = Protocol.Network.WebSocketFrameErrorEvent;
 type EventSourceMessageReceivedEvent = Protocol.Network.EventSourceMessageReceivedEvent;
-type DownloadWillBeginEvent = Protocol.Page.DownloadWillBeginEvent;
-type DownloadProgressEvent = Protocol.Page.DownloadProgressEvent;
-// What downloadWillBegin knew about a download still in flight, keyed by its GUID.
+// The Page download events are deprecated in favor of these browser-wide ones.
+// Browser.setDownloadBehavior with eventsEnabled is what turns them on.
+type DownloadWillBeginEvent = Protocol.Browser.DownloadWillBeginEvent;
+type DownloadProgressEvent = Protocol.Browser.DownloadProgressEvent;
+// What downloadWillBegin knew about a download, keyed by its GUID.
 // Only that event carries the URL and suggested filename; progress events carry neither.
+// A download the logger only ever saw finish gets an entry too, so its repeats are seen.
 type PendingDownload = {
-	sessionId: string;
-	startedAt: string;
-	suggestedFilename: string;
-	targetId?: string | undefined;
-	url: string;
+	frameId?: string | undefined;
+	// The terminal state already recorded, undefined while the download is still running.
+	settledState?: DownloadRecord["state"] | undefined;
+	startedAt?: string | undefined;
+	suggestedFilename?: string | undefined;
+	url?: string | undefined;
 };
 // CDP reports whether the saved bytes were base64 encoded alongside the save result.
 type ResponseBodyResult = BodySaveResult & { base64Encoded?: boolean | undefined };
@@ -115,8 +120,6 @@ type StreamAccumulator = {
 };
 
 const TARGET_TYPES = new Set(["page", "iframe", "worker", "shared_worker", "service_worker"]);
-// Worker targets have no Page domain, so Page.enable is only sent to the frame targets.
-const PAGE_TARGET_TYPES = new Set(["page", "iframe"]);
 
 const NETWORK_BUFFER_OPTIONS = {
 	maxResourceBufferSize: 100 * 1024 * 1024,
@@ -125,16 +128,40 @@ const NETWORK_BUFFER_OPTIONS = {
 
 const CDP_CLOSE_TIMEOUT_MS = 5_000;
 const CDP_DRAIN_TIMEOUT_MS = 1_000;
+// A download record is only written once its saved file has been hashed.
+// Hashing a large file takes far longer than the in-memory handlers need to drain.
+// The writers close right after the drain, so a late append would be dropped.
+// The budget is therefore extended while a download is still being hashed.
+const CDP_DOWNLOAD_DRAIN_TIMEOUT_MS = 30_000;
 
 // A WebSocket handshake gets ExtraInfo events but never a requestWillBeSent.
 // Those entries are only cleaned up by the socket closing or the target detaching.
 // The cap keeps a long capture bounded even when neither happens.
 const MAX_PENDING_EXTRA_INFO = 1_000;
 
+// Download events are browser-wide, so no target detaching ever sweeps this map.
 // A download whose progress events stop is never finalized.
-// A detach sweeps only the downloads of the session that went away.
-// The cap bounds the map like the one above, dropping the oldest entry still waiting.
+// A finished one is kept so a repeated terminal event writes no second record.
+// The cap bounds the map like the one above, dropping the oldest entry it holds.
 const MAX_PENDING_DOWNLOADS = 1_000;
+
+// Only a terminal state produces a record; progress is reported for every chunk.
+// A state added to the protocol later is passed through instead of being labelled.
+// It also stops compiling here, so a new state gets a deliberate answer.
+const terminalDownloadState = (
+	state: DownloadProgressEvent["state"],
+): DownloadRecord["state"] | undefined => {
+	switch (state) {
+		case "inProgress":
+			return undefined;
+		case "completed":
+			return "completed";
+		case "canceled":
+			return "canceled";
+		default:
+			return state;
+	}
+};
 
 // An EventSource connection normally never reaches loadingFinished.
 // Its bytes would be held for the life of the page, duplicating eventsource.ndjson.
@@ -303,8 +330,12 @@ const headerValue = (
 
 class CdpResponseLogger {
 	readonly #client: CdpClient;
-	// Downloads in flight keyed by GUID, only populated with --capture-downloads.
+	// Set once the browser connection is gone, so shutdown stops sending to it.
+	#disconnected = false;
+	// Downloads seen this run keyed by GUID, only populated with --capture-downloads.
 	readonly #downloads = new Map<string, PendingDownload>();
+	// Downloads whose record is waiting on the hash of a saved file.
+	#hashingDownloads = 0;
 	// Raw headers with no request state to live on yet, keyed like #requests.
 	// Only populated with --capture-cookies, since nothing else subscribes ExtraInfo.
 	readonly #extraInfo = new Map<string, PendingExtraInfo>();
@@ -342,12 +373,20 @@ class CdpResponseLogger {
 	}
 
 	async close(): Promise<void> {
+		// The override has to go back before the connection that installed it is closed.
+		await settlesWithin(this.#resetDownloadBehavior(), CDP_DRAIN_TIMEOUT_MS);
 		const closing = this.#client.close();
 		if (!(await settlesWithin(closing, CDP_CLOSE_TIMEOUT_MS))) {
 			terminateClientSocket(this.#client);
 			await settlesWithin(closing, CDP_DRAIN_TIMEOUT_MS);
 		}
-		await settlesWithin(this.#drainPendingEvents(), CDP_DRAIN_TIMEOUT_MS);
+		if (
+			!(await settlesWithin(this.#drainPendingEvents(), CDP_DRAIN_TIMEOUT_MS)) &&
+			this.#hashingDownloads > 0
+		) {
+			// A download record still being hashed gets the longer budget of its own.
+			await settlesWithin(this.#drainPendingEvents(), CDP_DOWNLOAD_DRAIN_TIMEOUT_MS);
+		}
 	}
 
 	#log(message: string): void {
@@ -365,17 +404,19 @@ class CdpResponseLogger {
 		return resolvePath(this.#options.storage.runDirectory, DOWNLOADS_DIRECTORY);
 	}
 
-	// Sent on the browser connection with no sessionId, so it covers the whole browser.
-	// Every target of the default context is included, later ones among them.
-	// The per-target Page.setDownloadBehavior is deprecated and would miss those.
+	// Sent on the browser connection with no sessionId, so it needs no attached target.
+	// Every target of the default browser context is included, later ones among them.
+	// No browserContextId is passed, so every non-default context keeps its own behavior.
+	// A download started in incognito is neither redirected here nor reported at all.
 	// This is the one call that changes browser behavior, hence the explicit opt-in.
+	// Its eventsEnabled flag turns on the browser-wide events subscribed below.
 	async #setDownloadBehavior(): Promise<void> {
 		if (!this.#options.captureDownloads) {
 			return;
 		}
 
 		try {
-			await this.#client.send("Browser.setDownloadBehavior", {
+			await this.#client.Browser.setDownloadBehavior({
 				behavior: "allowAndName",
 				downloadPath: this.#downloadDirectory(),
 				eventsEnabled: true,
@@ -387,17 +428,25 @@ class CdpResponseLogger {
 		}
 	}
 
-	// Page is the only domain that reports downloads; Network never does.
-	// Nothing else needs it, so it is enabled only with --capture-downloads.
-	async #enablePageEvents(event: TargetAttachedEvent, session: SessionInfo): Promise<void> {
-		if (!this.#options.captureDownloads || !PAGE_TARGET_TYPES.has(event.targetInfo.type)) {
+	// In attach mode the browser is the user's own and outlives the run.
+	// An override left installed keeps naming downloads after their GUID.
+	// It also keeps writing them into a run directory nothing reads any more.
+	// A connection that is already gone has nothing to restore.
+	async #resetDownloadBehavior(): Promise<void> {
+		if (!this.#options.captureDownloads || this.#disconnected) {
 			return;
 		}
 
 		try {
-			await this.#client.send("Page.enable", undefined, event.sessionId);
+			await this.#client.Browser.setDownloadBehavior({ behavior: "default" });
 		} catch (error) {
-			await this.#recordCaptureError(createErrorRecord("Page.enable", session, error));
+			// A browser closed by the run itself is the normal launch-mode path, not a loss.
+			if (this.#disconnected) {
+				return;
+			}
+			await this.#recordCaptureError(
+				createErrorRecord("Browser.setDownloadBehavior", undefined, error),
+			);
 		}
 	}
 
@@ -459,14 +508,17 @@ class CdpResponseLogger {
 		this.#client.on("Network.webSocketFrameSent", (event, sessionId) => {
 			this.#trackEvent(this.#handleWebSocketFrame("sent", event as WebSocketFrameEvent, sessionId));
 		});
-		// Downloads are reported by the Page domain, which only --capture-downloads enables.
-		// A run without the flag subscribes neither event and tracks no download.
+		// Downloads are reported by the Browser domain alone; Network reports none.
+		// Its events are turned on by the setDownloadBehavior call the flag sends.
+		// The Page equivalents are deprecated and miss a download whose tab closes first.
+		// Both events are browser-wide, so neither carries a sessionId to dispatch on.
+		// A run without the flag subscribes neither and tracks no download.
 		if (this.#options.captureDownloads) {
-			this.#client.on("Page.downloadWillBegin", (event, sessionId) => {
-				this.#handleDownloadWillBegin(event as DownloadWillBeginEvent, sessionId);
+			this.#client.on("Browser.downloadWillBegin", (event) => {
+				this.#handleDownloadWillBegin(event as DownloadWillBeginEvent);
 			});
-			this.#client.on("Page.downloadProgress", (event, sessionId) => {
-				this.#trackEvent(this.#handleDownloadProgress(event as DownloadProgressEvent, sessionId));
+			this.#client.on("Browser.downloadProgress", (event) => {
+				this.#trackEvent(this.#handleDownloadProgress(event as DownloadProgressEvent));
 			});
 		}
 		this.#client.on("Network.eventSourceMessageReceived", (event, sessionId) => {
@@ -480,6 +532,7 @@ class CdpResponseLogger {
 			);
 		});
 		this.#client.on("disconnect", () => {
+			this.#disconnected = true;
 			this.#log("cdp disconnected");
 		});
 	}
@@ -553,7 +606,6 @@ class CdpResponseLogger {
 			await this.#recordCaptureError(createErrorRecord("Network.enable", session, error));
 		}
 
-		await this.#enablePageEvents(event, session);
 		await this.#resumeTarget(event, session);
 	}
 
@@ -601,14 +653,8 @@ class CdpResponseLogger {
 			}
 		}
 
-		// A download of a closed target gets no further progress event, so it is dropped.
-		// Its file may still land under downloads/ named by GUID, with no record for it.
-		for (const [guid, download] of this.#downloads) {
-			if (download.sessionId === event.sessionId) {
-				this.#downloads.delete(guid);
-			}
-		}
-
+		// Downloads are tracked browser-wide and outlive the target that started them.
+		// Nothing about them is swept here.
 		this.#verbose(`detached session=${event.sessionId}`);
 		if (session) {
 			await this.#recordCaptureError({
@@ -1305,14 +1351,18 @@ class CdpResponseLogger {
 		);
 	}
 
-	// Page.downloadWillBegin is the only event carrying the URL and suggested filename.
-	// Under "allowAndName" the file on disk is named after the GUID and nothing else.
-	// This mapping is therefore what makes a saved download identifiable afterwards.
-	#handleDownloadWillBegin(event: DownloadWillBeginEvent, sessionId?: string): void {
-		if (!sessionId) {
-			return;
+	// Every download the logger has seen lives here, running or already recorded.
+	// A settled entry is kept so a repeated terminal event writes no second record.
+	// Insertion order makes the first key the oldest download seen this run.
+	// Unlike #evictBufferedExtraInfo the cap does not skip an entry still running.
+	// The oldest entry is normally one already recorded.
+	// Evicting a running one costs the url and filename of its record, never the record.
+	#pendingDownload(guid: string): PendingDownload {
+		const existing = this.#downloads.get(guid);
+		if (existing) {
+			return existing;
 		}
-		// Insertion order makes the first key the oldest download still waiting.
+
 		if (this.#downloads.size >= MAX_PENDING_DOWNLOADS) {
 			const oldest = this.#downloads.keys().next().value;
 			if (oldest !== undefined) {
@@ -1320,44 +1370,70 @@ class CdpResponseLogger {
 			}
 		}
 
-		this.#downloads.set(event.guid, {
-			sessionId,
-			startedAt: nowIso(),
-			suggestedFilename: event.suggestedFilename,
-			targetId: this.#sessions.get(sessionId)?.targetId,
-			url: event.url,
-		});
+		const created: PendingDownload = {};
+		this.#downloads.set(guid, created);
+		return created;
 	}
 
-	// Progress repeats while bytes arrive; only the terminal state produces a record.
+	// Storage hashes the saved file before it appends, which shutdown has to wait for.
+	// The count is what tells close() a slow hash is the reason the drain has not ended.
+	async #recordDownload(
+		event: DownloadProgressEvent,
+		state: DownloadRecord["state"],
+		pending: PendingDownload,
+	): Promise<DownloadRecord> {
+		this.#hashingDownloads += 1;
+		try {
+			return await this.#options.storage.recordDownload({
+				frameId: pending.frameId,
+				guid: event.guid,
+				receivedBytes: event.receivedBytes,
+				startedAt: pending.startedAt,
+				state,
+				suggestedFilename: pending.suggestedFilename,
+				timestamp: nowIso(),
+				totalBytes: event.totalBytes,
+				url: pending.url,
+			});
+		} finally {
+			this.#hashingDownloads -= 1;
+		}
+	}
+
+	// Browser.downloadWillBegin is the only event carrying the URL and suggested filename.
+	// Under "allowAndName" the file on disk is named after the GUID and nothing else.
+	// This mapping is therefore what makes a saved download identifiable afterwards.
+	#handleDownloadWillBegin(event: DownloadWillBeginEvent): void {
+		const pending = this.#pendingDownload(event.guid);
+		pending.frameId = event.frameId;
+		pending.startedAt = nowIso();
+		pending.suggestedFilename = event.suggestedFilename;
+		pending.url = event.url;
+	}
+
+	// Progress repeats while bytes arrive; only a terminal state produces a record.
 	// A canceled download is recorded too, with no file, so the loss is visible.
 	// A download the logger never saw begin still gets a record, without url or filename.
-	async #handleDownloadProgress(event: DownloadProgressEvent, sessionId?: string): Promise<void> {
-		if (event.state === "inProgress") {
+	// Chrome keeps reporting a finished download while unrelated fields of it change.
+	// An interrupted download is reported as canceled and may still complete later.
+	// A repeat of the state already recorded is therefore ignored.
+	// A completion still supersedes an earlier cancellation, appending its own record.
+	async #handleDownloadProgress(event: DownloadProgressEvent): Promise<void> {
+		const state = terminalDownloadState(event.state);
+		if (state === undefined) {
 			return;
 		}
-		const pending = this.#downloads.get(event.guid);
-		this.#downloads.delete(event.guid);
+		const pending = this.#pendingDownload(event.guid);
+		if (pending.settledState === state || pending.settledState === "completed") {
+			return;
+		}
+		pending.settledState = state;
 
-		const record = await this.#options.storage.recordDownload({
-			guid: event.guid,
-			receivedBytes: event.receivedBytes,
-			sessionId: pending?.sessionId ?? sessionId,
-			startedAt: pending?.startedAt,
-			state: event.state === "completed" ? "completed" : "canceled",
-			suggestedFilename: pending?.suggestedFilename,
-			targetId: pending?.targetId,
-			timestamp: nowIso(),
-			totalBytes: event.totalBytes,
-			url: pending?.url,
-		});
-
+		const record = await this.#recordDownload(event, state, pending);
 		if (record.error !== undefined) {
 			await this.#recordCaptureError({
 				error: record.error,
-				event: "Page.downloadProgress",
-				sessionId: record.sessionId,
-				targetId: record.targetId,
+				event: "Browser.downloadProgress",
 				timestamp: nowIso(),
 				url: record.url,
 			});

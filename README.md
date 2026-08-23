@@ -56,13 +56,20 @@ change browser behavior rather than only observing it:
 - It calls `Browser.setDownloadBehavior` with `allowAndName`, so downloads are
   written into the run directory and named after their download GUID instead of
   going to your normal download folder under their suggested names.
-- It enables the CDP `Page` domain on attached page targets, which is where the
-  download events are reported. The `Network` domain does not report downloads.
+- `allowAndName` also allows every download request. Downloads Chrome would
+  normally block, hold behind the multiple-downloads prompt, route through "Ask
+  where to save each file", or gate behind the dangerous-file confirmation are
+  saved silently instead: the download is not marked dangerous and nothing is
+  asked.
+- The same call turns on the browser-wide `Browser` download events. No CDP
+  domain is enabled per target for this, and the `Network` domain never reports
+  downloads at all.
 
-Neither change is observable from page script: a page cannot read where a
-download was written, what it was named on disk, or which CDP domains are
-enabled. The flag is off by default, and without it the logger makes neither
-call and keeps downloads exactly where the browser would put them.
+Where a download is written and what it is named on disk is not observable from
+page script. Allowing a download Chrome would otherwise have blocked or
+prompted about is: a page that starts one can see it go through. The flag is off
+by default, and without it the logger makes no such call and keeps downloads
+exactly where the browser would put them.
 
 That means a destination site should see ordinary browser requests from the
 dedicated profile, not an explicit "logger enabled" signal.
@@ -273,29 +280,37 @@ attached, is still written but has no `url`.
 `--capture-downloads` records files the browser downloads, which CDP never
 returns a response body for. With the flag the logger calls
 `Browser.setDownloadBehavior` once, on the browser connection rather than per
-target, so it covers every target of the run including ones that attach later.
-The behavior is `allowAndName` with `downloads/` inside the run directory as the
-download path, and it enables the CDP `Page` domain on attached page targets to
-receive `Page.downloadWillBegin` and `Page.downloadProgress`. Both are off
-without the flag: no `Page.enable`, no download behavior change, no download
-tracking.
+target, so it covers every target of the default browser context including ones
+that attach later. The behavior is `allowAndName` with `downloads/` inside the
+run directory as the download path, and `eventsEnabled` turns on the
+browser-wide `Browser.downloadWillBegin` and `Browser.downloadProgress` events
+the logger subscribes to. The deprecated `Page` equivalents are not used, so
+nothing is enabled per target and a download whose tab closes before it finishes
+is still recorded. Both are off without the flag: no download behavior change,
+no download tracking. When the run ends the logger sets the behavior back to
+`default`, which matters in attach mode where the browser outlives the logger.
 
 Under `allowAndName` the browser names each saved file after the download GUID
 and nothing else. The file keeps that name: renaming it would race the browser's
 own writes, so `downloads.ndjson` is what maps the GUID back to a human-readable
 name. It contains one JSON object per finished download with the `guid`, the
 `url` and `suggestedFilename` the browser reported when the download began, the
-`state`, `totalBytes` and `receivedBytes`, the `sessionId` and `targetId` it
-came from, the `startedAt` and `timestamp` times, and, for a completed download,
-the saved `file` path relative to the run directory plus its `sha256`. Downloads
-are content-addressed the same way response bodies are: the hash is over the
-file the browser wrote, computed in chunks so a large download does not have to
-be held in memory.
+`state`, `totalBytes` and `receivedBytes`, the `frameId` that started it, the
+`startedAt` and `timestamp` times, and, for a completed download, the saved
+`file` path relative to the run directory plus its `sha256`. Downloads are
+content-addressed the same way response bodies are: the hash is over the file
+the browser wrote, computed in chunks so a large download does not have to be
+held in memory. The record is written after that hash, and shutdown waits for a
+hash still in flight so no finished download is lost to it.
 
 A canceled download is recorded too, with its `state` and no file, so the loss
 is visible rather than silent. A completed download whose file the logger cannot
 read is recorded with an `error` instead of a hash, and also lands in
-`errors.ndjson` as a `Page.downloadProgress` event.
+`errors.ndjson` as a `Browser.downloadProgress` event. Chrome reports an
+interrupted download as canceled, and a resumed one completes afterwards: that
+appends a second line for the same `guid`, the completion superseding the
+earlier loss. Repeats of a state already recorded are ignored, so a `guid` never
+gets the same outcome twice.
 
 `--include` and `--exclude` apply to response URLs only. They never gate
 `websocket.ndjson`, because a frame without a URL could not be matched anyway,
@@ -736,12 +751,13 @@ mise run compile
 - Downloads are never recovered as response bodies. `--capture-downloads` saves
   the file the browser wrote instead, which is a different path with different
   costs: it changes where downloads go and what they are named on disk, and it
-  enables the CDP `Page` domain.
-- A download whose target closes before it finishes gets no further
-  `Page.downloadProgress` event, so it is dropped from tracking and no record is
-  written for it. Its file may still land under `downloads/` named after the
-  download GUID, with nothing tying it to a URL or a filename. Pages that open a
-  tab purely to start a download and then close it hit this case.
+  allows downloads Chrome would otherwise have blocked or prompted about.
+- `--capture-downloads` covers the default browser context only.
+  `Browser.setDownloadBehavior` is sent without a `browserContextId`, which
+  means the default context, so downloads started in an incognito window or in
+  any context created through `Target.createBrowserContext` keep the browser's
+  normal behavior: they are not redirected into the run directory, emit no
+  download events, and get no record.
 - Redirect hops are recorded as metadata only. Their status, `location`, and
   `set-cookie` headers are saved, but no response body exists to save, and a
   hop the logger did not observe from its start is skipped. `redirectIndex`

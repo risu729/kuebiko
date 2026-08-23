@@ -7,6 +7,10 @@ import { bodyToBytes, createStorage, sha256 } from "./storage";
 import type { RunInfo } from "./storage";
 import type { RequestState } from "./types";
 
+// Chromium identifies a download by a UUID, which is the only name storage will join.
+const DOWNLOAD_GUID = "9f1c8d7e-4b2a-4c3d-9e5f-6a7b8c9d0e1f";
+const OTHER_DOWNLOAD_GUID = "0a1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d";
+
 describe("bodyToBytes", () => {
 	it("decodes base64 responses and UTF-8 text responses", () => {
 		expect(Buffer.from(bodyToBytes({ base64Encoded: true, body: "aGVsbG8=" })).toString()).toBe(
@@ -126,10 +130,10 @@ describe("createStorage", () => {
 			"2026-07-06T12:34:56Z",
 		);
 		const bytes = Buffer.from("%PDF-1.7 statement");
-		await Bun.write(join(dir, "downloads", "download-1"), bytes);
+		await Bun.write(join(dir, "downloads", DOWNLOAD_GUID), bytes);
 
 		const record = await storage.recordDownload({
-			guid: "download-1",
+			guid: DOWNLOAD_GUID,
 			receivedBytes: bytes.byteLength,
 			state: "completed",
 			suggestedFilename: "statement.pdf",
@@ -140,7 +144,7 @@ describe("createStorage", () => {
 		await storage.close();
 
 		expect(record).toMatchObject({
-			file: join("downloads", "download-1"),
+			file: join("downloads", DOWNLOAD_GUID),
 			sha256: sha256(bytes),
 			state: "completed",
 			suggestedFilename: "statement.pdf",
@@ -160,15 +164,21 @@ describe("createStorage", () => {
 		);
 
 		const canceled = await storage.recordDownload({
-			guid: "download-1",
+			guid: DOWNLOAD_GUID,
 			state: "canceled",
 			timestamp: "2026-07-06T12:34:57Z",
 		});
 		// Nothing was ever written under this GUID, which must not take the capture down.
 		const missing = await storage.recordDownload({
-			guid: "download-2",
+			guid: OTHER_DOWNLOAD_GUID,
 			state: "completed",
 			timestamp: "2026-07-06T12:34:58Z",
+		});
+		// The GUID names a path under the run directory, so a made-up one is refused.
+		const madeUp = await storage.recordDownload({
+			guid: "../../etc/passwd",
+			state: "completed",
+			timestamp: "2026-07-06T12:34:59Z",
 		});
 		await storage.close();
 
@@ -177,8 +187,10 @@ describe("createStorage", () => {
 		expect(missing.file).toBeUndefined();
 		expect(missing.sha256).toBeUndefined();
 		expect(missing.error).toBeDefined();
-		// Both are still recorded, so neither loss is silent.
-		expect(storage.summary.render()).toContain("downloads=2");
+		expect(madeUp.file).toBeUndefined();
+		expect(madeUp.error).toContain("../../etc/passwd");
+		// All three are still recorded, so none of the losses is silent.
+		expect(storage.summary.render()).toContain("downloads=3");
 	});
 
 	it("creates the download directory only when downloads are captured", async () => {
