@@ -297,6 +297,64 @@ export default defineConfig({
 		expect(count).toBeLessThan(20);
 	});
 
+	// The drain checks the deadline before a call, and callWithTimeout bounded it separately.
+	// A call starting just short of the deadline held close() for a whole timeout past it.
+	// The budget is the wait a shutdown promises, so the in-flight call has to fit inside it.
+	it("caps the in-flight drain call at what is left of the shutdown budget", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "kuebiko-plugin-"));
+		const runDirectory = join(dir, "run");
+		await Bun.write(
+			join(dir, "config.ts"),
+			`import { defineConfig } from ${JSON.stringify(packageEntryUrl)};
+
+export default defineConfig({
+      plugins: [{ module: "./late-hang.ts", queueSize: 20, timeoutMs: 1000 }]
+    });`,
+		);
+		// The first call spends most of the budget, and the next one starts inside what is left.
+		// That second call is the one that used to run its own full timeout past the deadline.
+		await Bun.write(
+			join(dir, "late-hang.ts"),
+			`let calls = 0;
+
+    export default {
+      id: "late-hang-plugin",
+      version: "0.1.0",
+      events: ["response.completed"],
+      onEvent() {
+        calls += 1;
+        if (calls === 1) {
+          return Bun.sleep(700);
+        }
+        return new Promise(() => {});
+      },
+    };`,
+		);
+		const storage = createStorage(runDirectory);
+		const host = await createPluginHost({
+			configPath: join(dir, "config.ts"),
+			disabled: false,
+			storage,
+			verbose: false,
+		});
+		const event = createResponseEvent(runDirectory);
+
+		await host.publish(event);
+		await host.publish(event);
+		await host.publish(event);
+		const started = Date.now();
+		await host.close();
+
+		// The budget is 1000ms, and the old bound was that plus another full 1000ms.
+		expect(Date.now() - started).toBeLessThan(1_400);
+		expect(storage.errors).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ event: "Plugin.onEvent", pluginId: "late-hang-plugin" }),
+				expect.objectContaining({ event: "Plugin.shutdownTimeout", pluginId: "late-hang-plugin" }),
+			]),
+		);
+	});
+
 	it("records plugin queue overflow and timeout errors without throwing", async () => {
 		const dir = await mkdtemp(join(tmpdir(), "kuebiko-plugin-"));
 		const runDirectory = join(dir, "run");

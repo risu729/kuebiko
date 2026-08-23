@@ -387,9 +387,19 @@ class PluginRuntime {
 	}
 
 	// Only close() sets a deadline, so nothing bounds the drain during capture.
-	// The call already running when it passes is still bounded by callWithTimeout.
 	#expired(): boolean {
 		return this.#deadline !== undefined && Date.now() >= this.#deadline;
+	}
+
+	// A drained event only has the deadline checked before it starts.
+	// One starting just before it would otherwise hold close() for a whole timeout more.
+	// The shutdown budget therefore caps the call itself, down to nothing left at all.
+	#drainTimeout(): number {
+		if (this.#deadline === undefined) {
+			return this.#timeoutMs;
+		}
+
+		return Math.max(this.#deadline - Date.now(), 0);
 	}
 
 	// What the budget left behind is dropped here, while errors.ndjson is still open.
@@ -428,7 +438,11 @@ class PluginRuntime {
 					continue;
 				}
 
-				await this.#callPlugin("Plugin.onEvent", () => this.#plugin.onEvent(event, this.#context));
+				await this.#callPlugin(
+					"Plugin.onEvent",
+					() => this.#plugin.onEvent(event, this.#context),
+					this.#drainTimeout(),
+				);
 			}
 		} finally {
 			this.#drainPromise = undefined;
@@ -441,9 +455,13 @@ class PluginRuntime {
 		}
 	}
 
-	async #callPlugin(event: string, callback: () => unknown | Promise<unknown>): Promise<void> {
+	async #callPlugin(
+		event: string,
+		callback: () => unknown | Promise<unknown>,
+		timeoutMs: number = this.#timeoutMs,
+	): Promise<void> {
 		try {
-			await callWithTimeout(callback, this.#timeoutMs);
+			await callWithTimeout(callback, timeoutMs);
 		} catch (error) {
 			await this.#recordError({
 				error: errorMessage(error),
