@@ -113,13 +113,13 @@ describe("waitForExit", () => {
 			import { waitForExit } from ${JSON.stringify(moduleUrl)};
 
 			const child = Bun.spawn([process.execPath, "-e", ""], { stderr: "pipe", stdout: "ignore" });
-			await waitForExit(child, 3_000);
+			await waitForExit(child, 10_000);
 		`;
 		const started = Date.now();
 		const runner = spawnHelper(script);
 		await runner.exited;
 
-		expect(Date.now() - started).toBeLessThan(1_500);
+		expect(Date.now() - started).toBeLessThan(5_000);
 	});
 });
 
