@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { READY_MESSAGE } from "kuebiko";
 
-import type { CapturedApiRecord } from "./assertions";
+import type { CapturedApiRecord, CapturedWebSocketFrame } from "./assertions";
 import openNewPage from "./cdp-page";
 import waitFor from "./poll";
 
@@ -83,8 +83,14 @@ const reservePort = (): number => {
 
 const startFixtureServer = (): ReturnType<typeof Bun.serve> =>
 	Bun.serve({
-		fetch: async (request) => {
+		fetch: async (request, server) => {
 			const url = new URL(request.url);
+			if (url.pathname === "/socket") {
+				return server.upgrade(request, { data: undefined })
+					? undefined
+					: new Response("upgrade failed", { status: 400 });
+			}
+
 			if (url.pathname === "/api/data") {
 				return Response.json({
 					ok: true,
@@ -102,12 +108,19 @@ void fetch("/api/data", {
   headers: { "content-type": "application/json" },
   body: JSON.stringify({ hello: "from-page" })
 });
+const socket = new WebSocket("ws://" + location.host + "/socket");
+socket.onopen = () => socket.send("hello-from-page");
 </script>`,
 				{ headers: { "content-type": "text/html; charset=utf-8" } },
 			);
 		},
 		hostname: "127.0.0.1",
 		port: 0,
+		websocket: {
+			message: (socket, message) => {
+				socket.send(`echo:${String(message)}`);
+			},
+		},
 	});
 
 const createRunDirectories = async (): Promise<RunDirectories> => {
@@ -208,15 +221,15 @@ const startLogger = (options: {
 		options.captureDirectory,
 	]);
 
-// The logger appends to metadata.ndjson while this polls it, so a read can land mid-line.
+// The logger appends to the NDJSON files while this polls them, so a read can land mid-line.
 // Bun.JSONL.parse drops an incomplete trailing value instead of throwing on it.
-const readMetadata = async (path: string): Promise<MetadataRecord[]> => {
+const readNdjson = async <Record>(path: string): Promise<Record[]> => {
 	const file = Bun.file(path);
 	if (!(await file.exists())) {
 		return [];
 	}
 
-	return Bun.JSONL.parse(await file.bytes()) as MetadataRecord[];
+	return Bun.JSONL.parse(await file.bytes()) as Record[];
 };
 
 const isCapturedApiRecord = (record: MetadataRecord | undefined): record is CapturedApiRecord =>
@@ -224,9 +237,19 @@ const isCapturedApiRecord = (record: MetadataRecord | undefined): record is Capt
 
 const findCapturedApiRecord = async (captureDirectory: string): Promise<CapturedApiRecord> =>
 	await waitFor("captured API metadata", async () => {
-		const records = await readMetadata(join(captureDirectory, "metadata.ndjson"));
+		const records = await readNdjson<MetadataRecord>(join(captureDirectory, "metadata.ndjson"));
 		const apiRecord = records.find((record) => record.url?.includes("/api/data"));
 		return isCapturedApiRecord(apiRecord) ? apiRecord : undefined;
+	});
+
+// The page sends one frame and the fixture echoes it, so both directions must land.
+const findWebSocketFrames = async (captureDirectory: string): Promise<CapturedWebSocketFrame[]> =>
+	await waitFor("captured WebSocket frames", async () => {
+		const frames = await readNdjson<CapturedWebSocketFrame>(
+			join(captureDirectory, "websocket.ndjson"),
+		);
+		const directions = new Set(frames.map((frame) => frame.direction));
+		return directions.has("sent") && directions.has("received") ? frames : undefined;
 	});
 
 const startContext = async (path = requireBrowserPath()): Promise<TestContext> => {
@@ -265,6 +288,7 @@ export {
 	closeContext,
 	createRunDirectories,
 	findCapturedApiRecord,
+	findWebSocketFrames,
 	loadPageAndWaitForCapture,
 	maybeBrowserIt,
 	reservePort,

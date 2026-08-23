@@ -9,6 +9,12 @@ type CapturedApiRecord = {
 	requestMethod?: string | undefined;
 };
 
+type CapturedWebSocketFrame = {
+	direction?: string | undefined;
+	payloadData?: string | undefined;
+	url?: string | undefined;
+};
+
 type NetLogRecord = {
 	constants?: unknown;
 	events?: unknown;
@@ -35,6 +41,17 @@ const assertCapturedApi = (
 		source: "cdp-e2e",
 	});
 	expect(JSON.parse(bodies.requestBody)).toEqual({ hello: "from-page" });
+};
+
+const assertCapturedWebSocketFrames = (
+	frames: CapturedWebSocketFrame[],
+	socketUrl: string,
+): void => {
+	const attributed = frames.filter((frame) => frame.url === socketUrl);
+	expect(attributed.map((frame) => frame.direction)).toContain("sent");
+	expect(attributed.map((frame) => frame.direction)).toContain("received");
+	expect(attributed.map((frame) => frame.payloadData)).toContain("hello-from-page");
+	expect(attributed.map((frame) => frame.payloadData)).toContain("echo:hello-from-page");
 };
 
 const assertRunSummary = (output: string): void => {
@@ -67,5 +84,12 @@ const assertNetLog = (netLog: NetLogRecord): void => {
 	expect(Array.isArray(netLog.events)).toBe(true);
 };
 
-export { assertCapturedApi, assertNetLog, assertRunSummary, readCapturedBodies, readNetLog };
-export type { CapturedApiRecord };
+export {
+	assertCapturedApi,
+	assertCapturedWebSocketFrames,
+	assertNetLog,
+	assertRunSummary,
+	readCapturedBodies,
+	readNetLog,
+};
+export type { CapturedApiRecord, CapturedWebSocketFrame };

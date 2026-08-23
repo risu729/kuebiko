@@ -119,7 +119,7 @@ type ErrorRecord = {
 };
 
 type WebSocketFrameRecord = {
-	direction: "received";
+	direction: "sent" | "received";
 	opcode: number;
 	payloadData: string;
 	requestId: string;
@@ -139,7 +139,7 @@ type HookEventName =
 	| "run.stopping"
 	| "run.stopped"
 	| "response.completed"
-	| "websocket.frame.received"
+	| `websocket.frame.${WebSocketFrameRecord["direction"]}`
 	| "capture.error";
 
 type RunHookEvent = {
@@ -188,7 +188,7 @@ type ResponseCompletedHookEvent = {
 };
 
 type WebSocketFrameHookEvent = {
-	event: "websocket.frame.received";
+	event: `websocket.frame.${WebSocketFrameRecord["direction"]}`;
 	frame: WebSocketFrameRecord;
 	run: RunRef;
 	timestamp: string;

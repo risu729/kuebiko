@@ -119,14 +119,14 @@ const waitForAsyncEvent = async (): Promise<void> => {
 	await Bun.sleep(0);
 };
 
-const attachPageTarget = (client: FakeClient): void => {
+const attachPageTarget = (client: FakeClient, session = "session-1", target = "target-1"): void => {
 	client.emit("Target.attachedToTarget", {
-		sessionId: "session-1",
+		sessionId: session,
 		targetInfo: {
 			attached: true,
 			browserContextId: "context-1",
 			canAccessOpener: false,
-			targetId: "target-1",
+			targetId: target,
 			title: "Example",
 			type: "page",
 			url: "https://example.test",
@@ -225,6 +225,55 @@ const emitFinalResponse = (client: FakeClient, url: string): void => {
 		{ encodedDataLength: 123, requestId: "request-1", timestamp: 5 },
 		"session-1",
 	);
+};
+
+// Sockets are keyed by session and request id, so both are addressable per emit.
+type SocketRef = { requestId?: string | undefined; sessionId?: string | undefined };
+
+const socketRef = (ref: SocketRef | undefined): { requestId: string; sessionId: string } => ({
+	requestId: ref?.requestId ?? "socket-1",
+	sessionId: ref?.sessionId ?? "session-1",
+});
+
+const emitWebSocketCreated = (client: FakeClient, url: string, ref?: SocketRef): void => {
+	const { requestId, sessionId } = socketRef(ref);
+	client.emit(
+		"Network.webSocketCreated",
+		{ initiator: { type: "script" }, requestId, url },
+		sessionId,
+	);
+};
+
+const emitWebSocketFrame = (
+	client: FakeClient,
+	direction: "sent" | "received",
+	frame: SocketRef & { payloadData: string },
+): void => {
+	const { payloadData } = frame;
+	const { requestId, sessionId } = socketRef(frame);
+	client.emit(
+		direction === "sent" ? "Network.webSocketFrameSent" : "Network.webSocketFrameReceived",
+		{
+			requestId,
+			response: { mask: direction === "sent", opcode: 1, payloadData },
+			timestamp: 6,
+		},
+		sessionId,
+	);
+};
+
+const emitWebSocketClosed = (client: FakeClient, ref?: SocketRef): void => {
+	const { requestId, sessionId } = socketRef(ref);
+	client.emit("Network.webSocketClosed", { requestId, timestamp: 7 }, sessionId);
+};
+
+const emitWebSocketFrameError = (
+	client: FakeClient,
+	errorMessage: string,
+	ref?: SocketRef,
+): void => {
+	const { requestId, sessionId } = socketRef(ref);
+	client.emit("Network.webSocketFrameError", { errorMessage, requestId, timestamp: 8 }, sessionId);
 };
 
 describe("createCompletedMetadata", () => {
@@ -1294,5 +1343,188 @@ describe("CdpResponseLogger", () => {
 		expect(storage.errors).toContainEqual(
 			expect.objectContaining({ event: "Target.detachedFromTarget" }),
 		);
+	});
+
+	it("records both frame directions with the url of the socket that carried them", async () => {
+		const client = new FakeClient();
+		const storage = createStorage();
+		const hooks = createHooks();
+		const logger = new CdpResponseLogger(client as never, {
+			cdp: "http://127.0.0.1:9222",
+			hooks,
+			storage,
+			verbose: false,
+		});
+
+		await logger.start();
+		attachPageTarget(client);
+		await waitForAsyncEvent();
+		emitWebSocketCreated(client, "wss://chat.test/socket");
+		emitWebSocketFrame(client, "sent", { payloadData: '{"type":"subscribe"}' });
+		emitWebSocketFrame(client, "received", { payloadData: '{"type":"ack"}' });
+		await waitForAsyncEvent();
+
+		expect(storage.websocket).toEqual([
+			{
+				direction: "sent",
+				opcode: 1,
+				payloadData: '{"type":"subscribe"}',
+				requestId: "socket-1",
+				sessionId: "session-1",
+				targetId: "target-1",
+				timestamp: expect.any(String),
+				url: "wss://chat.test/socket",
+			},
+			{
+				direction: "received",
+				opcode: 1,
+				payloadData: '{"type":"ack"}',
+				requestId: "socket-1",
+				sessionId: "session-1",
+				targetId: "target-1",
+				timestamp: expect.any(String),
+				url: "wss://chat.test/socket",
+			},
+		]);
+		expect(hooks.events.map((event) => event.event)).toEqual([
+			"websocket.frame.sent",
+			"websocket.frame.received",
+		]);
+	});
+
+	it("records a frame without a url once the socket closed", async () => {
+		const client = new FakeClient();
+		const storage = createStorage();
+		const logger = new CdpResponseLogger(client as never, {
+			cdp: "http://127.0.0.1:9222",
+			storage,
+			verbose: false,
+		});
+
+		await logger.start();
+		attachPageTarget(client);
+		await waitForAsyncEvent();
+		emitWebSocketCreated(client, "wss://chat.test/socket");
+		emitWebSocketFrame(client, "received", { payloadData: '{"type":"ack"}' });
+		emitWebSocketClosed(client);
+		emitWebSocketFrame(client, "received", { payloadData: '{"type":"late"}' });
+		await waitForAsyncEvent();
+
+		expect(storage.websocket.map((frame) => frame.url)).toEqual([
+			"wss://chat.test/socket",
+			undefined,
+		]);
+	});
+
+	it("keeps concurrent sockets of one session apart", async () => {
+		const client = new FakeClient();
+		const storage = createStorage();
+		const logger = new CdpResponseLogger(client as never, {
+			cdp: "http://127.0.0.1:9222",
+			storage,
+			verbose: false,
+		});
+
+		await logger.start();
+		attachPageTarget(client);
+		await waitForAsyncEvent();
+		emitWebSocketCreated(client, "wss://chat.test/rooms", { requestId: "socket-1" });
+		emitWebSocketCreated(client, "wss://metrics.test/stream", { requestId: "socket-2" });
+		emitWebSocketFrame(client, "received", {
+			payloadData: '{"room":"general"}',
+			requestId: "socket-1",
+		});
+		emitWebSocketFrame(client, "sent", { payloadData: '{"metric":"fps"}', requestId: "socket-2" });
+		await waitForAsyncEvent();
+
+		expect(storage.websocket.map((frame) => [frame.requestId, frame.url])).toEqual([
+			["socket-1", "wss://chat.test/rooms"],
+			["socket-2", "wss://metrics.test/stream"],
+		]);
+	});
+
+	it("keeps sockets of other sessions when one target detaches", async () => {
+		const client = new FakeClient();
+		const storage = createStorage();
+		const logger = new CdpResponseLogger(client as never, {
+			cdp: "http://127.0.0.1:9222",
+			storage,
+			verbose: false,
+		});
+
+		await logger.start();
+		attachPageTarget(client);
+		attachPageTarget(client, "session-2", "target-2");
+		await waitForAsyncEvent();
+		// Request ids are only unique per session, so both sockets share one.
+		emitWebSocketCreated(client, "wss://chat.test/first");
+		emitWebSocketCreated(client, "wss://chat.test/second", { sessionId: "session-2" });
+		client.emit("Target.detachedFromTarget", { sessionId: "session-1", targetId: "target-1" });
+		await waitForAsyncEvent();
+		emitWebSocketFrame(client, "received", { payloadData: '{"type":"ping"}' });
+		emitWebSocketFrame(client, "received", {
+			payloadData: '{"type":"ping"}',
+			sessionId: "session-2",
+		});
+		await waitForAsyncEvent();
+
+		expect(storage.websocket.map((frame) => [frame.sessionId, frame.url])).toEqual([
+			["session-1", undefined],
+			["session-2", "wss://chat.test/second"],
+		]);
+	});
+
+	it("records a frame error against the socket url", async () => {
+		const client = new FakeClient();
+		const storage = createStorage();
+		const logger = new CdpResponseLogger(client as never, {
+			cdp: "http://127.0.0.1:9222",
+			storage,
+			verbose: false,
+		});
+
+		await logger.start();
+		attachPageTarget(client);
+		await waitForAsyncEvent();
+		emitWebSocketCreated(client, "wss://chat.test/socket");
+		emitWebSocketFrameError(client, "Could not decode a text frame as UTF-8.");
+		await waitForAsyncEvent();
+
+		expect(storage.errors).toContainEqual(
+			expect.objectContaining({
+				error: "Could not decode a text frame as UTF-8.",
+				event: "Network.webSocketFrameError",
+				requestId: "socket-1",
+				sessionId: "session-1",
+				targetId: "target-1",
+				url: "wss://chat.test/socket",
+			}),
+		);
+	});
+
+	it("drops socket urls when the target detaches", async () => {
+		const client = new FakeClient();
+		const storage = createStorage();
+		const logger = new CdpResponseLogger(client as never, {
+			cdp: "http://127.0.0.1:9222",
+			storage,
+			verbose: false,
+		});
+
+		await logger.start();
+		attachPageTarget(client);
+		await waitForAsyncEvent();
+		emitWebSocketCreated(client, "wss://chat.test/socket");
+		client.emit("Target.detachedFromTarget", { sessionId: "session-1", targetId: "target-1" });
+		await waitForAsyncEvent();
+		emitWebSocketFrame(client, "sent", { payloadData: '{"type":"orphan"}' });
+		await waitForAsyncEvent();
+
+		expect(storage.websocket).toHaveLength(1);
+		expect(storage.websocket[0]).toMatchObject({
+			direction: "sent",
+			payloadData: '{"type":"orphan"}',
+			url: undefined,
+		});
 	});
 });

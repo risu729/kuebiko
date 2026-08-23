@@ -5,8 +5,8 @@ These instructions apply to agent work in this repository.
 ## Project Scope
 
 This project is a local Chrome CDP/NetLog capture tool. Keep it focused on
-saving raw request/response bodies, metadata, errors, WebSocket server frames,
-and Chrome NetLog files.
+saving raw request/response bodies, metadata, errors, WebSocket frames in both
+directions, and Chrome NetLog files.
 
 Do not add analytics, parser UIs, dashboards, HAR viewers, browser automation,
 login automation, stealth/evasion code, request interception, packet capture,
