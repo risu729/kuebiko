@@ -718,6 +718,9 @@ class CdpResponseLogger {
 	readonly #client: CdpClient;
 	// Set once the browser connection is gone, so shutdown stops sending to it.
 	#disconnected = false;
+	// Set once this run really did install the download override, and only then.
+	// The default it would be reset to is not this run's to restore otherwise.
+	#downloadBehaviorApplied = false;
 	// Downloads seen this run keyed by GUID, only populated with --capture-downloads.
 	readonly #downloads = new Map<string, PendingDownload>();
 	// Raw headers with no request state to live on yet, keyed like #requests.
@@ -956,6 +959,7 @@ class CdpResponseLogger {
 				downloadPath: this.#downloadDirectory(),
 				eventsEnabled: true,
 			});
+			this.#downloadBehaviorApplied = true;
 		} catch (error) {
 			await this.#recordCaptureError(
 				createErrorRecord("Browser.setDownloadBehavior", undefined, error),
@@ -967,8 +971,11 @@ class CdpResponseLogger {
 	// An override left installed keeps naming downloads after their GUID.
 	// It also keeps writing them into a run directory nothing reads any more.
 	// A connection that is already gone has nothing to restore.
+	// Only an override this run installed is undone here.
+	// A start that threw first, or a setDownloadBehavior that failed, installed none.
+	// Sending the default then would clear a behavior the user or another client set.
 	async #resetDownloadBehavior(): Promise<void> {
-		if (!this.#options.captureDownloads || this.#disconnected) {
+		if (!this.#downloadBehaviorApplied || this.#disconnected) {
 			return;
 		}
 

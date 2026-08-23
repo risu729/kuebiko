@@ -2841,6 +2841,34 @@ describe("CdpResponseLogger", () => {
 		expect(storage.errors).toHaveLength(0);
 	});
 
+	// The default is only this run's to restore once this run has overridden it.
+	// A failed override leaves whatever the user's Chrome or another CDP client set.
+	// Resetting that to default is the very harm the restore exists to avoid.
+	it("sends no reset when the download override never took", async () => {
+		const client = new FakeClient();
+		const storage = createStorage();
+		const setDownloadBehavior = client.Browser.setDownloadBehavior as Mock<
+			(params?: object) => Promise<void>
+		>;
+		setDownloadBehavior.mockImplementationOnce(() =>
+			Promise.reject(new Error("Browser.setDownloadBehavior failed")),
+		);
+		const logger = createDownloadLogger(client, storage);
+
+		await logger.start();
+		await logger.close();
+
+		expect(setDownloadBehavior.mock.calls.map(([params]) => params)).toEqual([
+			expect.objectContaining({ behavior: "allowAndName", eventsEnabled: true }),
+		]);
+		expect(storage.errors).toEqual([
+			expect.objectContaining({
+				error: "Browser.setDownloadBehavior failed",
+				event: "Browser.setDownloadBehavior",
+			}),
+		]);
+	});
+
 	// The reset used to share the one second drain budget and discard its result.
 	// A browser too busy to answer was abandoned in silence.
 	// It kept saving downloads into a finished run with nothing in errors.ndjson to say so.
@@ -3702,6 +3730,22 @@ describe("startLogger", () => {
 			{ behavior: "default" },
 		]);
 		// The client is a socket this process owns, so a failed start must not leak it.
+		expect(client.close).toHaveBeenCalled();
+	});
+
+	// A throw before the override went in leaves nothing of this run's to undo.
+	// The default sent anyway would clear the behavior the browser already had.
+	it("sends no reset when starting fails before the override goes in", async () => {
+		const client = new FakeClient();
+		const storage = createStorage();
+		client.Target.setDiscoverTargets.mockImplementationOnce(() =>
+			Promise.reject(new Error("Target.setDiscoverTargets failed")),
+		);
+		const logger = createDownloadLogger(client, storage);
+
+		await expect(startLogger(logger)).rejects.toThrow("Target.setDiscoverTargets failed");
+
+		expect(client.Browser.setDownloadBehavior).not.toHaveBeenCalled();
 		expect(client.close).toHaveBeenCalled();
 	});
 
