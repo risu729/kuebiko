@@ -1,3 +1,5 @@
+import { finishesWithin, resolvesWithin } from "./timeout";
+
 type BrowserProcess = ReturnType<typeof Bun.spawn>;
 
 type BrowserVersion = {
@@ -106,11 +108,15 @@ const waitForCdp = async (
 	}
 };
 
-const waitForExit = async (browser: BrowserProcess, timeout?: number): Promise<boolean> =>
-	await Promise.race([
-		browser.exited.then(() => true),
-		...(timeout === undefined ? [] : [Bun.sleep(timeout).then(() => false)]),
-	]);
+const exited = async (browser: BrowserProcess): Promise<boolean> => {
+	await browser.exited;
+	return true;
+};
+
+// Bounded on a timer rather than a sleep: a sleep left pending once the browser has
+// Exited keeps this process alive for the rest of its deadline, long after the run.
+const waitForExit = async (browser: BrowserProcess, timeout: number): Promise<boolean> =>
+	await resolvesWithin(exited(browser), timeout, false);
 
 const requestCloseOutcome = async (
 	requestClose: () => Promise<void>,
@@ -128,11 +134,6 @@ const exitOutcome = async (browser: BrowserProcess): Promise<BrowserCloseOutcome
 	return "exited";
 };
 
-const timeoutOutcome = async (): Promise<BrowserCloseOutcome> => {
-	await Bun.sleep(BROWSER_STOP_TIMEOUT_MS);
-	return "timeout";
-};
-
 const beginBrowserClose = async (
 	browser: BrowserProcess,
 	requestClose?: () => Promise<void>,
@@ -142,11 +143,11 @@ const beginBrowserClose = async (
 		return false;
 	}
 
-	const outcome = await Promise.race([
-		requestCloseOutcome(requestClose),
-		exitOutcome(browser),
-		timeoutOutcome(),
-	]);
+	const outcome = await resolvesWithin<BrowserCloseOutcome>(
+		Promise.race([requestCloseOutcome(requestClose), exitOutcome(browser)]),
+		BROWSER_STOP_TIMEOUT_MS,
+		"timeout",
+	);
 	if (outcome !== "exited" && outcome !== "requested") {
 		browser.kill("SIGTERM");
 	}
@@ -162,6 +163,36 @@ const readBrowserStderr = async (browser: BrowserProcess): Promise<string> => {
 	return await new Response(browser.stderr).text();
 };
 
+// Every wait on a browser this process owns is bounded, and SIGTERM is a request a
+// Browser may ignore, so the escalation to SIGKILL belongs to each path that sends it.
+const terminateBrowser = async (
+	browser: BrowserProcess,
+	timeout = BROWSER_STOP_TIMEOUT_MS,
+): Promise<void> => {
+	browser.kill("SIGTERM");
+	if (await waitForExit(browser, timeout)) {
+		return;
+	}
+
+	browser.kill("SIGKILL");
+	browser.unref();
+};
+
+// The stderr pipe exists for the startup failure path, and nothing reads it once the
+// Browser is up. Bun keeps the unread bytes in this process, so a capture running for
+// Hours would accumulate every diagnostic Chrome writes. They are discarded instead.
+const discardBrowserStderr = async (browser: BrowserProcess): Promise<void> => {
+	if (!(browser.stderr instanceof ReadableStream)) {
+		return;
+	}
+
+	try {
+		await browser.stderr.pipeTo(new WritableStream());
+	} catch {
+		// The stream ends with the browser process, which is not a capture failure.
+	}
+};
+
 const closeBrowser = async (
 	browser: BrowserProcess,
 	requestClose?: () => Promise<void>,
@@ -174,13 +205,7 @@ const closeBrowser = async (
 		return;
 	}
 
-	browser.kill("SIGTERM");
-	if (await waitForExit(browser, BROWSER_STOP_TIMEOUT_MS)) {
-		return;
-	}
-
-	browser.kill("SIGKILL");
-	browser.unref();
+	await terminateBrowser(browser);
 };
 
 const spawnBrowser = (options: BrowserLaunchOptions): BrowserProcess => {
@@ -200,8 +225,9 @@ const waitForStartedBrowser = async (
 	try {
 		await waitForCdp(cdpEndpoint);
 	} catch (error) {
-		browser.kill("SIGTERM");
-		await waitForExit(browser);
+		// A browser that never exposed CDP may also ignore SIGTERM, and an unbounded wait
+		// Here would hang the run with no error, no summary, and a live browser process.
+		await terminateBrowser(browser);
 		const stderr = await readBrowserStderr(browser);
 		throw new Error(`Browser failed to expose CDP at ${cdpEndpoint}. Stderr: ${stderr}`, {
 			cause: error,
@@ -214,14 +240,25 @@ const startBrowser = async (options: BrowserLaunchOptions): Promise<StartedBrows
 	await assertCdpEndpointFree(cdpEndpoint);
 	const browser = spawnBrowser(options);
 	await waitForStartedBrowser(browser, cdpEndpoint);
+	const discarding = discardBrowserStderr(browser);
 
 	return {
 		cdpEndpoint,
 		close: async (requestClose) => {
 			await closeBrowser(browser, requestClose);
+			// The stream ends with the process; the bound is for a pipe that somehow does not.
+			await finishesWithin(discarding, BROWSER_STOP_TIMEOUT_MS);
 		},
 	};
 };
 
-export { assertCdpEndpointFree, buildBrowserArgs, createCdpEndpoint, startBrowser };
+export {
+	assertCdpEndpointFree,
+	buildBrowserArgs,
+	createCdpEndpoint,
+	discardBrowserStderr,
+	startBrowser,
+	terminateBrowser,
+	waitForExit,
+};
 export type { BrowserLaunchOptions, StartedBrowser };
