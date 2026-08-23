@@ -45,8 +45,12 @@ type WebSocketFrameEvent =
 	| Protocol.Network.WebSocketFrameReceivedEvent
 	| Protocol.Network.WebSocketFrameSentEvent;
 // Raw headers waiting for the base event they belong to.
-// The count is of responseReceivedExtraInfo events owed to hops already recorded.
-type PendingExtraInfo = ExtraInfoState & { orphanedResponses: number };
+// The counts track ExtraInfo events owed to redirect hops already recorded.
+// A late one is then dropped, not landed on the next hop under the shared requestId.
+type PendingExtraInfo = ExtraInfoState & {
+	orphanedRequests: number;
+	orphanedResponses: number;
+};
 
 const TARGET_TYPES = new Set(["page", "iframe", "worker", "shared_worker", "service_worker"]);
 
@@ -109,15 +113,25 @@ const applyResponseExtraInfo = (
 	if (event.blockedCookies.length > 0) {
 		target.blockedCookies = event.blockedCookies;
 	}
+	if (event.exemptedCookies && event.exemptedCookies.length > 0) {
+		target.exemptedCookies = event.exemptedCookies;
+	}
 	if (event.cookiePartitionKey) {
 		target.cookiePartitionKey = event.cookiePartitionKey;
 	}
 };
 
+// The cookie diagnostics are only ever set together with rawResponseHeaders.
+// The header checks already cover them, so they are listed only for robustness.
+// The predicate then holds even if that invariant is ever relaxed.
 const hasBufferedExtraInfo = (pending: PendingExtraInfo): boolean =>
+	pending.orphanedRequests > 0 ||
 	pending.orphanedResponses > 0 ||
 	pending.rawRequestHeaders !== undefined ||
-	pending.rawResponseHeaders !== undefined;
+	pending.rawResponseHeaders !== undefined ||
+	pending.blockedCookies !== undefined ||
+	pending.exemptedCookies !== undefined ||
+	pending.cookiePartitionKey !== undefined;
 
 const createErrorRecord = (
 	event: string,
@@ -154,6 +168,7 @@ const createCompletedMetadata = (
 		cookiePartitionKey: state.cookiePartitionKey,
 		encodedDataLength: finished.encodedDataLength,
 		error: bodyResult.error,
+		exemptedCookies: state.exemptedCookies,
 		fromDiskCache: response?.fromDiskCache,
 		fromPrefetchCache: response?.fromPrefetchCache,
 		fromServiceWorker: response?.fromServiceWorker,
@@ -465,7 +480,9 @@ class CdpResponseLogger {
 		// The hop it replaced is finalized below.
 		this.#requests.set(key, {
 			// ExtraInfo that ran ahead of this event was waiting for exactly this hop.
-			...this.#takeExtraInfo(key),
+			// On a redirect only the buffered request headers are this hop's.
+			// Buffered response headers belong to a previous hop and are discarded here.
+			...this.#takeExtraInfo(key, redirectResponse !== undefined),
 			frameId: event.frameId,
 			hasPostData: event.request.hasPostData,
 			initiator: event.initiator,
@@ -483,18 +500,29 @@ class CdpResponseLogger {
 			type: event.type,
 		});
 
-		// Every hop of a chain gets its own pair of ExtraInfo events under one requestId.
-		// A hop's responseReceivedExtraInfo usually arrives before the next base event.
-		// Each hop therefore keeps the raw headers of its own response.
-		// A late one instead arrives once the hop record has already been written.
-		// Dropping it beats putting one hop's Set-Cookie on the hop that follows.
+		// Every hop of a chain shares one requestId and gets its own pair of ExtraInfo events.
+		// The redirectHasExtraInfo flag marks the replaced hop's own ExtraInfo as still coming.
+		// Each usually arrives before this base event and lands on the replaced hop directly.
+		// A late one instead arrives after that hop record was already written to metadata.
+		// Counting each still-missing one as owed makes the late event drop, not shift forward.
+		// Nothing is owed with no previous hop: attached mid-chain, no record can own the headers.
 		if (
 			this.#options.captureCookies &&
 			redirectResponse !== undefined &&
 			event.redirectHasExtraInfo &&
-			previous?.rawResponseHeaders === undefined
+			previous !== undefined
 		) {
-			this.#pendingExtraInfo(key).orphanedResponses += 1;
+			const owed = this.#pendingExtraInfo(key);
+			if (previous.rawRequestHeaders === undefined) {
+				owed.orphanedRequests += 1;
+			}
+			if (previous.rawResponseHeaders === undefined) {
+				owed.orphanedResponses += 1;
+			}
+			// A hop that already has both raw headers owes nothing; drop the empty entry.
+			if (!hasBufferedExtraInfo(owed)) {
+				this.#extraInfo.delete(key);
+			}
 		}
 
 		// Without the replaced state there is no request to attribute the hop to.
@@ -587,34 +615,54 @@ class CdpResponseLogger {
 			return existing;
 		}
 
-		// Insertion order makes the first key the oldest buffered entry.
 		if (this.#extraInfo.size >= MAX_PENDING_EXTRA_INFO) {
-			const oldest = this.#extraInfo.keys().next();
-			if (!oldest.done) {
-				this.#extraInfo.delete(oldest.value);
-			}
+			this.#evictBufferedExtraInfo();
 		}
 
-		const created: PendingExtraInfo = { orphanedResponses: 0 };
+		const created: PendingExtraInfo = { orphanedRequests: 0, orphanedResponses: 0 };
 		this.#extraInfo.set(key, created);
 		return created;
 	}
 
-	// The base event claims what was buffered for it; the orphan count is not its to take.
-	#takeExtraInfo(key: string): ExtraInfoState {
+	// Drop the oldest entry that owes nothing.
+	// Evicting one that still owes would turn an intended drop into a misattribution.
+	// Insertion order makes the first matching key the oldest such entry.
+	#evictBufferedExtraInfo(): void {
+		for (const [key, pending] of this.#extraInfo) {
+			if (pending.orphanedRequests === 0 && pending.orphanedResponses === 0) {
+				this.#extraInfo.delete(key);
+				return;
+			}
+		}
+	}
+
+	// The base event claims the raw headers buffered for it, but never the owed counts.
+	// On a redirect only the buffered request headers belong to the new hop.
+	// Buffered response headers can only be a previous hop's, so they are dropped.
+	#takeExtraInfo(key: string, isRedirect: boolean): ExtraInfoState {
 		const pending = this.#extraInfo.get(key);
 		if (!pending) {
 			return {};
 		}
 
-		const { orphanedResponses, ...buffered } = pending;
-		if (orphanedResponses > 0) {
-			this.#extraInfo.set(key, { orphanedResponses });
+		const { orphanedRequests, orphanedResponses, rawRequestHeaders } = pending;
+		const claimed: ExtraInfoState = isRedirect
+			? { rawRequestHeaders }
+			: {
+					blockedCookies: pending.blockedCookies,
+					cookiePartitionKey: pending.cookiePartitionKey,
+					exemptedCookies: pending.exemptedCookies,
+					rawRequestHeaders,
+					rawResponseHeaders: pending.rawResponseHeaders,
+				};
+
+		if (orphanedRequests > 0 || orphanedResponses > 0) {
+			this.#extraInfo.set(key, { orphanedRequests, orphanedResponses });
 		} else {
 			this.#extraInfo.delete(key);
 		}
 
-		return buffered;
+		return claimed;
 	}
 
 	// Raw request headers belong to the hop in flight while its slot is still empty.
@@ -625,6 +673,17 @@ class CdpResponseLogger {
 			return;
 		}
 		const key = requestKey(sessionId, event.requestId);
+		const pending = this.#extraInfo.get(key);
+		// The hop this belongs to was already recorded without it.
+		// State now under this requestId is the next hop, whose own request event is to come.
+		if (pending && pending.orphanedRequests > 0) {
+			pending.orphanedRequests -= 1;
+			if (!hasBufferedExtraInfo(pending)) {
+				this.#extraInfo.delete(key);
+			}
+			return;
+		}
+
 		const state = this.#requests.get(key);
 		if (state && state.rawRequestHeaders === undefined) {
 			state.rawRequestHeaders = event.headers;

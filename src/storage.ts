@@ -27,6 +27,8 @@ type NdjsonWriter = {
 
 // Only storage writes run.json, so its shape stays with the writer.
 type RunInfo = {
+	// Records whether the run may hold plaintext session cookies from --capture-cookies.
+	captureCookies: boolean;
 	cdpEndpoint: string;
 	createdAt: string;
 	labels?: string[] | undefined;
@@ -38,8 +40,10 @@ type RunInfo = {
 	version: string;
 };
 
-// Free-form run description supplied by the run owner.
-type RunAnnotations = Pick<RunInfo, "labels" | "note">;
+// How the run was started: the owner's free-form description plus capture settings.
+type RunAnnotations = Pick<RunInfo, "labels" | "note"> & {
+	captureCookies?: boolean | undefined;
+};
 
 // Only the run owner reads the summary, so it stays off the LoggerStorage contract.
 type RunStorage = LoggerStorage & {
@@ -106,6 +110,8 @@ const createRunInfo = (
 	runTimestamp: string,
 	annotations: RunAnnotations,
 ): RunInfo => ({
+	// Always present, so a capture directory self-describes its cookie sensitivity.
+	captureCookies: annotations.captureCookies ?? false,
 	cdpEndpoint,
 	createdAt: runTimestamp,
 	// JSON.stringify drops undefined, so unlabelled runs keep the original run.json shape.

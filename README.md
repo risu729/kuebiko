@@ -145,7 +145,9 @@ code you opt into with `--config`.
 
 `run.json` records how the run was started. `--label <label>` (repeatable) and
 `--note <text>` add `labels` and `note` fields so the run also records why it
-was made. Both fields are omitted when the flags are not used.
+was made. Both fields are omitted when the flags are not used. A
+`captureCookies` boolean is always present so a capture directory says whether
+`--capture-cookies` was on and it may therefore hold plaintext session cookies.
 
 `metadata.ndjson` contains one JSON object per completed response that passed
 the filters. When available, the same metadata line links to both a saved
@@ -155,14 +157,18 @@ request payload and a saved response body.
 `rawRequestHeaders` and `rawResponseHeaders`, taken from the CDP
 `Network.requestWillBeSentExtraInfo` and `Network.responseReceivedExtraInfo`
 events. They sit next to the refined `requestHeaders` and `responseHeaders`,
-never in place of them. Only the raw sets contain `Cookie` and `Set-Cookie`, so
-a capture made with the flag holds live session cookies in plaintext. A response
+never in place of them. The raw sets are the only place `Cookie` appears at all,
+and the only place `Set-Cookie` appears verbatim for every response, so a
+capture made with the flag holds live session cookies in plaintext. A response
 that could not store a cookie also records `blockedCookies` with the reason
 Chrome rejected each one, which is usually the real answer when a session
-breaks, plus `cookiePartitionKey` when partitioned cookies apply. Both are
+breaks, plus `exemptedCookies` for cookies stored despite third-party
+restrictions and `cookiePartitionKey` when partitioned cookies apply. All are
 omitted when there is nothing to report. The flag is off by default, and without
 it the logger never subscribes the ExtraInfo events. Plugin events keep the
-refined headers only, so raw cookies stay inside the capture directory.
+refined headers only, so raw cookies stay inside the capture directory, and
+`run.json` records `captureCookies` so the directory says whether it may hold
+them.
 
 A redirect chain reuses one CDP request ID, so it produces several metadata
 lines. Each `3xx` hop is written when the browser follows it, with
@@ -255,8 +261,8 @@ For completed responses, metadata includes request and response fields such as:
 - response body path, byte length, SHA-256, and CDP `base64Encoded`
 - request body path, byte length, SHA-256, and source when available
 - `redirect` and `redirectIndex` for requests that went through a redirect chain
-- `rawRequestHeaders`, `rawResponseHeaders`, `blockedCookies`, and
-  `cookiePartitionKey` when `--capture-cookies` is used
+- `rawRequestHeaders`, `rawResponseHeaders`, `blockedCookies`,
+  `exemptedCookies`, and `cookiePartitionKey` when `--capture-cookies` is used
 - any capture error for body retrieval
 
 Response bodies are saved exactly from CDP's body result:

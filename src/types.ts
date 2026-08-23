@@ -38,6 +38,7 @@ type SessionInfo = {
 type ExtraInfoState = {
 	blockedCookies?: Protocol.Network.BlockedSetCookieWithReason[] | undefined;
 	cookiePartitionKey?: Protocol.Network.CookiePartitionKey | undefined;
+	exemptedCookies?: Protocol.Network.ExemptedSetCookieWithReason[] | undefined;
 	rawRequestHeaders?: Protocol.Network.Headers | undefined;
 	rawResponseHeaders?: Protocol.Network.Headers | undefined;
 };
@@ -75,8 +76,7 @@ type RequestBodySource = "requestWillBeSent" | "getRequestPostData";
 type RequestBodySaveResult = BodySaveResult & { source: RequestBodySource };
 
 // Carries the response body result verbatim; only the skip flag stays internal.
-// The raw header fields are written next to the refined ones, never in place of them.
-// They stay absent unless --capture-cookies collected them.
+// The raw ExtraInfo fields sit next to the refined headers, absent without the flag.
 type CompletedResponseMetadata = Omit<BodySaveResult, "skipped"> & {
 	base64Encoded?: boolean | undefined;
 	encodedDataLength?: number | undefined;

@@ -1912,6 +1912,71 @@ describe("CdpResponseLogger", () => {
 		]);
 	});
 
+	// The redirectHasExtraInfo flag covers a hop's request ExtraInfo too.
+	// A late one under the shared requestId must not land on the next hop's raw headers.
+	it("drops raw request headers that arrive after their hop was recorded", async () => {
+		const client = new FakeClient();
+		const storage = createStorage();
+		const logger = new CdpResponseLogger(client as never, {
+			captureCookies: true,
+			cdp: "http://127.0.0.1:9222",
+			storage,
+			verbose: false,
+		});
+
+		await logger.start();
+		attachPageTarget(client);
+		await waitForAsyncEvent();
+		emitRequestWillBeSent(client, { url: "https://sso.test/authorize" });
+		await waitForAsyncEvent();
+		// The sso hop is recorded here, before its own request ExtraInfo arrives.
+		emitRequestWillBeSent(client, { url: "https://idp.test/login" }, SSO_TO_IDP);
+		await waitForAsyncEvent();
+		// The sso hop's late request ExtraInfo must be dropped, not attributed to idp.
+		emitRequestExtraInfo(client, { cookie: "sso-late" });
+		// The idp hop's own request ExtraInfo still lands on it.
+		emitRequestExtraInfo(client, { cookie: "idp-own" });
+		emitFinalResponse(client, "https://idp.test/login");
+		await waitForAsyncEvent();
+
+		expect(storage.metadata.map((record) => record.rawRequestHeaders?.["cookie"])).toEqual([
+			undefined,
+			"idp-own",
+		]);
+	});
+
+	// Attaching mid-chain buffers a previous hop's response ExtraInfo.
+	// It belongs to a hop never recorded, so it must not attach to the next hop.
+	it("does not attach a buffered response to the next hop after attaching mid-chain", async () => {
+		const client = new FakeClient();
+		const storage = createStorage();
+		const logger = new CdpResponseLogger(client as never, {
+			captureCookies: true,
+			cdp: "http://127.0.0.1:9222",
+			storage,
+			verbose: false,
+		});
+
+		await logger.start();
+		attachPageTarget(client);
+		await waitForAsyncEvent();
+		// The sso hop's response arrives first; the logger never saw its requestWillBeSent.
+		emitResponseExtraInfo(client, { headers: { "set-cookie": "stale=1" } });
+		// This idp hop has no previous state, so it is not recorded.
+		// It must not claim the buffered stale response either.
+		emitRequestWillBeSent(client, { url: "https://idp.test/login" }, SSO_TO_IDP);
+		await waitForAsyncEvent();
+		// The app hop now has a previous (idp) state, so idp is recorded here.
+		// The idp hop never got its own response ExtraInfo, so its raw headers stay absent.
+		emitRequestWillBeSent(client, { url: "https://app.test/session" }, IDP_TO_APP);
+		await waitForAsyncEvent();
+		emitFinalResponse(client, "https://app.test/session");
+		await waitForAsyncEvent();
+
+		const idpRecord = storage.metadata.find((record) => record.url === "https://idp.test/login");
+		expect(idpRecord?.rawResponseHeaders).toBeUndefined();
+	});
+
 	it("drops buffered raw headers when the target detaches", async () => {
 		const client = new FakeClient();
 		const storage = createStorage();

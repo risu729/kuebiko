@@ -74,13 +74,15 @@ const runLogger = async (options: CliOptions): Promise<void> => {
 	await mkdir(out, { recursive: true });
 	const browser = await startConfiguredBrowser(options, out);
 	const cdp = browser?.cdpEndpoint ?? options.cdp;
-
 	let storage: undefined | Awaited<ReturnType<typeof createStorage>>;
 	let logger: undefined | Awaited<ReturnType<typeof startCdpLogger>>;
 	let plugins: undefined | Awaited<ReturnType<typeof createPluginHost>>;
 	try {
-		storage = await createStorage(out, cdp, { labels: options.labels, note: options.note });
-
+		storage = await createStorage(out, cdp, {
+			captureCookies: options.captureCookies,
+			labels: options.labels,
+			note: options.note,
+		});
 		process.stdout.write(`capture_dir=${storage.runDirectory}\n`);
 		process.stdout.write(`cdp=${cdp}\n`);
 
