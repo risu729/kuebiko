@@ -705,8 +705,9 @@ class CdpResponseLogger {
 	async #handleDetached(event: TargetDetachedEvent): Promise<void> {
 		const session = this.#sessions.get(event.sessionId);
 		this.#sessions.delete(event.sessionId);
-		// Every per-request map is keyed by session and request id, so one prefix sweeps them all.
+		// Every counted map is keyed by session and request id, so one prefix sweeps them all.
 		// Request state is only ever stored under the key built from the session it names.
+		// The prefix assumes no session id is itself a prefix of another, as Chrome's hex ids are not.
 		// What each map would otherwise leak past its session counts as its own dropped record.
 		// That is a request nothing can complete, or buffered ExtraInfo no base event will claim.
 		// It is a stream still filling its buffer too, or a socket url nothing else would delete.
@@ -721,7 +722,8 @@ class CdpResponseLogger {
 			}
 		}
 
-		// A hop write in flight belongs to a request already counted above, so it only goes.
+		// A hop write in flight belongs to a request the loop above already counted.
+		// Counting it again would inflate the "N active request(s)" figure, so it is swept on its own.
 		for (const key of this.#hopWrites.keys()) {
 			if (key.startsWith(sessionPrefix)) {
 				this.#hopWrites.delete(key);
