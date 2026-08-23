@@ -53,7 +53,7 @@
 			}
 		},
 		{
-			"files": ["src/cdp.ts", "src/plugins.ts", "src/storage.ts"],
+			"files": ["src/cdp.ts", "src/plugins.ts", "src/storage-snapshot.ts", "src/storage.ts"],
 			"rules": {
 				"eslint/class-methods-use-this": "allow",
 				"eslint/init-declarations": "allow",
