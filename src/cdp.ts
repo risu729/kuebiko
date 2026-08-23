@@ -43,7 +43,10 @@ type StartLoggerOptions = {
 	// Points browser downloads at the run directory and subscribes the Browser events.
 	captureDownloads?: boolean | undefined;
 	cdp: string;
+	// Overrides the shutdown drain budgets; only tests need anything but the defaults.
+	drainTimeoutMs?: number | undefined;
 	exclude?: RegExp | undefined;
+	extendedDrainTimeoutMs?: number | undefined;
 	hooks?: HookPublisher | undefined;
 	include?: RegExp | undefined;
 	maxBodyBytes?: number | undefined;
@@ -140,11 +143,12 @@ const NETWORK_BUFFER_OPTIONS = {
 
 const CDP_CLOSE_TIMEOUT_MS = 5_000;
 const CDP_DRAIN_TIMEOUT_MS = 1_000;
-// A download record is only written once its saved file has been hashed.
-// Hashing a large file takes far longer than the in-memory handlers need to drain.
-// The writers close right after the drain, so a late append would be dropped.
-// The budget is therefore extended while a download is still being hashed.
-const CDP_DOWNLOAD_DRAIN_TIMEOUT_MS = 30_000;
+// The writers close right after the drain, so an append from an abandoned handler
+// Is dropped: its record never reaches the file the summary already counted it in.
+// Hashing a saved download, assembling a large streamed body, or writing it all take
+// Far longer than the in-memory handlers need, so any handler still running gets the
+// Longer budget of its own rather than only the download path.
+const CDP_EXTENDED_DRAIN_TIMEOUT_MS = 30_000;
 
 // A WebSocket handshake gets ExtraInfo events but never a requestWillBeSent.
 // Those entries are only cleaned up by the socket closing or the target detaching.
@@ -755,8 +759,6 @@ class CdpResponseLogger {
 	#disconnected = false;
 	// Downloads seen this run keyed by GUID, only populated with --capture-downloads.
 	readonly #downloads = new Map<string, PendingDownload>();
-	// Downloads whose record is waiting on the hash of a saved file.
-	#hashingDownloads = 0;
 	// Raw headers with no request state to live on yet, keyed like #requests.
 	// Only populated with --capture-cookies, since nothing else subscribes ExtraInfo.
 	readonly #extraInfo = new Map<string, PendingExtraInfo>();
@@ -910,13 +912,36 @@ class CdpResponseLogger {
 			terminateClientSocket(this.#client);
 			await settlesWithin(closing, CDP_DRAIN_TIMEOUT_MS);
 		}
+		const budget = this.#options.drainTimeoutMs ?? CDP_DRAIN_TIMEOUT_MS;
 		if (
-			!(await settlesWithin(this.#drainPendingEvents(), CDP_DRAIN_TIMEOUT_MS)) &&
-			this.#hashingDownloads > 0
+			!(await settlesWithin(this.#drainPendingEvents(), budget)) &&
+			this.#pendingEvents.size > 0
 		) {
-			// A download record still being hashed gets the longer budget of its own.
-			await settlesWithin(this.#drainPendingEvents(), CDP_DOWNLOAD_DRAIN_TIMEOUT_MS);
+			// Every handler still running holds a record, so all of them get the longer budget.
+			await settlesWithin(
+				this.#drainPendingEvents(),
+				this.#options.extendedDrainTimeoutMs ?? CDP_EXTENDED_DRAIN_TIMEOUT_MS,
+			);
 		}
+		await this.#recordAbandonedEvents();
+	}
+
+	// A handler that outlived both budgets is abandoned here, and the writers close next.
+	// Its append would then be refused, so the record is lost with nothing to say so.
+	// This is that record, written while the writers are still open.
+	async #recordAbandonedEvents(): Promise<void> {
+		const abandoned = this.#pendingEvents.size;
+		if (abandoned === 0) {
+			return;
+		}
+
+		await this.#recordCaptureError(
+			createErrorRecord(
+				"Cdp.drainTimeout",
+				undefined,
+				`Shutdown abandoned ${abandoned} event handler(s) still running; their records were dropped.`,
+			),
+		);
 	}
 
 	#log(message: string): void {
@@ -1382,6 +1407,9 @@ class CdpResponseLogger {
 		};
 		this.#streams.set(key, accumulator);
 		accumulator.enabling = this.#enableStream(accumulator, event, sessionId);
+		// Enabling a stream is capture work like any handler: shutdown drains it, and its
+		// Rejection is handled here rather than left to take the process down.
+		this.#trackEvent(accumulator.enabling);
 	}
 
 	async #enableStream(
@@ -1405,7 +1433,12 @@ class CdpResponseLogger {
 		} catch (error) {
 			// An unsupported method, or a request the browser no longer holds, refetches instead.
 			accumulator.failed = true;
-			await this.#recordStreamFailure(error, event, sessionId);
+			try {
+				await this.#recordStreamFailure(error, event, sessionId);
+			} catch {
+				// The loadingFinished handler awaits this promise before it records the response.
+				// A failed error record must not abort that and lose the whole metadata line.
+			}
 		}
 	}
 
@@ -1926,28 +1959,23 @@ class CdpResponseLogger {
 	}
 
 	// Storage hashes the saved file before it appends, which shutdown has to wait for.
-	// The count is what tells close() a slow hash is the reason the drain has not ended.
+	// The handler stays in #pendingEvents until then, which is what holds the drain open.
 	async #recordDownload(
 		event: DownloadProgressEvent,
 		state: DownloadRecord["state"],
 		pending: PendingDownload,
 	): Promise<DownloadRecord> {
-		this.#hashingDownloads += 1;
-		try {
-			return await this.#options.storage.recordDownload({
-				frameId: pending.frameId,
-				guid: event.guid,
-				receivedBytes: event.receivedBytes,
-				startedAt: pending.startedAt,
-				state,
-				suggestedFilename: pending.suggestedFilename,
-				timestamp: nowIso(),
-				totalBytes: event.totalBytes,
-				url: pending.url,
-			});
-		} finally {
-			this.#hashingDownloads -= 1;
-		}
+		return await this.#options.storage.recordDownload({
+			frameId: pending.frameId,
+			guid: event.guid,
+			receivedBytes: event.receivedBytes,
+			startedAt: pending.startedAt,
+			state,
+			suggestedFilename: pending.suggestedFilename,
+			timestamp: nowIso(),
+			totalBytes: event.totalBytes,
+			url: pending.url,
+		});
 	}
 
 	// Browser.downloadWillBegin is the only event carrying the URL and suggested filename.
