@@ -427,6 +427,13 @@ could not decode or send is recorded as a `Network.webSocketFrameError` event,
 since no frame line is written for it. As with frame records, it carries the
 socket URL only while the logger has a mapping for that socket.
 
+One of its events is about shutdown rather than about a request.
+`Cdp.drainTimeout` says how many event handlers were still running when the
+shutdown drain gave up on them. Such a handler still records if it finishes
+before the writers close, and is refused if it finishes after, so what it was
+holding may or may not be in the files. It is written while the writers are
+still open.
+
 `netlog.json` is Chromium NetLog for network-stack debugging.
 
 ## Run Summary
@@ -465,7 +472,8 @@ afterwards. `metadata=stopped` means its last write failed, so the file recorded
 nothing after that point and the counts above cover records it never received.
 Each one also writes a line to stderr naming the file and the first error behind
 it. A record appended after the writers close is refused rather than written
-behind the summary that already reported the run.
+behind the summary that already reported the run; `Cdp.drainTimeout` in
+`errors.ndjson` is what says handlers were still running at that point.
 
 One `summary_errors` line is printed per host with the `errors.ndjson` `event`
 counts behind it, ordered by failure count. Only the top 20 hosts get a line;

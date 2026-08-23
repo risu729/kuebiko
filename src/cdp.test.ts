@@ -2867,6 +2867,80 @@ describe("CdpResponseLogger", () => {
 		expect(hooks.events.map((event) => event.event)).not.toContain("download.completed");
 	});
 
+	// A slow body write is the same race a slow download hash is, and it used to lose.
+	// Only downloads extended the drain, so any other handler was abandoned at 1s.
+	it("waits past the first drain budget for any handler still recording", async () => {
+		const client = new FakeClient();
+		const storage = createStorage();
+		const slowWrite = Promise.withResolvers<void>();
+		const recordCompletedResponse = storage.recordCompletedResponse as Mock<
+			LoggerStorage["recordCompletedResponse"]
+		>;
+		recordCompletedResponse.mockImplementationOnce(async (record) => {
+			await slowWrite.promise;
+			storage.metadata.push(record);
+		});
+		const logger = new CdpResponseLogger(client as never, {
+			cdp: "http://127.0.0.1:9222",
+			drainTimeoutMs: 1,
+			extendedDrainTimeoutMs: 1_000,
+			storage,
+			verbose: false,
+		});
+
+		await logger.start();
+		attachPageTarget(client);
+		await waitForAsyncEvent();
+		emitRequestWillBeSent(client, { url: "https://example.test/api" });
+		await waitForAsyncEvent();
+		emitFinalResponse(client, "https://example.test/api");
+		await waitForAsyncEvent();
+		// The write is still in flight when shutdown starts, past the first budget.
+		setTimeout(() => {
+			slowWrite.resolve();
+		}, 20);
+		await logger.close();
+
+		expect(storage.metadata).toHaveLength(1);
+		expect(storage.errors).toHaveLength(0);
+	});
+
+	// The writers close right after this, so an abandoned handler's record is lost.
+	it("records the handlers shutdown abandoned before the writers close", async () => {
+		const client = new FakeClient();
+		const storage = createStorage();
+		const neverWritten = Promise.withResolvers<void>();
+		const recordCompletedResponse = storage.recordCompletedResponse as Mock<
+			LoggerStorage["recordCompletedResponse"]
+		>;
+		recordCompletedResponse.mockImplementationOnce(async () => await neverWritten.promise);
+		const logger = new CdpResponseLogger(client as never, {
+			cdp: "http://127.0.0.1:9222",
+			drainTimeoutMs: 1,
+			extendedDrainTimeoutMs: 5,
+			storage,
+			verbose: false,
+		});
+
+		await logger.start();
+		attachPageTarget(client);
+		await waitForAsyncEvent();
+		emitRequestWillBeSent(client, { url: "https://example.test/api" });
+		await waitForAsyncEvent();
+		emitFinalResponse(client, "https://example.test/api");
+		await waitForAsyncEvent();
+		await logger.close();
+		neverWritten.resolve();
+
+		expect(storage.metadata).toHaveLength(0);
+		expect(storage.errors).toContainEqual(
+			expect.objectContaining({
+				error: expect.stringContaining("abandoned 1 event handler"),
+				event: "Cdp.drainTimeout",
+			}),
+		);
+	});
+
 	// Messages arrive in wire order and a detach sweeps its state synchronously.
 	// An event after it belongs to a target Chrome destroyed, so nothing can complete it.
 	// Recording one used to leave a request entry no event will ever remove.
@@ -2938,6 +3012,64 @@ describe("CdpResponseLogger", () => {
 				url: "https://example.test/api",
 			}),
 		]);
+	});
+
+	// The completion awaits the enabling promise.
+	// A rejected one aborted the handler and dropped the metadata of a response saved fine.
+	it("records the response even when the stream failure record cannot be written", async () => {
+		const client = new FakeClient();
+		client.Network.streamResourceContent.mockImplementationOnce(() =>
+			Promise.reject(new Error("Network.streamResourceContent is not supported")),
+		);
+		const storage = createStorage();
+		const recordError = storage.recordError as Mock<LoggerStorage["recordError"]>;
+		recordError.mockImplementationOnce(() => Promise.reject(new Error("write after end")));
+		const logger = new CdpResponseLogger(client as never, {
+			cdp: "http://127.0.0.1:9222",
+			storage,
+			streamBodies: true,
+			verbose: false,
+		});
+
+		await logger.start();
+		attachPageTarget(client);
+		await waitForAsyncEvent();
+		emitRequestWillBeSent(client, { url: "https://example.test/api" });
+		await waitForAsyncEvent();
+		emitFinalResponse(client, "https://example.test/api");
+		await waitForAsyncEvent();
+		await logger.close();
+
+		// The failed stream refetches, and the record still reaches metadata.
+		expect(client.Network.getResponseBody).toHaveBeenCalledTimes(1);
+		expect(storage.metadata).toHaveLength(1);
+	});
+
+	// Enabling a stream was started without being tracked, so shutdown never drained it.
+	it("drains an enabling stream at shutdown", async () => {
+		const client = new FakeClient();
+		const enabling = deferStreamResourceContent(client);
+		const storage = createStorage();
+		const logger = new CdpResponseLogger(client as never, {
+			cdp: "http://127.0.0.1:9222",
+			drainTimeoutMs: 1,
+			extendedDrainTimeoutMs: 5,
+			storage,
+			streamBodies: true,
+			verbose: false,
+		});
+
+		await logger.start();
+		attachPageTarget(client);
+		await waitForAsyncEvent();
+		emitRequestWillBeSent(client, { url: "https://example.test/api" });
+		await waitForAsyncEvent();
+		emitResponseReceived(client, "https://example.test/api");
+		await waitForAsyncEvent();
+		await logger.close();
+		enabling.resolve({ bufferedData: "" });
+
+		expect(storage.errors).toContainEqual(expect.objectContaining({ event: "Cdp.drainTimeout" }));
 	});
 
 	// A tab closing with nothing in flight is ordinary.
