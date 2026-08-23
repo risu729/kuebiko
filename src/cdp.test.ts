@@ -205,6 +205,17 @@ const waitForAsyncEvent = async (): Promise<void> => {
 	await Bun.sleep(0);
 };
 
+// A fixed wait for work that takes real time races the thing it waits for.
+// On a loaded machine it loses that race.
+// Polling ends as soon as the records are there instead.
+// It only gives up at a deadline far enough out to mean the work never happened.
+const waitForRecords = async (ready: () => boolean, timeout = 5_000): Promise<void> => {
+	const deadline = Date.now() + timeout;
+	while (!ready() && Date.now() < deadline) {
+		await Bun.sleep(1);
+	}
+};
+
 const attachPageTarget = (client: FakeClient, session = "session-1", target = "target-1"): void => {
 	client.emit("Target.attachedToTarget", {
 		sessionId: session,
@@ -1523,7 +1534,7 @@ describe("CdpResponseLogger", () => {
 		emitRequestWillBeSent(client, { url: "https://idp.test/login" }, SSO_TO_IDP);
 		emitRequestWillBeSent(client, { url: "https://app.test/session" }, IDP_TO_APP);
 		emitFinalResponse(client, "https://app.test/session");
-		await Bun.sleep(60);
+		await waitForRecords(() => storage.metadata.length === 3);
 
 		expect(storage.metadata.map((record) => record.redirectIndex)).toEqual([0, 1, 2]);
 		expect(storage.metadata.map((record) => record.status)).toEqual([301, 302, 200]);
