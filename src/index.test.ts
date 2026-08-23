@@ -1,6 +1,12 @@
 import { describe, expect, it } from "bun:test";
 
-import { DEFAULT_CDP_ENDPOINT, awaitShutdown, parseArgs, renderHelp, stopRun } from "./index";
+import {
+	DEFAULT_CDP_ENDPOINT,
+	awaitShutdown,
+	parseArgs,
+	renderHelp,
+	stopRun,
+} from "./index";
 
 describe("parseArgs", () => {
 	it("uses defaults", () => {
@@ -165,6 +171,27 @@ describe("parseArgs", () => {
 	it("renders local help output", () => {
 		expect(renderHelp()).toContain("kuebiko [options]");
 		expect(renderHelp()).toContain("--no-plugins");
+	});
+
+	// The flag name was negated but its description was not, so help stated the opposite
+	// Of what the flag does, and the widest flags pushed their descriptions out of line.
+	it("describes negated flags by what turning them off does", () => {
+		const lines = renderHelp().split("\n");
+		const lineFor = (flag: string): string =>
+			lines.find((line) => line.trimStart().startsWith(`${flag} `)) ?? "";
+
+		expect(lineFor("--no-plugins")).toContain("Disable plugin loading from --config.");
+		expect(lineFor("--no-netlog")).toContain("Disable netlog.json in --launch-browser mode.");
+		expect(lineFor("--no-netlog")).not.toContain("Write netlog.json");
+
+		// The width used to cut off at the flag, so the widest ones ran into their text.
+		const described = lines.filter((line) => line.startsWith("  --"));
+		const columns = new Set(
+			described.map((line) => /^ {2}\S.*? {2,}(?=\S)/u.exec(line)?.[0].length),
+		);
+		expect(described.length).toBeGreaterThan(0);
+		expect(columns.size).toBe(1);
+		expect(columns.has(undefined)).toBe(false);
 	});
 });
 

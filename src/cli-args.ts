@@ -7,6 +7,9 @@ type CliArgDefinition = {
 	default?: boolean | string | undefined;
 	description: string;
 	multiple?: boolean | undefined;
+	// What --no-<flag> does, for a flag that is on by default and so only ever spelled
+	// Negated. Help printed the affirmative description there, stating the opposite.
+	negatedDescription?: string | undefined;
 	type: "boolean" | "string";
 	valueHint?: string | undefined;
 };
@@ -86,6 +89,7 @@ const cliArgs = {
 	netlog: {
 		default: true,
 		description: "Write netlog.json when using --launch-browser.",
+		negatedDescription: "Disable netlog.json in --launch-browser mode.",
 		type: "boolean",
 	},
 	note: {
@@ -101,6 +105,7 @@ const cliArgs = {
 	plugins: {
 		default: true,
 		description: "Load plugins from --config.",
+		negatedDescription: "Disable plugin loading from --config.",
 		type: "boolean",
 	},
 	"snapshot-storage": {

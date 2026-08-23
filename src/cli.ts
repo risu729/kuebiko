@@ -191,12 +191,30 @@ const parseArgs = (argv: string[]): CliOptions => {
 	return normalizeArgs(parseRawArgs(argv));
 };
 
+// Wide enough for the longest flag, --browser-command <command>, so the descriptions
+// Of the value-taking flags stay in the same column as everything else.
+const OPTION_COLUMN_WIDTH = 28;
+
+const formatOptionLine = (flag: string, description: string): string =>
+	`  ${flag.padEnd(OPTION_COLUMN_WIDTH)} ${description}`;
+
+// A flag that defaults to true is only ever spelled negated, so it is described by what
+// Turning it off does. Printing the affirmative description against --no-<flag> stated
+// The opposite of the truth, so a definition without one shows both spellings instead.
 const formatOption = (name: string, definition: CliArgDefinition): string => {
-	const flag =
-		definition.type === "boolean"
-			? `--${definition.default === true ? "no-" : ""}${name}`
-			: `--${name} <${definition.valueHint ?? "value"}>`;
-	return `  ${flag.padEnd(24)} ${definition.description}`;
+	if (definition.type !== "boolean") {
+		return formatOptionLine(
+			`--${name} <${definition.valueHint ?? "value"}>`,
+			definition.description,
+		);
+	}
+	if (definition.default !== true) {
+		return formatOptionLine(`--${name}`, definition.description);
+	}
+
+	return definition.negatedDescription === undefined
+		? formatOptionLine(`--[no-]${name}`, definition.description)
+		: formatOptionLine(`--no-${name}`, definition.negatedDescription);
 };
 
 const renderHelp = (): string =>
@@ -207,8 +225,8 @@ const renderHelp = (): string =>
 		"",
 		"Options:",
 		...Object.entries(cliArgs).map(([name, definition]) => formatOption(name, definition)),
-		"  --help, -h               Show help",
-		"  --version, -v            Show version",
+		formatOptionLine("--help, -h", "Show help"),
+		formatOptionLine("--version, -v", "Show version"),
 	].join("\n")}\n`;
 
 export { DEFAULT_CDP_ENDPOINT, TOOL_VERSION, cliArgs, normalizeArgs, parseArgs, renderHelp };
