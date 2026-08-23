@@ -224,7 +224,7 @@ describe("createStorage", () => {
 		const storage = await createStorage(
 			dir,
 			"http://127.0.0.1:9222",
-			{ labels: ["account-a", "billing"], note: "manual sweep" },
+			{ captureCookies: true, labels: ["account-a", "billing"], note: "manual sweep" },
 			"2026-07-06T12:34:56Z",
 		);
 		await storage.close();
@@ -233,10 +233,11 @@ describe("createStorage", () => {
 
 		expect(runInfo.labels).toEqual(["account-a", "billing"]);
 		expect(runInfo.note).toBe("manual sweep");
+		expect(runInfo.captureCookies).toBe(true);
 		expect(runInfo.createdAt).toBe("2026-07-06T12:34:56Z");
 	});
 
-	it("omits labels and note from run.json when they are unset or blank", async () => {
+	it("omits labels and note but always records captureCookies in run.json", async () => {
 		for (const annotations of [{}, { labels: [], note: "  " }]) {
 			const dir = await mkdtemp(join(tmpdir(), "kuebiko-"));
 			const storage = await createStorage(
@@ -251,6 +252,8 @@ describe("createStorage", () => {
 
 			expect(Object.hasOwn(runInfo, "labels")).toBe(false);
 			expect(Object.hasOwn(runInfo, "note")).toBe(false);
+			// A plain boolean, so it stays in run.json even when the flag is off.
+			expect(runInfo["captureCookies"]).toBe(false);
 		}
 	});
 });

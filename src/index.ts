@@ -14,18 +14,11 @@ import {
 	renderHelp,
 } from "./cli";
 import { defineConfig } from "./config";
+import type { LoggerConfig, LoggerPluginConfig } from "./config";
 import { createPluginHost } from "./plugins";
 import { getDefaultBaseDirectory, getDefaultCaptureDirectory } from "./sanitize";
 import { createStorage } from "./storage";
-import type {
-	CliOptions,
-	HookEvent,
-	HookEventName,
-	LoggerConfig,
-	LoggerPlugin,
-	LoggerPluginConfig,
-	PluginContext,
-} from "./types";
+import type { CliOptions, HookEvent, HookEventName, LoggerPlugin, PluginContext } from "./types";
 
 const waitForShutdown = (): Promise<void> =>
 	new Promise((resolve) => {
@@ -81,13 +74,15 @@ const runLogger = async (options: CliOptions): Promise<void> => {
 	await mkdir(out, { recursive: true });
 	const browser = await startConfiguredBrowser(options, out);
 	const cdp = browser?.cdpEndpoint ?? options.cdp;
-
 	let storage: undefined | Awaited<ReturnType<typeof createStorage>>;
 	let logger: undefined | Awaited<ReturnType<typeof startCdpLogger>>;
 	let plugins: undefined | Awaited<ReturnType<typeof createPluginHost>>;
 	try {
-		storage = await createStorage(out, cdp, { labels: options.labels, note: options.note });
-
+		storage = await createStorage(out, cdp, {
+			captureCookies: options.captureCookies,
+			labels: options.labels,
+			note: options.note,
+		});
 		process.stdout.write(`capture_dir=${storage.runDirectory}\n`);
 		process.stdout.write(`cdp=${cdp}\n`);
 
@@ -98,6 +93,7 @@ const runLogger = async (options: CliOptions): Promise<void> => {
 			verbose: options.verbose,
 		});
 		logger = await startCdpLogger({
+			captureCookies: options.captureCookies,
 			cdp,
 			exclude: options.exclude,
 			hooks: plugins,

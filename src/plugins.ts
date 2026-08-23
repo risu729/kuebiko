@@ -3,6 +3,7 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { parseLoggerConfig } from "./config";
+import type { LoggerConfig } from "./config";
 import type {
 	CompletedResponseMetadata,
 	ErrorRecord,
@@ -10,7 +11,6 @@ import type {
 	HookEvent,
 	HookEventName,
 	HookPublisher,
-	LoggerConfig,
 	LoggerPlugin,
 	LoggerStorage,
 	PluginContext,

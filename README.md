@@ -145,11 +145,30 @@ code you opt into with `--config`.
 
 `run.json` records how the run was started. `--label <label>` (repeatable) and
 `--note <text>` add `labels` and `note` fields so the run also records why it
-was made. Both fields are omitted when the flags are not used.
+was made. Both fields are omitted when the flags are not used. A
+`captureCookies` boolean is always present so a capture directory says whether
+`--capture-cookies` was on and it may therefore hold plaintext session cookies.
 
 `metadata.ndjson` contains one JSON object per completed response that passed
 the filters. When available, the same metadata line links to both a saved
 request payload and a saved response body.
+
+`--capture-cookies` adds the raw wire headers to each metadata line as
+`rawRequestHeaders` and `rawResponseHeaders`, taken from the CDP
+`Network.requestWillBeSentExtraInfo` and `Network.responseReceivedExtraInfo`
+events. They sit next to the refined `requestHeaders` and `responseHeaders`,
+never in place of them. The raw sets are the only place `Cookie` appears at all,
+and the only place `Set-Cookie` appears verbatim for every response, so a
+capture made with the flag holds live session cookies in plaintext. A response
+that could not store a cookie also records `blockedCookies` with the reason
+Chrome rejected each one, which is usually the real answer when a session
+breaks, plus `exemptedCookies` for cookies stored despite third-party
+restrictions and `cookiePartitionKey` when partitioned cookies apply. All are
+omitted when there is nothing to report. The flag is off by default, and without
+it the logger never subscribes the ExtraInfo events. Plugin events keep the
+refined headers only, so raw cookies stay inside the capture directory, and
+`run.json` records `captureCookies` so the directory says whether it may hold
+them.
 
 A redirect chain reuses one CDP request ID, so it produces several metadata
 lines. Each `3xx` hop is written when the browser follows it, with
@@ -159,7 +178,12 @@ Requests that never redirected have neither field. Hops keep their own status,
 `location`, and `set-cookie` response headers, and an inline request payload
 when the browser reported one, but they never have a response body: redirects
 carry none, and CDP would only return the final hop's body. Filters apply to
-each hop URL, exactly as they apply to a terminal response.
+each hop URL, exactly as they apply to a terminal response. With
+`--capture-cookies`, each hop keeps the raw headers of its own hop. Because the
+whole chain shares one request ID, a hop's `responseReceivedExtraInfo` that
+arrives only after the next hop started is dropped instead of being credited to
+the wrong hop, leaving that hop with its refined headers and no
+`rawResponseHeaders`.
 
 `websocket.ndjson` contains one JSON object per WebSocket frame, in both
 directions: `direction` is `"received"` for a server-to-browser frame and
@@ -237,6 +261,8 @@ For completed responses, metadata includes request and response fields such as:
 - response body path, byte length, SHA-256, and CDP `base64Encoded`
 - request body path, byte length, SHA-256, and source when available
 - `redirect` and `redirectIndex` for requests that went through a redirect chain
+- `rawRequestHeaders`, `rawResponseHeaders`, `blockedCookies`,
+  `exemptedCookies`, and `cookiePartitionKey` when `--capture-cookies` is used
 - any capture error for body retrieval
 
 Response bodies are saved exactly from CDP's body result:
@@ -526,6 +552,7 @@ Options:
   --include <regex>        Only persist matching response URLs
   --exclude <regex>        Do not persist matching response URLs
   --max-body-bytes <num>   Skip body retrieval above encoded byte length
+  --capture-cookies        Also record raw wire headers, including live cookies
   --label <label>          Label recorded in run.json
   --note <text>            Free-form note recorded in run.json
   --config <path>          TS/JS logger config with plugin modules
@@ -617,6 +644,12 @@ mise run compile
 - Logs can contain sensitive data, including private API requests, private API
   responses, submitted form content, and cookies-adjacent content. Treat every
   capture directory as secret.
+- With `--capture-cookies`, `metadata.ndjson` holds the raw `Cookie` and
+  `Set-Cookie` headers exactly as they went over the wire. Such a capture
+  contains live session cookies in plaintext and is enough to resume the
+  sessions it recorded. The flag is off by default; turn it on only when the raw
+  headers, or the `blockedCookies` reasons behind a broken session, are what you
+  are debugging, and delete those runs as soon as you are done.
 - Store capture directories somewhere private, avoid syncing them to cloud
   drives by default, delete runs you no longer need, and share only minimized
   redacted samples.

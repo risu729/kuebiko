@@ -3,6 +3,7 @@ import { afterEach, describe } from "bun:test";
 import {
 	assertCapturedApi,
 	assertCapturedEventSourceMessages,
+	assertCapturedRawHeaders,
 	assertCapturedWebSocketFrames,
 	assertNetLog,
 	assertRunSummary,
@@ -26,6 +27,7 @@ const BROWSER_E2E_TIMEOUT_MS = 30_000;
 const assertCapturedTraffic = async (context: TestContext): Promise<void> => {
 	const metadata = await findCapturedApiRecord(context.captureDirectory);
 	assertCapturedApi(metadata, await readCapturedBodies(context.captureDirectory, metadata));
+	assertCapturedRawHeaders(metadata);
 	assertCapturedWebSocketFrames(
 		await findWebSocketFrames(context.captureDirectory),
 		`ws://127.0.0.1:${context.fixtureServer.port}/socket`,

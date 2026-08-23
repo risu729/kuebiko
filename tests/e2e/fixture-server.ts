@@ -1,8 +1,10 @@
 // The page under capture drives one request/response pair, one WebSocket, and one
 // Server-Sent Events stream, so a run exercises every record file the logger writes.
+// It sets a cookie first so the request it makes carries one over the wire.
 const PAGE_HTML = `<!doctype html>
 <meta charset="utf-8">
 <script>
+document.cookie = "e2e=1; path=/";
 void fetch("/api/data", {
   method: "POST",
   headers: { "content-type": "application/json" },
@@ -47,11 +49,15 @@ const startFixtureServer = (): ReturnType<typeof Bun.serve> =>
 			}
 
 			if (url.pathname === "/api/data") {
-				return Response.json({
-					ok: true,
-					posted: JSON.parse(await request.text()) as unknown,
-					source: "cdp-e2e",
-				});
+				return Response.json(
+					{
+						ok: true,
+						posted: JSON.parse(await request.text()) as unknown,
+						source: "cdp-e2e",
+					},
+					// Only the raw headers of --capture-cookies carry this back out.
+					{ headers: { "set-cookie": "e2e-response=1; path=/" } },
+				);
 			}
 
 			return new Response(PAGE_HTML, {

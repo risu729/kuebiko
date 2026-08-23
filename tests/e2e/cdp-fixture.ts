@@ -180,6 +180,7 @@ const startLogger = (options: {
 		"--browser-arg=--disable-dev-shm-usage",
 		"--browser-arg=--no-first-run",
 		"--browser-arg=--no-default-browser-check",
+		"--capture-cookies",
 		"--out",
 		options.captureDirectory,
 	]);
