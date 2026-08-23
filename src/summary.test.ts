@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 
-import { createCaptureSummary, hostFromUrl } from "./summary";
-import type { ErrorRecord } from "./types";
+import { countStorageSnapshot, createCaptureSummary, hostFromUrl } from "./summary";
+import type { ErrorRecord, StorageSnapshot } from "./types";
 
 const createError = (event: string, url?: string): ErrorRecord => ({
 	error: "failed",
@@ -24,7 +24,75 @@ describe("hostFromUrl", () => {
 	});
 });
 
+const createSnapshot = (): StorageSnapshot => ({
+	cookies: [{ domain: "example.test", name: "session", path: "/", value: "abc" } as never],
+	origins: [
+		{
+			databases: [
+				{
+					name: "app-cache",
+					objectStores: [
+						{
+							autoIncrement: false,
+							entries: [
+								{
+									key: { type: "string" },
+									primaryKey: { type: "string" },
+									value: { type: "object" },
+								},
+								{
+									key: { type: "string" },
+									primaryKey: { type: "string" },
+									value: { type: "object" },
+								},
+							],
+							hasMore: false,
+							name: "sessions",
+						},
+					],
+					version: 1,
+				},
+			],
+			localStorage: { theme: "dark", token: "abc" },
+			securityOrigin: "https://example.test",
+			sessionStorage: { tab: "1" },
+		},
+		// An origin the DOMStorage read failed for still counts its databases.
+		{ databases: [], securityOrigin: "https://cdn.test" },
+	],
+	runTimestamp: "2026-07-06T12:34:56Z",
+	timestamp: "2026-07-06T13:00:00Z",
+});
+
+describe("countStorageSnapshot", () => {
+	it("totals origins, cookies, web storage items, databases, and entries", () => {
+		expect(countStorageSnapshot(createSnapshot())).toEqual({
+			cookies: 1,
+			databases: 1,
+			entries: 2,
+			items: 3,
+			origins: 2,
+		});
+	});
+});
+
 describe("createCaptureSummary", () => {
+	// A run without --snapshot-storage keeps the three-line summary it had before.
+	it("prints a snapshot line only once a snapshot was written", () => {
+		const summary = createCaptureSummary();
+
+		expect(summary.render().split("\n")).toHaveLength(3);
+
+		summary.recordStorageSnapshot(countStorageSnapshot(createSnapshot()));
+
+		expect(summary.render().split("\n")).toEqual([
+			"summary responses=0 response_bytes=0 requests=0 request_bytes=0",
+			"summary websocket_frames=0 eventsource_messages=0 downloads=0 redirects=0",
+			"summary snapshot_origins=2 cookies=1 items=3 databases=1 entries=2",
+			"summary errors=0",
+		]);
+	});
+
 	it("reports totals for saved bodies and frames with no errors", () => {
 		const summary = createCaptureSummary();
 		summary.recordSavedResponseBody(11);

@@ -2,11 +2,28 @@
 // Server-Sent Events stream, and one download.
 // A run therefore exercises every record file the logger writes.
 // A cookie is set first so the request the page makes carries one over the wire.
+// Both web storage areas and one IndexedDB object store are filled too.
+// Those are what the end-of-run snapshot reads back out of the browser process.
+// The IndexedDB write is asynchronous, so the page announces it with a request.
+// The test waits for that request before it shuts the logger down.
 // The download starts from a link click, which is what a real export button does.
 const PAGE_HTML = `<!doctype html>
 <meta charset="utf-8">
 <script>
 document.cookie = "e2e=1; path=/";
+localStorage.setItem("e2e-local", "local-value");
+sessionStorage.setItem("e2e-session", "session-value");
+const opened = indexedDB.open("e2e-db", 1);
+opened.onupgradeneeded = () => {
+  opened.result.createObjectStore("sessions");
+};
+opened.onsuccess = () => {
+  const transaction = opened.result.transaction("sessions", "readwrite");
+  transaction.objectStore("sessions").put({ token: "e2e-token" }, "current");
+  transaction.oncomplete = () => {
+    void fetch("/api/storage-ready");
+  };
+};
 void fetch("/api/data", {
   method: "POST",
   headers: { "content-type": "application/json" },

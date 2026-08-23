@@ -183,6 +183,7 @@ const startLogger = (options: {
 		"--browser-arg=--no-default-browser-check",
 		"--capture-cookies",
 		"--capture-downloads",
+		"--snapshot-storage",
 		"--out",
 		options.captureDirectory,
 	]);
@@ -228,6 +229,15 @@ const findEventSourceMessages = async (
 		);
 		return messages.length >= 2 ? messages : undefined;
 	});
+
+// The page announces its IndexedDB write with a request of its own.
+// Only after that request is there anything for the snapshot to read back.
+const waitForStorageWrites = async (captureDirectory: string): Promise<void> => {
+	await waitFor("page storage writes", async () => {
+		const records = await readNdjson<MetadataRecord>(join(captureDirectory, "metadata.ndjson"));
+		return records.some((record) => record.url?.includes("/api/storage-ready")) ? true : undefined;
+	});
+};
 
 // The page clicks one download link, so exactly one terminal record must land.
 const findDownloads = async (captureDirectory: string): Promise<CapturedDownload[]> =>
@@ -282,5 +292,6 @@ export {
 	reservePort,
 	startContext,
 	startLoggerProcess,
+	waitForStorageWrites,
 };
 export type { TestContext };

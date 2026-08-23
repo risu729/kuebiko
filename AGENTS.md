@@ -6,8 +6,8 @@ These instructions apply to agent work in this repository.
 
 This project is a local Chrome CDP/NetLog capture tool. Keep it focused on
 saving raw request/response bodies, metadata, errors, WebSocket frames in both
-directions, Server-Sent Events messages, browser downloads, and Chrome NetLog
-files.
+directions, Server-Sent Events messages, browser downloads, an opt-in end-of-run
+cookie and web storage snapshot, and Chrome NetLog files.
 
 Do not add analytics, parser UIs, dashboards, HAR viewers, browser automation,
 login automation, stealth/evasion code, request interception, packet capture,
@@ -88,6 +88,12 @@ Keep CDP use passive by default:
   flag, and say so in the README. `--capture-downloads` is the only such flag:
   it sets `Browser.setDownloadBehavior` and subscribes the browser-wide
   `Browser` download events, and it restores the default behavior on shutdown.
+- `--snapshot-storage` is off by default too, and it adds the `Storage`,
+  `DOMStorage`, and `IndexedDB` domains. They read from the browser process and
+  change no browser behavior. `DOMStorage` and `IndexedDB` are enabled per
+  target session only for the moment the snapshot reads them, at the end of the
+  run. Do not implement any part of that snapshot through `Runtime.evaluate` or
+  `Runtime.enable`: leave a gap and document it instead.
 
 Preserve normal browser behavior in launch mode:
 
@@ -106,6 +112,9 @@ Keep output append-only and durable enough for long captures:
 
 - Keep `metadata.ndjson`, `errors.ndjson`, `websocket.ndjson`,
   `eventsource.ndjson`, and `downloads.ndjson` append-only.
+- `storage-snapshot.json` is the one exception: a single point-in-time document
+  written whole, once, at the end of a run. It holds live session cookies and
+  web storage, so it is the most sensitive file the tool writes.
 - Do not keep all completed metadata in memory.
 - Clean up active request state after completion or failure.
 - Do not put URL text directly in filenames.

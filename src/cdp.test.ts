@@ -5,17 +5,24 @@ import { resolve } from "node:path";
 
 import type { Protocol } from "devtools-protocol";
 
-import { CdpResponseLogger, NETWORK_BUFFER_OPTIONS, createCompletedMetadata } from "./cdp";
+import {
+	CdpResponseLogger,
+	MAX_DATABASES_PER_ORIGIN,
+	MAX_ENTRIES_PER_OBJECT_STORE,
+	NETWORK_BUFFER_OPTIONS,
+	collectSnapshotOrigins,
+	createCompletedMetadata,
+} from "./cdp";
+import type { HookEvent, HookPublisher } from "./plugins";
 import type {
 	CompletedResponseMetadata,
 	DownloadRecord,
 	ErrorRecord,
 	EventSourceMessageRecord,
-	HookEvent,
-	HookPublisher,
 	LoggerStorage,
 	RequestState,
 	RequestBodySource,
+	StorageSnapshot,
 	WebSocketFrameRecord,
 } from "./types";
 
@@ -50,7 +57,25 @@ class FakeClient extends EventEmitter {
 
 	close = mock(() => Promise.resolve());
 
-	send = mock(() => Promise.resolve());
+	// Every raw CDP method the logger sends, in order.
+	// It is also how the tests assert that no Runtime method beyond the resume is used.
+	sent: { method: string; params?: object | undefined; sessionId?: string | undefined }[] = [];
+
+	// Answers a raw send: an Error rejects, a function is called with the params.
+	// Anything not listed resolves empty, the way a void CDP command does.
+	sendReplies = new Map<string, unknown>();
+
+	send = mock((method: string, params?: object, sessionId?: string) => {
+		this.sent.push({ method, params, sessionId });
+		const reply = this.sendReplies.get(method);
+		if (reply instanceof Error) {
+			return Promise.reject(reply);
+		}
+
+		return Promise.resolve(
+			typeof reply === "function" ? (reply as (input: unknown) => unknown)(params) : (reply ?? {}),
+		);
+	});
 }
 
 const createStorage = (): LoggerStorage & {
@@ -58,12 +83,14 @@ const createStorage = (): LoggerStorage & {
 	errors: ErrorRecord[];
 	eventSource: EventSourceMessageRecord[];
 	metadata: CompletedResponseMetadata[];
+	snapshots: StorageSnapshot[];
 	websocket: WebSocketFrameRecord[];
 } => {
 	const metadata: CompletedResponseMetadata[] = [];
 	const downloads: DownloadRecord[] = [];
 	const errors: ErrorRecord[] = [];
 	const eventSource: EventSourceMessageRecord[] = [];
+	const snapshots: StorageSnapshot[] = [];
 	const websocket: WebSocketFrameRecord[] = [];
 
 	return {
@@ -126,12 +153,17 @@ const createStorage = (): LoggerStorage & {
 			eventSource.push(record);
 			return Promise.resolve();
 		}),
+		recordStorageSnapshot: mock((snapshot: StorageSnapshot) => {
+			snapshots.push(snapshot);
+			return Promise.resolve("storage-snapshot.json");
+		}),
 		recordWebSocketFrame: mock((record) => {
 			websocket.push(record);
 			return Promise.resolve();
 		}),
 		runDirectory: "/captures/run",
 		runTimestamp: "2026-07-06T12:34:56Z",
+		snapshots,
 		websocket,
 	};
 };
@@ -2812,5 +2844,484 @@ describe("CdpResponseLogger", () => {
 			}),
 		]);
 		expect(hooks.events.map((event) => event.event)).not.toContain("download.completed");
+	});
+});
+
+// Chrome answers IndexedDB.requestData with Runtime.RemoteObject shapes.
+// The objectId is a live handle: resolving it would need the Runtime domain.
+const REMOTE_OBJECT_ENTRY: Protocol.IndexedDB.DataEntry = {
+	key: { description: "session", objectId: "key-handle-1", type: "string", value: "session" },
+	primaryKey: { objectId: "pk-handle-1", type: "string", value: "session" },
+	value: {
+		className: "Object",
+		description: "Object",
+		objectId: "value-handle-1",
+		preview: {
+			description: "Object",
+			overflow: false,
+			properties: [{ name: "token", type: "string", value: "abc123" }],
+			type: "object",
+		},
+		type: "object",
+	},
+};
+
+const SNAPSHOT_COOKIE = {
+	domain: "example.test",
+	name: "session",
+	path: "/",
+	value: "abc",
+} as unknown as Protocol.Network.Cookie;
+
+const APP_DATABASE = {
+	databaseWithObjectStores: {
+		name: "app-cache",
+		objectStores: [
+			{ autoIncrement: false, indexes: [], keyPath: { type: "null" }, name: "sessions" },
+		],
+		version: 3,
+	},
+};
+
+const createSnapshotLogger = (
+	client: FakeClient,
+	storage: ReturnType<typeof createStorage>,
+	extra: { hooks?: HookPublisher | undefined; snapshotTimeoutMs?: number | undefined } = {},
+): CdpResponseLogger =>
+	new CdpResponseLogger(client as never, {
+		cdp: "http://127.0.0.1:9222",
+		hooks: extra.hooks,
+		snapshotStorage: true,
+		snapshotTimeoutMs: extra.snapshotTimeoutMs,
+		storage,
+		verbose: false,
+	});
+
+const primeStorageReplies = (client: FakeClient): void => {
+	client.sendReplies.set("Storage.getCookies", { cookies: [SNAPSHOT_COOKIE] });
+	client.sendReplies.set("DOMStorage.getDOMStorageItems", (params: unknown) => ({
+		entries: (params as { storageId: { isLocalStorage: boolean } }).storageId.isLocalStorage
+			? [
+					["theme", "dark"],
+					["token", "abc123"],
+				]
+			: [["tab", "1"]],
+	}));
+	client.sendReplies.set("IndexedDB.requestDatabaseNames", { databaseNames: ["app-cache"] });
+	client.sendReplies.set("IndexedDB.requestDatabase", APP_DATABASE);
+	client.sendReplies.set("IndexedDB.requestData", {
+		hasMore: false,
+		objectStoreDataEntries: [REMOTE_OBJECT_ENTRY],
+	});
+};
+
+const sentMethods = (client: FakeClient): string[] => client.sent.map((call) => call.method);
+
+const attachTarget = (
+	client: FakeClient,
+	target: { session: string; targetId: string; type: string; url: string },
+): void => {
+	client.emit("Target.attachedToTarget", {
+		sessionId: target.session,
+		targetInfo: {
+			attached: true,
+			browserContextId: "context-1",
+			canAccessOpener: false,
+			targetId: target.targetId,
+			title: "Example",
+			type: target.type,
+			url: target.url,
+		},
+		waitingForDebugger: false,
+	});
+};
+
+describe("collectSnapshotOrigins", () => {
+	it("keeps one entry per http(s) page or iframe origin", () => {
+		expect(
+			collectSnapshotOrigins([
+				{
+					sessionId: "session-1",
+					targetId: "target-1",
+					targetType: "page",
+					targetUrl: "https://example.test/app",
+				},
+				// The same origin in a second tab reuses the first session.
+				{
+					sessionId: "session-2",
+					targetId: "target-2",
+					targetType: "page",
+					targetUrl: "https://example.test/other",
+				},
+				{
+					sessionId: "session-3",
+					targetId: "target-3",
+					targetType: "iframe",
+					targetUrl: "https://cdn.test/frame",
+				},
+				// Storage is not reachable on any of the rest.
+				{
+					sessionId: "session-4",
+					targetId: "target-4",
+					targetType: "service_worker",
+					targetUrl: "https://example.test/sw.js",
+				},
+				{
+					sessionId: "session-5",
+					targetId: "target-5",
+					targetType: "page",
+					targetUrl: "about:blank",
+				},
+				{
+					sessionId: "session-6",
+					targetId: "target-6",
+					targetType: "page",
+					targetUrl: "chrome://newtab",
+				},
+				{ sessionId: "session-7", targetId: "target-7", targetType: "page" },
+			]),
+		).toEqual([
+			{ securityOrigin: "https://example.test", sessionId: "session-1", targetId: "target-1" },
+			{ securityOrigin: "https://cdn.test", sessionId: "session-3", targetId: "target-3" },
+		]);
+	});
+
+	// A page target attaches on about:blank and navigates afterwards.
+	it("prefers the live target URL over the one the session attached with", () => {
+		expect(
+			collectSnapshotOrigins(
+				[
+					{
+						sessionId: "session-1",
+						targetId: "target-1",
+						targetType: "page",
+						targetUrl: "about:blank",
+					},
+				],
+				new Map([["target-1", "https://example.test/app"]]),
+			),
+		).toEqual([
+			{ securityOrigin: "https://example.test", sessionId: "session-1", targetId: "target-1" },
+		]);
+	});
+});
+
+describe("CdpResponseLogger storage snapshot", () => {
+	it("sends no storage command and writes nothing without the flag", async () => {
+		const client = new FakeClient();
+		const storage = createStorage();
+		const hooks = createHooks();
+		const logger = new CdpResponseLogger(client as never, {
+			cdp: "http://127.0.0.1:9222",
+			hooks,
+			storage,
+			verbose: false,
+		});
+
+		await logger.start();
+		attachTarget(client, {
+			session: "session-1",
+			targetId: "target-1",
+			type: "page",
+			url: "https://example.test/app",
+		});
+		await waitForAsyncEvent();
+		await logger.snapshotStorage();
+
+		expect(storage.snapshots).toEqual([]);
+		expect(storage.errors).toEqual([]);
+		expect(hooks.events.map((event) => event.event)).not.toContain("storage.snapshot");
+		expect(
+			sentMethods(client).filter((method) => /^(?:DOMStorage|IndexedDB|Storage)\./u.test(method)),
+		).toEqual([]);
+		expect(sentMethods(client)).not.toContain("Runtime.evaluate");
+	});
+
+	it("snapshots the origin a page navigated to after it attached", async () => {
+		const client = new FakeClient();
+		const storage = createStorage();
+		primeStorageReplies(client);
+		const logger = createSnapshotLogger(client, storage);
+
+		await logger.start();
+		attachTarget(client, {
+			session: "session-1",
+			targetId: "target-1",
+			type: "page",
+			url: "about:blank",
+		});
+		// The next Target.getTargets is the one the snapshot itself sends.
+		client.Target.getTargets.mockResolvedValueOnce({
+			targetInfos: [{ targetId: "target-1", type: "page", url: "https://example.test/app" }],
+		} as never);
+		await waitForAsyncEvent();
+		await logger.snapshotStorage();
+
+		expect(storage.snapshots[0]?.origins.map((origin) => origin.securityOrigin)).toEqual([
+			"https://example.test",
+		]);
+	});
+
+	it("snapshots cookies, both DOM storage areas, and IndexedDB per attached origin", async () => {
+		const client = new FakeClient();
+		const storage = createStorage();
+		const hooks = createHooks();
+		primeStorageReplies(client);
+		const logger = createSnapshotLogger(client, storage, { hooks });
+
+		await logger.start();
+		attachTarget(client, {
+			session: "session-1",
+			targetId: "target-1",
+			type: "page",
+			url: "https://example.test/app",
+		});
+		await waitForAsyncEvent();
+		await logger.snapshotStorage();
+
+		expect(storage.errors).toEqual([]);
+		expect(storage.snapshots).toHaveLength(1);
+		const [snapshot] = storage.snapshots;
+		expect(snapshot?.cookies).toEqual([SNAPSHOT_COOKIE]);
+		expect(snapshot?.runTimestamp).toBe("2026-07-06T12:34:56Z");
+		expect(snapshot?.truncated).toBeUndefined();
+		expect(snapshot?.origins).toHaveLength(1);
+		expect(snapshot?.origins[0]).toMatchObject({
+			localStorage: { theme: "dark", token: "abc123" },
+			securityOrigin: "https://example.test",
+			sessionStorage: { tab: "1" },
+			targetId: "target-1",
+		});
+		const store = snapshot?.origins[0]?.databases[0]?.objectStores[0];
+		expect(snapshot?.origins[0]?.databases[0]).toMatchObject({ name: "app-cache", version: 3 });
+		expect(store).toMatchObject({ autoIncrement: false, hasMore: false, name: "sessions" });
+		// The live handle is dropped; the preview CDP already materialized is kept.
+		expect(store?.entries[0]?.value).toEqual({
+			className: "Object",
+			deepSerializedValue: undefined,
+			description: "Object",
+			preview: REMOTE_OBJECT_ENTRY.value.preview,
+			subtype: undefined,
+			type: "object",
+			unserializableValue: undefined,
+			value: undefined,
+		});
+		expect(JSON.stringify(snapshot)).not.toContain("objectId");
+		expect(JSON.stringify(snapshot)).not.toContain("value-handle-1");
+	});
+
+	it("never sends a Runtime method other than the target resume", async () => {
+		const client = new FakeClient();
+		const storage = createStorage();
+		primeStorageReplies(client);
+		const logger = createSnapshotLogger(client, storage);
+
+		await logger.start();
+		attachTarget(client, {
+			session: "session-1",
+			targetId: "target-1",
+			type: "page",
+			url: "https://example.test/app",
+		});
+		await waitForAsyncEvent();
+		await logger.snapshotStorage();
+
+		expect(sentMethods(client)).not.toContain("Runtime.evaluate");
+		expect(sentMethods(client)).not.toContain("Runtime.enable");
+		expect(sentMethods(client).filter((method) => method.startsWith("Runtime."))).toEqual([
+			"Runtime.runIfWaitingForDebugger",
+		]);
+		expect(sentMethods(client)).toEqual(
+			expect.arrayContaining([
+				"Storage.getCookies",
+				"DOMStorage.enable",
+				"DOMStorage.getDOMStorageItems",
+				"IndexedDB.enable",
+				"IndexedDB.requestDatabaseNames",
+				"IndexedDB.requestDatabase",
+				"IndexedDB.requestData",
+			]),
+		);
+	});
+
+	it("publishes a path-based hook event with counts and no contents", async () => {
+		const client = new FakeClient();
+		const storage = createStorage();
+		const hooks = createHooks();
+		primeStorageReplies(client);
+		const logger = createSnapshotLogger(client, storage, { hooks });
+
+		await logger.start();
+		attachTarget(client, {
+			session: "session-1",
+			targetId: "target-1",
+			type: "page",
+			url: "https://example.test/app",
+		});
+		await waitForAsyncEvent();
+		await logger.snapshotStorage();
+
+		const published = hooks.events.filter((event) => event.event === "storage.snapshot");
+		expect(published).toEqual([
+			expect.objectContaining({
+				counts: { cookies: 1, databases: 1, entries: 1, items: 3, origins: 1 },
+				event: "storage.snapshot",
+				file: "storage-snapshot.json",
+				run: { runDirectory: "/captures/run", runTimestamp: "2026-07-06T12:34:56Z" },
+				truncated: false,
+				version: 1,
+			}),
+		]);
+		expect(JSON.stringify(published)).not.toContain("abc123");
+	});
+
+	// A snapshot is best-effort: a domain the browser refuses must not lose the rest.
+	it("records a failing storage call and still writes the snapshot", async () => {
+		const client = new FakeClient();
+		const storage = createStorage();
+		const hooks = createHooks();
+		primeStorageReplies(client);
+		client.sendReplies.set("Storage.getCookies", new Error("Storage domain unavailable"));
+		client.sendReplies.set("IndexedDB.requestDatabaseNames", new Error("no storage key"));
+		const logger = createSnapshotLogger(client, storage, { hooks });
+
+		await logger.start();
+		attachTarget(client, {
+			session: "session-1",
+			targetId: "target-1",
+			type: "page",
+			url: "https://example.test/app",
+		});
+		await waitForAsyncEvent();
+		await logger.snapshotStorage();
+
+		expect(storage.errors).toEqual([
+			expect.objectContaining({ error: "Storage domain unavailable", event: "Storage.getCookies" }),
+			expect.objectContaining({
+				error: "no storage key",
+				event: "IndexedDB.requestDatabaseNames",
+				url: "https://example.test",
+			}),
+		]);
+		expect(storage.snapshots).toHaveLength(1);
+		expect(storage.snapshots[0]?.cookies).toEqual([]);
+		expect(storage.snapshots[0]?.origins[0]).toMatchObject({
+			databases: [],
+			localStorage: { theme: "dark", token: "abc123" },
+		});
+		expect(hooks.events.map((event) => event.event)).toContain("storage.snapshot");
+	});
+
+	it("marks the snapshot truncated when an origin holds more databases than the cap", async () => {
+		const client = new FakeClient();
+		const storage = createStorage();
+		primeStorageReplies(client);
+		client.sendReplies.set("IndexedDB.requestDatabaseNames", {
+			databaseNames: Array.from(
+				{ length: MAX_DATABASES_PER_ORIGIN + 3 },
+				(_, index) => `db-${index}`,
+			),
+		});
+		const logger = createSnapshotLogger(client, storage);
+
+		await logger.start();
+		attachTarget(client, {
+			session: "session-1",
+			targetId: "target-1",
+			type: "page",
+			url: "https://example.test/app",
+		});
+		await waitForAsyncEvent();
+		await logger.snapshotStorage();
+
+		const origin = storage.snapshots[0]?.origins[0];
+		expect(origin?.databases).toHaveLength(MAX_DATABASES_PER_ORIGIN);
+		expect(origin?.truncatedDatabases).toBe(3);
+		expect(storage.snapshots[0]?.truncated).toBe(true);
+	});
+
+	// A store bigger than the page size is read once and reported as incomplete.
+	it("reads one page per object store and keeps the CDP hasMore flag", async () => {
+		const client = new FakeClient();
+		const storage = createStorage();
+		primeStorageReplies(client);
+		client.sendReplies.set("IndexedDB.requestData", {
+			hasMore: true,
+			objectStoreDataEntries: [REMOTE_OBJECT_ENTRY],
+		});
+		const logger = createSnapshotLogger(client, storage);
+
+		await logger.start();
+		attachTarget(client, {
+			session: "session-1",
+			targetId: "target-1",
+			type: "page",
+			url: "https://example.test/app",
+		});
+		await waitForAsyncEvent();
+		await logger.snapshotStorage();
+
+		// Sending indexName at all, even empty, makes Chrome look for an index instead.
+		expect(client.sent.filter((call) => call.method === "IndexedDB.requestData")).toEqual([
+			expect.objectContaining({
+				params: {
+					databaseName: "app-cache",
+					objectStoreName: "sessions",
+					pageSize: MAX_ENTRIES_PER_OBJECT_STORE,
+					securityOrigin: "https://example.test",
+					skipCount: 0,
+				},
+				sessionId: "session-1",
+			}),
+		]);
+		expect(storage.snapshots[0]?.origins[0]?.databases[0]?.objectStores[0]?.hasMore).toBe(true);
+		expect(storage.snapshots[0]?.truncated).toBe(true);
+	});
+
+	it("stops at the deadline and still writes the partial snapshot", async () => {
+		const client = new FakeClient();
+		const storage = createStorage();
+		const hooks = createHooks();
+		primeStorageReplies(client);
+		// A call the browser never answers is exactly what the deadline exists for.
+		client.sendReplies.set("Storage.getCookies", () => Promise.withResolvers<never>().promise);
+		const logger = createSnapshotLogger(client, storage, { hooks, snapshotTimeoutMs: 5 });
+
+		await logger.start();
+		attachTarget(client, {
+			session: "session-1",
+			targetId: "target-1",
+			type: "page",
+			url: "https://example.test/app",
+		});
+		await waitForAsyncEvent();
+		await logger.snapshotStorage();
+
+		expect(storage.snapshots).toHaveLength(1);
+		expect(storage.snapshots[0]?.truncated).toBe(true);
+		expect(storage.snapshots[0]?.origins).toEqual([]);
+		expect(storage.errors).toEqual([
+			expect.objectContaining({ error: "Snapshot stopped after 5ms.", event: "Storage.snapshot" }),
+		]);
+		expect(hooks.events.map((event) => event.event)).toContain("storage.snapshot");
+	});
+
+	// The browser being gone is the normal launch-mode race, not a reason to crash.
+	it("records why no snapshot exists when the browser already disconnected", async () => {
+		const client = new FakeClient();
+		const storage = createStorage();
+		const logger = createSnapshotLogger(client, storage);
+
+		await logger.start();
+		client.emit("disconnect");
+		await logger.snapshotStorage();
+
+		expect(storage.snapshots).toEqual([]);
+		expect(storage.errors).toEqual([
+			expect.objectContaining({
+				error: "The browser disconnected before the storage snapshot could be taken.",
+				event: "Storage.snapshot",
+			}),
+		]);
 	});
 });

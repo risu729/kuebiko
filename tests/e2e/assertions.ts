@@ -35,6 +35,26 @@ type CapturedDownload = {
 	url?: string | undefined;
 };
 
+// The one whole-file output: cookies plus per-origin web storage and IndexedDB.
+type CapturedStorageSnapshot = {
+	cookies?: { name?: string | undefined; value?: string | undefined }[] | undefined;
+	origins?:
+		| {
+				databases?:
+					| {
+							name?: string | undefined;
+							objectStores?:
+								| { entries?: unknown[] | undefined; name?: string | undefined }[]
+								| undefined;
+					  }[]
+					| undefined;
+				localStorage?: Record<string, string> | undefined;
+				securityOrigin?: string | undefined;
+				sessionStorage?: Record<string, string> | undefined;
+		  }[]
+		| undefined;
+};
+
 type NetLogRecord = {
 	constants?: unknown;
 	events?: unknown;
@@ -116,11 +136,32 @@ const assertCapturedDownload = async (
 	);
 };
 
+// Everything asserted here comes from Storage, DOMStorage, and IndexedDB alone.
+// No page script runs for it.
+// It therefore proves those domains answer as the logger assumes at the end of a run.
+const assertCapturedStorageSnapshot = async (
+	captureDirectory: string,
+	origin: string,
+): Promise<void> => {
+	const file = Bun.file(join(captureDirectory, "storage-snapshot.json"));
+	expect(await file.exists()).toBe(true);
+	const snapshot = (await file.json()) as CapturedStorageSnapshot;
+
+	expect(snapshot.cookies?.map((cookie) => cookie.name)).toContain("e2e");
+	const captured = snapshot.origins?.find((entry) => entry.securityOrigin === origin);
+	expect(captured?.localStorage).toMatchObject({ "e2e-local": "local-value" });
+	expect(captured?.sessionStorage).toMatchObject({ "e2e-session": "session-value" });
+	const database = captured?.databases?.find((entry) => entry.name === "e2e-db");
+	const store = database?.objectStores?.find((entry) => entry.name === "sessions");
+	expect(store?.entries?.length).toBeGreaterThan(0);
+};
+
 const assertRunSummary = (output: string): void => {
 	expect(output).toContain("summary responses=");
 	expect(output).toContain("summary websocket_frames=");
 	expect(output).toContain("eventsource_messages=");
 	expect(output).toContain("downloads=");
+	expect(output).toContain("summary snapshot_origins=");
 };
 
 const readNetLog = async (path: string): Promise<NetLogRecord> => {
@@ -153,6 +194,7 @@ export {
 	assertCapturedDownload,
 	assertCapturedEventSourceMessages,
 	assertCapturedRawHeaders,
+	assertCapturedStorageSnapshot,
 	assertCapturedWebSocketFrames,
 	assertNetLog,
 	assertRunSummary,
@@ -163,5 +205,6 @@ export type {
 	CapturedApiRecord,
 	CapturedDownload,
 	CapturedEventSourceMessage,
+	CapturedStorageSnapshot,
 	CapturedWebSocketFrame,
 };

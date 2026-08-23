@@ -19,6 +19,8 @@ throwaway browser profile:
   `Network.streamResourceContent` with `--stream-bodies`
 - request payloads that the browser exposes through CDP
 - files the browser downloads, with `--capture-downloads`
+- an end-of-run snapshot of cookies, web storage, and IndexedDB, with
+  `--snapshot-storage`
 - request/response metadata in append-only NDJSON
 - Chromium NetLog in the same run directory when using browser launch mode
 
@@ -49,6 +51,20 @@ Launch mode and the logger are passive by default:
 - After enabling Network on an attached popup, iframe, or worker target, the
   logger sends `Runtime.runIfWaitingForDebugger` for that target session; it
   does not otherwise use the Runtime domain.
+
+`--snapshot-storage` adds three domains, and it is opt-in. It does not change
+browser behavior and it is not observable from page script:
+
+- It enables `DOMStorage` and `IndexedDB` on the page and iframe target sessions
+  it reads, and only for the moment it reads them, at the very end of the run.
+  Without the flag neither domain is ever enabled.
+- It calls `Storage.getCookies` once on the browser connection, plus
+  `DOMStorage.getDOMStorageItems`, `IndexedDB.requestDatabaseNames`,
+  `IndexedDB.requestDatabase`, and `IndexedDB.requestData` per origin.
+- All of these read from the browser process. No page script is executed for
+  them: there is still no `Runtime.enable` and no `Runtime.evaluate`, which is
+  exactly why the snapshot is done this way rather than by evaluating
+  `localStorage` or an IndexedDB cursor in the page.
 
 `--capture-downloads` is the one exception, and it is opt-in. That flag does
 change browser behavior rather than only observing it:
@@ -152,6 +168,7 @@ errors.ndjson
 websocket.ndjson
 eventsource.ndjson
 downloads.ndjson
+storage-snapshot.json
 bodies/
 requests/
 downloads/
@@ -177,8 +194,9 @@ was made. Both fields are omitted when the flags are not used. A
 `captureCookies` boolean is always present so a capture directory says whether
 `--capture-cookies` was on and it may therefore hold plaintext session cookies.
 A `streamBodies` boolean is always present too, so the directory also says how
-its bodies were retrieved, and a `captureDownloads` boolean says whether browser
-download behavior was changed for the run.
+its bodies were retrieved, a `captureDownloads` boolean says whether browser
+download behavior was changed for the run, and a `snapshotStorage` boolean says
+whether the directory may hold a whole stored session.
 
 `metadata.ndjson` contains one JSON object per completed response that passed
 the filters. When available, the same metadata line links to both a saved
@@ -312,13 +330,78 @@ appends a second line for the same `guid`, the completion superseding the
 earlier loss. Repeats of a state already recorded are ignored, so a `guid` never
 gets the same outcome twice.
 
+`--snapshot-storage` writes `storage-snapshot.json` once, at the end of the run,
+before the browser and the CDP connection are closed. It is the answer to a site
+that renders from data already in IndexedDB: a value on screen may never appear
+on the network again, so a later capture of the same page looks empty even
+though the page looks identical. It is also what makes a stored session
+replayable without logging in again.
+
+It is one JSON file rather than another NDJSON file because it is a single
+point-in-time document, not a stream of events: one run produces exactly one,
+and the whole thing is written at once with the run's other writers already
+holding everything they will hold.
+
+It contains:
+
+- `cookies`: the result of one `Storage.getCookies` call on the browser
+  connection. No `browserContextId` is passed, which means the default browser
+  context, so this is that context's whole cookie jar and not only the origins
+  the run visited. That is deliberate: a stored session usually needs cookies of
+  an API host that was never navigated to and therefore has no target of its
+  own. In launch mode the jar is the dedicated profile's; in attach mode it is
+  the jar of the browser you attached to.
+- `origins`: one entry per security origin, with `localStorage` and
+  `sessionStorage` from `DOMStorage.getDOMStorageItems`, and `databases` from
+  `IndexedDB.requestDatabaseNames`, `IndexedDB.requestDatabase`, and
+  `IndexedDB.requestData`.
+
+The origins are the http(s) origins of the page and iframe targets the run was
+actually attached to, resolved from the live target list at shutdown rather than
+from the URL each target had when it attached, which for a page is usually
+`about:blank`. Origins are not guessed from request URLs: a third-party API host
+has no target to ask on, and its web storage is not reachable from the pages the
+run observed. Each origin is read on its own target session, which is also what
+makes `sessionStorage` belong to the tab it came from. An origin open in several
+tabs is read once. Worker targets are skipped, along with `about:`, `chrome:`,
+`devtools:`, and extension targets, none of which have web storage the storage
+domains can address by origin.
+
+IndexedDB values are recorded exactly as CDP hands them over, which is a
+`Runtime.RemoteObject` per key, primary key, and value. Primitives carry their
+`value` directly. Objects and arrays carry only CDP's bounded `preview`, with
+its own `overflow` flag, plus `className` and `description`. They are not deeply
+materialized, and they will not round-trip back into a database. Deep values
+would require resolving the live object handle through the Runtime domain, which
+this tool does not use, so the handle is dropped instead and never written to
+the file. Treat IndexedDB contents in the snapshot as an inspectable record of
+what was stored, not as an exact copy of it.
+
+The snapshot is bounded so shutdown cannot hang or run out of memory on a large
+database: at most 20 origins, 20 databases per origin, 20 object stores per
+database, 500 entries per object store, 5000 entries in total, and a 15 second
+deadline for the whole snapshot. Every cap that drops something sets `truncated`
+on the file, an object store that had more sets its own `hasMore`, and an origin
+that had more databases records `truncatedDatabases`, so a short read is visible
+rather than looking like empty storage. There is no paging past the first page
+of an object store.
+
+A snapshot is best effort. Any storage call the browser refuses is recorded in
+`errors.ndjson` under its CDP method name and leaves the rest of the file
+intact, so one origin cannot lose the others. If the browser is already gone
+when the run ends, which is the normal launch-mode race when you close the
+window yourself, no snapshot is written and `errors.ndjson` records a
+`Storage.snapshot` event saying why. Neither case stops the rest of shutdown or
+the run summary.
+
 `--include` and `--exclude` apply to response URLs only. They never gate
 `websocket.ndjson`, because a frame without a URL could not be matched anyway,
 and they never gate `eventsource.ndjson` either, even though its messages do
 carry a URL: that is a deliberate choice, because filtering part of a live
 stream would be more confusing than not filtering it at all. They do not gate
 `downloads.ndjson` either: the browser has already written the file by then, so
-filtering the record would only hide it.
+filtering the record would only hide it. They do not gate
+`storage-snapshot.json`, which is keyed by origin rather than by response URL.
 
 `errors.ndjson` contains per-request capture failures. Individual CDP failures
 do not stop the logger. WebSocket failures land here too: a frame the browser
@@ -336,6 +419,7 @@ visible without opening `errors.ndjson`:
 ```text
 summary responses=482 response_bytes=19203112 requests=37 request_bytes=8241
 summary websocket_frames=126 eventsource_messages=18 downloads=2 redirects=54
+summary snapshot_origins=3 cookies=41 items=27 databases=2 entries=88
 summary errors=4
 summary_errors host=example.test total=2 Network.getResponseBody=2
 summary_errors host=cdn.example.test total=1 Network.loadingFailed=1
@@ -349,7 +433,11 @@ received together, and `eventsource_messages` counts every recorded SSE message.
 canceled ones included, because a lost download is exactly what the summary
 should surface; the record's `state` says which it was.
 `redirects` counts recorded redirect hops, which have no body
-of their own and would otherwise be invisible in the totals. One
+of their own and would otherwise be invisible in the totals. The
+`summary snapshot_` line is printed only when `--snapshot-storage` wrote a
+snapshot, and counts what landed in it: origins, cookies, `localStorage` and
+`sessionStorage` items together, IndexedDB databases, and object store entries.
+A run without the flag keeps the three-line summary it had before. One
 `summary_errors` line is printed per host with the `errors.ndjson` `event`
 counts behind it, ordered by failure count. Only the top 20 hosts get a line;
 the rest are collapsed into a final remainder line.
@@ -488,6 +576,7 @@ Supported plugin events are:
 - `websocket.frame.sent`
 - `eventsource.message`
 - `download.completed`
+- `storage.snapshot`
 - `capture.error`
 
 Hook events do not contain inline request or response bodies. Read saved files
@@ -503,6 +592,14 @@ event it is path-based: read the file with
 `ctx.resolveRunPath(event.download.file)`. A canceled download, or a completed
 one whose file could not be read, publishes nothing, because there is no file to
 hand a plugin; both are still written to `downloads.ndjson`.
+
+`storage.snapshot` is published once, at the end of a run that used
+`--snapshot-storage`, after the file is written. Like every other hook event it
+is path-based: `event.file` is the run-relative path, `event.counts` holds the
+same totals the run summary prints, and `event.truncated` says whether a cap or
+the deadline cut the read short. The snapshot contents are never inlined,
+because they are the most sensitive thing the tool writes. Read the file with
+`ctx.resolveRunPath(event.file)` if the plugin genuinely needs it.
 
 Redirect hops publish `response.completed` like any other recorded response, so
 plugins see the whole chain. Such an event has `response.redirect` set to `true`
@@ -678,6 +775,7 @@ Options:
   --max-body-bytes <num>   Skip body retrieval above encoded byte length
   --capture-cookies        Also record raw wire headers, including live cookies
   --capture-downloads      Save browser downloads into the run directory
+  --snapshot-storage       Snapshot cookies and web storage when the run ends
   --stream-bodies          Assemble bodies from Network.streamResourceContent
                            (experimental)
   --label <label>          Label recorded in run.json
@@ -782,6 +880,20 @@ mise run compile
   open for the life of the page, so CDP usually has no body to return for it,
   and a message recorded after the logger lost the stream's request state has no
   `url`.
+- `--snapshot-storage` records IndexedDB values as CDP's bounded previews, not
+  as deep copies. Objects and arrays keep only the properties the preview
+  carries, with an `overflow` flag when there were more. Restoring a database
+  from the snapshot is not a supported use; reading what was stored is.
+- The snapshot covers the origins of attached page and iframe targets only, and
+  it is a single point in time at shutdown. Storage of an origin whose tab was
+  closed earlier in the run is not in it, and neither is storage of an origin
+  the run only made requests to. Partitioned third-party storage is read on the
+  frame's own target session, so a frame that never attached is not covered.
+- The snapshot caps what it reads: 20 origins, 20 databases per origin, 20
+  object stores per database, 500 entries per object store, 5000 entries in
+  total, and a 15 second deadline. It never pages past the first page of an
+  object store. Everything dropped is flagged with `truncated`, `hasMore`, or
+  `truncatedDatabases` rather than being silently missing.
 - This tool does not parse, analyze, classify, or display responses.
 - Plugins are trusted local code running in the logger process. They are useful
   for local real-time consumers, but they are not sandboxed.
@@ -794,6 +906,18 @@ mise run compile
   sessions it recorded. The flag is off by default; turn it on only when the raw
   headers, or the `blockedCookies` reasons behind a broken session, are what you
   are debugging, and delete those runs as soon as you are done.
+- With `--snapshot-storage`, `storage-snapshot.json` is the single most
+  sensitive file this tool writes. It holds the browser's live cookie jar for
+  the default browser context together with the `localStorage`,
+  `sessionStorage`, and IndexedDB contents of the origins the run visited. That
+  is a whole stored session, not just the traffic of one: tokens, refresh
+  tokens, and cached private data in one file, enough to resume the sessions it
+  captured without logging in again. It is worse than `--capture-cookies`, which
+  only holds the cookies that actually crossed the wire during the run. In
+  attach mode the cookies are your own browser's, not a throwaway profile's. The
+  flag is off by default; turn it on only when a stored session or
+  IndexedDB-cached data is what you are after, keep such runs off shared and
+  synced storage, and delete them as soon as you are done.
 - Store capture directories somewhere private, avoid syncing them to cloud
   drives by default, delete runs you no longer need, and share only minimized
   redacted samples.

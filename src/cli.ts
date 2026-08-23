@@ -119,6 +119,10 @@ const cliArgs = {
 		description: "Load plugins from --config.",
 		type: "boolean",
 	},
+	"snapshot-storage": {
+		description: "Snapshot cookies and web storage when the run ends.",
+		type: "boolean",
+	},
 	"stream-bodies": {
 		description: "Assemble bodies from Network.streamResourceContent (experimental).",
 		type: "boolean",
@@ -129,9 +133,7 @@ const cliArgs = {
 	},
 } as const;
 
-type LoggerArgs = {
-	[key in keyof typeof cliArgs]?: boolean | string | string[] | undefined;
-} & {
+type LoggerArgs = { [key in keyof typeof cliArgs]?: boolean | string | string[] | undefined } & {
 	help?: boolean | undefined;
 	version?: boolean | undefined;
 };
@@ -182,6 +184,7 @@ const CliOptionsSchema: z.ZodType<CliOptions> = z
 		// That deviates on purpose from the optionalNonEmptyString flags such as --out.
 		note: z.optional(z.string()).transform((value) => parseNonEmptyText(value, "--note")),
 		out: optionalNonEmptyString,
+		snapshotStorage: z.boolean(),
 		streamBodies: z.boolean(),
 		verbose: z.boolean(),
 		version: z.boolean(),
@@ -241,6 +244,7 @@ const normalizeArgs = (args: LoggerArgs): CliOptions =>
 		noPlugins: args.plugins === false,
 		note: args.note,
 		out: args.out,
+		snapshotStorage: args["snapshot-storage"] ?? false,
 		streamBodies: args["stream-bodies"] ?? false,
 		verbose: args.verbose ?? false,
 		version: args.version ?? false,
@@ -260,19 +264,16 @@ const createParseOptions = (): Record<string, ParseOption> => ({
 	),
 });
 
-const parseRawArgs = (argv: string[]): LoggerArgs => {
+const parseArgs = (argv: string[]): CliOptions => {
+	assertKnownFlags(argv);
 	const { values } = parseNodeArgs({
 		allowNegative: true,
 		args: argv,
 		options: createParseOptions(),
 		strict: true,
 	});
-	return values as LoggerArgs;
-};
 
-const parseArgs = (argv: string[]): CliOptions => {
-	assertKnownFlags(argv);
-	return normalizeArgs(parseRawArgs(argv));
+	return normalizeArgs(values as LoggerArgs);
 };
 
 const formatOption = (name: string, definition: CliArgDefinition): string => {

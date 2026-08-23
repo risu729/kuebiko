@@ -5,6 +5,7 @@ import {
 	assertCapturedDownload,
 	assertCapturedEventSourceMessages,
 	assertCapturedRawHeaders,
+	assertCapturedStorageSnapshot,
 	assertCapturedWebSocketFrames,
 	assertNetLog,
 	assertRunSummary,
@@ -21,6 +22,7 @@ import {
 	loadPageAndWaitForCapture,
 	maybeBrowserIt,
 	startContext,
+	waitForStorageWrites,
 } from "./cdp-fixture";
 import type { TestContext } from "./cdp-fixture";
 import { DOWNLOAD_CSV } from "./fixture-server";
@@ -53,14 +55,19 @@ describe("CDP launch-mode browser e2e", () => {
 		"captures localhost payloads and writes Chromium NetLog from the CLI",
 		async () => {
 			const context = await startContext();
+			// The fixture server reports no port once it is stopped in closeContext.
+			const pageOrigin = `http://127.0.0.1:${context.fixtureServer.port}`;
 
 			try {
 				await loadPageAndWaitForCapture(context);
 				await assertCapturedTraffic(context);
+				// The snapshot is taken during shutdown, so the writes must land first.
+				await waitForStorageWrites(context.captureDirectory);
 			} finally {
 				await closeContext(context);
 			}
 
+			await assertCapturedStorageSnapshot(context.captureDirectory, pageOrigin);
 			assertRunSummary(await context.loggerStdout.completed);
 			assertNetLog(await readNetLog(context.netLogPath));
 		},
