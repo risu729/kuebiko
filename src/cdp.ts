@@ -15,6 +15,7 @@ import {
 import type { HookPublisher } from "./plugins";
 import { matchesFilters } from "./sanitize";
 import { countStorageSnapshot } from "./summary";
+import { finishesWithin, resolvesWithin, settlesWithin } from "./timeout";
 import type {
 	BodySaveResult,
 	CompletedResponseMetadata,
@@ -220,18 +221,6 @@ const errorMessage = (error: unknown): string =>
 
 const nowIso = (): string => new Date().toISOString();
 
-const settles = async (promise: Promise<unknown>): Promise<boolean> => {
-	try {
-		await promise;
-	} catch {
-		// Rejection also means the operation has settled.
-	}
-	return true;
-};
-
-const settlesWithin = async (promise: Promise<unknown>, timeout: number): Promise<boolean> =>
-	await Promise.race([settles(promise), Bun.sleep(timeout).then(() => false)]);
-
 const terminateClientSocket = (client: CdpClient): void => {
 	const socket = Reflect.get(client, "_ws") as TerminableSocket | undefined;
 	socket?.terminate?.();
@@ -246,38 +235,6 @@ const mapSequential = async <Item, Result>(
 		async (previous, item) => [...(await previous), await map(item)],
 		Promise.resolve([]),
 	);
-
-// A pending Bun.sleep would keep the process alive past the work it bounded.
-// The deadline therefore runs on a timer, cleared as soon as the race is decided.
-const finishesWithin = async (work: Promise<void>, timeout: number): Promise<boolean> => {
-	const { promise, resolve } = Promise.withResolvers<boolean>();
-	const timer = setTimeout(() => {
-		resolve(false);
-	}, timeout);
-	try {
-		return await Promise.race([work.then(() => true), promise]);
-	} finally {
-		clearTimeout(timer);
-	}
-};
-
-// The same bound for work that answers with a value instead of only finishing.
-// A timeout answers with the fallback; the abandoned work is left to settle unused.
-const resolvesWithin = async <Value>(
-	work: Promise<Value>,
-	timeout: number,
-	fallback: Value,
-): Promise<Value> => {
-	const { promise, resolve } = Promise.withResolvers<Value>();
-	const timer = setTimeout(() => {
-		resolve(fallback);
-	}, timeout);
-	try {
-		return await Promise.race([work, promise]);
-	} finally {
-		clearTimeout(timer);
-	}
-};
 
 // Web storage is keyed by origin, so only an http(s) target has any to read.
 // Targets on about:, chrome:, devtools:, and extension schemes are left out.
