@@ -5,12 +5,12 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { createPluginHost } from "./plugins";
+import type { HookEvent } from "./plugins";
 import type {
 	BodySaveResult,
 	DownloadRecord,
 	ErrorRecord,
 	EventSourceMessageRecord,
-	HookEvent,
 	LoggerStorage,
 	RequestBodySaveResult,
 	RequestState,
@@ -68,6 +68,7 @@ const createStorage = (runDirectory: string): LoggerStorage & { errors: ErrorRec
 		recordRequestBody: mock((_state: RequestState): Promise<RequestBodySaveResult> =>
 			Promise.resolve({ bodySaved: true, source: "requestWillBeSent" }),
 		),
+		recordStorageSnapshot: mock(() => Promise.resolve("storage-snapshot.json")),
 		recordWebSocketFrame: mock((_frame: WebSocketFrameRecord) => Promise.resolve()),
 		runDirectory,
 		runTimestamp: "2026-07-06T12:34:56Z",

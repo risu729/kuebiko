@@ -1,4 +1,4 @@
-import type { ErrorRecord } from "./types";
+import type { ErrorRecord, StorageSnapshot, StorageSnapshotCounts } from "./types";
 
 type EventCounts = Map<string, number>;
 
@@ -9,6 +9,7 @@ type CaptureSummary = {
 	recordRedirectHop: () => void;
 	recordSavedRequestBody: (byteLength: number) => void;
 	recordSavedResponseBody: (byteLength: number) => void;
+	recordStorageSnapshot: (counts: StorageSnapshotCounts) => void;
 	recordWebSocketFrame: () => void;
 	render: () => string;
 };
@@ -73,6 +74,24 @@ const renderHostLines = (errorsByHost: Map<string, EventCounts>): string[] => {
 	return [...lines, `summary_errors (${remaining.length} more hosts, ${remainingErrors} errors)`];
 };
 
+// Totals of a written snapshot, for the summary line and the plugin event alike.
+// Both need the same numbers, and neither may carry the snapshot contents.
+const countStorageSnapshot = (snapshot: StorageSnapshot): StorageSnapshotCounts => {
+	const stores = snapshot.origins.flatMap((origin) =>
+		origin.databases.flatMap((database) => database.objectStores),
+	);
+	const items = (origin: StorageSnapshot["origins"][number]): number =>
+		Object.keys(origin.localStorage ?? {}).length + Object.keys(origin.sessionStorage ?? {}).length;
+
+	return {
+		cookies: snapshot.cookies.length,
+		databases: snapshot.origins.reduce((total, origin) => total + origin.databases.length, 0),
+		entries: stores.reduce((total, store) => total + store.entries.length, 0),
+		items: snapshot.origins.reduce((total, origin) => total + items(origin), 0),
+		origins: snapshot.origins.length,
+	};
+};
+
 // One tally keeps the counters together as more record kinds are captured.
 type RecordCounts = {
 	downloads: number;
@@ -87,26 +106,39 @@ type RecordCounts = {
 };
 
 // Saved bodies first, then the records that have no body of their own.
+// The snapshot line is printed only when one was taken, so a normal run is unchanged.
 // The error total comes last, heading the per-host breakdown printed below it.
-const renderTotals = (counts: RecordCounts): string[] => [
+const renderTotals = (
+	counts: RecordCounts,
+	snapshot: StorageSnapshotCounts | undefined,
+): string[] => [
 	`summary responses=${counts.responseBodies} response_bytes=${counts.responseBytes} requests=${counts.requestBodies} request_bytes=${counts.requestBytes}`,
 	`summary websocket_frames=${counts.webSocketFrames} eventsource_messages=${counts.eventSourceMessages} downloads=${counts.downloads} redirects=${counts.redirectHops}`,
+	...(snapshot === undefined
+		? []
+		: [
+				`summary snapshot_origins=${snapshot.origins} cookies=${snapshot.cookies} items=${snapshot.items} databases=${snapshot.databases} entries=${snapshot.entries}`,
+			]),
 	`summary errors=${counts.errors}`,
 ];
 
+const createRecordCounts = (): RecordCounts => ({
+	downloads: 0,
+	errors: 0,
+	eventSourceMessages: 0,
+	redirectHops: 0,
+	requestBodies: 0,
+	requestBytes: 0,
+	responseBodies: 0,
+	responseBytes: 0,
+	webSocketFrames: 0,
+});
+
 const createCaptureSummary = (): CaptureSummary => {
 	const errorsByHost = new Map<string, EventCounts>();
-	const counts: RecordCounts = {
-		downloads: 0,
-		errors: 0,
-		eventSourceMessages: 0,
-		redirectHops: 0,
-		requestBodies: 0,
-		requestBytes: 0,
-		responseBodies: 0,
-		responseBytes: 0,
-		webSocketFrames: 0,
-	};
+	// Left undefined until a snapshot is written, which only --snapshot-storage does.
+	let snapshotCounts: StorageSnapshotCounts | undefined = undefined;
+	const counts = createRecordCounts();
 
 	return {
 		// Every recorded download counts, canceled ones included: the record says which.
@@ -136,12 +168,17 @@ const createCaptureSummary = (): CaptureSummary => {
 			counts.responseBodies += 1;
 			counts.responseBytes += byteLength;
 		},
+		// One snapshot per run, so a repeat replaces rather than accumulates.
+		recordStorageSnapshot: (snapshot: StorageSnapshotCounts): void => {
+			snapshotCounts = snapshot;
+		},
 		recordWebSocketFrame: (): void => {
 			counts.webSocketFrames += 1;
 		},
-		render: (): string => [...renderTotals(counts), ...renderHostLines(errorsByHost)].join("\n"),
+		render: (): string =>
+			[...renderTotals(counts, snapshotCounts), ...renderHostLines(errorsByHost)].join("\n"),
 	};
 };
 
-export { createCaptureSummary, hostFromUrl };
+export { countStorageSnapshot, createCaptureSummary, hostFromUrl };
 export type { CaptureSummary };

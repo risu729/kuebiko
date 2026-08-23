@@ -2,6 +2,8 @@ import { parseArgs as parseNodeArgs } from "node:util";
 
 import { z } from "zod";
 
+import { cliArgs } from "./cli-args";
+import type { CliArgDefinition, LoggerArgs } from "./cli-args";
 import { DEFAULT_CDP_ENDPOINT, TOOL_NAME, TOOL_VERSION } from "./constants";
 import type { CliOptions } from "./types";
 import {
@@ -12,128 +14,11 @@ import {
 	parseSafeInteger,
 } from "./validation";
 
-type CliArgDefinition = {
-	default?: boolean | string | undefined;
-	description: string;
-	multiple?: boolean | undefined;
-	type: "boolean" | "string";
-	valueHint?: string | undefined;
-};
-
 type ParseOption = {
 	default?: boolean | string;
 	multiple?: boolean;
 	short?: string;
 	type: "boolean" | "string";
-};
-
-const cliArgs = {
-	"browser-arg": {
-		description: "Extra browser arg for --launch-browser. May be repeated.",
-		multiple: true,
-		type: "string",
-		valueHint: "arg",
-	},
-	"browser-command": {
-		description: "Browser command for --launch-browser, resolved from PATH.",
-		type: "string",
-		valueHint: "command",
-	},
-	"browser-path": {
-		description: "Browser executable path for --launch-browser.",
-		type: "string",
-		valueHint: "path",
-	},
-	"browser-profile": {
-		description: "Browser profile directory for --launch-browser.",
-		type: "string",
-		valueHint: "dir",
-	},
-	"capture-cookies": {
-		description: "Also record raw wire headers, including live cookies.",
-		type: "boolean",
-	},
-	"capture-downloads": {
-		description: "Save browser downloads into the run directory.",
-		type: "boolean",
-	},
-	config: {
-		description: "TS/JS logger config with plugin modules.",
-		type: "string",
-		valueHint: "path",
-	},
-	cdp: {
-		default: DEFAULT_CDP_ENDPOINT,
-		description: "CDP endpoint.",
-		type: "string",
-		valueHint: "url",
-	},
-	"cdp-port": {
-		default: "9222",
-		description: "Local CDP port for --launch-browser.",
-		type: "string",
-		valueHint: "port",
-	},
-	exclude: {
-		description: "Do not persist matching response URLs.",
-		type: "string",
-		valueHint: "regex",
-	},
-	include: {
-		description: "Only persist matching response URLs.",
-		type: "string",
-		valueHint: "regex",
-	},
-	label: {
-		description: "Label recorded in run.json. May be repeated.",
-		multiple: true,
-		type: "string",
-		valueHint: "label",
-	},
-	"launch-browser": {
-		description: "Launch and own a local CDP browser process.",
-		type: "boolean",
-	},
-	"max-body-bytes": {
-		description: "Skip body retrieval above encoded byte length.",
-		type: "string",
-		valueHint: "number",
-	},
-	netlog: {
-		default: true,
-		description: "Write netlog.json when using --launch-browser.",
-		type: "boolean",
-	},
-	note: {
-		description: "Free-form note recorded in run.json.",
-		type: "string",
-		valueHint: "text",
-	},
-	out: {
-		description: "Capture directory.",
-		type: "string",
-		valueHint: "capture-dir",
-	},
-	plugins: {
-		default: true,
-		description: "Load plugins from --config.",
-		type: "boolean",
-	},
-	"stream-bodies": {
-		description: "Assemble bodies from Network.streamResourceContent (experimental).",
-		type: "boolean",
-	},
-	verbose: {
-		description: "Print verbose status logs.",
-		type: "boolean",
-	},
-} as const;
-
-type LoggerArgs = {
-	[key in keyof typeof cliArgs]?: boolean | string | string[] | undefined;
-} & {
-	help?: boolean | undefined;
-	version?: boolean | undefined;
 };
 
 const validFlags = new Set([
@@ -182,6 +67,7 @@ const CliOptionsSchema: z.ZodType<CliOptions> = z
 		// That deviates on purpose from the optionalNonEmptyString flags such as --out.
 		note: z.optional(z.string()).transform((value) => parseNonEmptyText(value, "--note")),
 		out: optionalNonEmptyString,
+		snapshotStorage: z.boolean(),
 		streamBodies: z.boolean(),
 		verbose: z.boolean(),
 		version: z.boolean(),
@@ -241,6 +127,7 @@ const normalizeArgs = (args: LoggerArgs): CliOptions =>
 		noPlugins: args.plugins === false,
 		note: args.note,
 		out: args.out,
+		snapshotStorage: args["snapshot-storage"] ?? false,
 		streamBodies: args["stream-bodies"] ?? false,
 		verbose: args.verbose ?? false,
 		version: args.version ?? false,
@@ -267,6 +154,7 @@ const parseRawArgs = (argv: string[]): LoggerArgs => {
 		options: createParseOptions(),
 		strict: true,
 	});
+
 	return values as LoggerArgs;
 };
 

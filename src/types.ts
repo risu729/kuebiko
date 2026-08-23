@@ -20,6 +20,7 @@ type CliOptions = {
 	noPlugins: boolean;
 	note?: string | undefined;
 	out?: string | undefined;
+	snapshotStorage: boolean;
 	streamBodies: boolean;
 	verbose: boolean;
 	version: boolean;
@@ -163,87 +164,73 @@ type DownloadRecord = {
 	url?: string | undefined;
 };
 
+// One end-of-run storage snapshot, written whole to storage-snapshot.json.
+// Only produced with --snapshot-storage, and never appended to during a run.
+type StorageSnapshot = {
+	cookies: Protocol.Network.Cookie[];
+	origins: OriginStorageSnapshot[];
+	runTimestamp: string;
+	timestamp: string;
+	// Set when a cap or the snapshot deadline cut the read short.
+	truncated?: boolean | undefined;
+};
+
+type OriginStorageSnapshot = {
+	databases: IndexedDbDatabaseSnapshot[];
+	// Absent when the DOMStorage read failed; an empty area is an empty object.
+	localStorage?: Record<string, string> | undefined;
+	securityOrigin: string;
+	sessionStorage?: Record<string, string> | undefined;
+	targetId?: string | undefined;
+	// Databases past the per-origin cap, omitted when none were dropped.
+	truncatedDatabases?: number | undefined;
+};
+
+type IndexedDbDatabaseSnapshot = {
+	error?: string | undefined;
+	name: string;
+	objectStores: IndexedDbObjectStoreSnapshot[];
+	truncatedObjectStores?: number | undefined;
+	version?: number | undefined;
+};
+
+type IndexedDbObjectStoreSnapshot = {
+	autoIncrement: boolean;
+	entries: IndexedDbEntrySnapshot[];
+	error?: string | undefined;
+	// True when the store still holds entries past the ones read.
+	hasMore: boolean;
+	keyPath?: Protocol.IndexedDB.KeyPath | undefined;
+	name: string;
+};
+
+type IndexedDbEntrySnapshot = {
+	key: StorageSnapshotValue;
+	primaryKey: StorageSnapshotValue;
+	value: StorageSnapshotValue;
+};
+
+// What IndexedDB.requestData returns per field, minus the live object handle.
+// Resolving that handle would need the Runtime domain, which this tool never uses.
+// Every field is written out, and JSON.stringify drops the ones CDP left empty.
+type StorageSnapshotValue = {
+	[Key in keyof Omit<Protocol.Runtime.RemoteObject, "customPreview" | "objectId">]:
+		| Protocol.Runtime.RemoteObject[Key]
+		| undefined;
+};
+
+// Published to plugins and printed in the run summary; contents stay in the file.
+type StorageSnapshotCounts = {
+	cookies: number;
+	databases: number;
+	entries: number;
+	items: number;
+	origins: number;
+};
+
 type RunRef = {
 	runDirectory: string;
 	runTimestamp: string;
-};
-
-type HookEventBase = {
-	run: RunRef;
-	timestamp: string;
-	version: 1;
-};
-
-// Derived from the events so no plugin can subscribe to a name never published.
-type HookEventName = HookEvent["event"];
-
-type RunHookEvent = HookEventBase & { event: "run.started" | "run.stopping" | "run.stopped" };
-
-type ResponseCompletedHookEvent = HookEventBase & {
-	event: "response.completed";
-	request: {
-		bodyFile?: string | undefined;
-		bodyLength?: number | undefined;
-		bodySaved?: boolean | undefined;
-		bodySha256?: string | undefined;
-		bodySource?: RequestBodySource | undefined;
-		headers?: Protocol.Network.Headers | undefined;
-		method?: string | undefined;
-		requestId: string;
-		sessionId: string;
-		url?: string | undefined;
-	};
-	response: {
-		base64Encoded?: boolean | undefined;
-		bodyFile?: string | undefined;
-		bodyLength?: number | undefined;
-		bodySaved: boolean;
-		bodySha256?: string | undefined;
-		encodedDataLength?: number | undefined;
-		headers?: Protocol.Network.Headers | undefined;
-		mimeType?: string | undefined;
-		redirect?: boolean | undefined;
-		redirectIndex?: number | undefined;
-		status?: number | undefined;
-		statusText?: string | undefined;
-	};
-	// Written out, not derived from SessionInfo, so no internal field widens it.
-	target: {
-		targetId?: string | undefined;
-		targetType?: string | undefined;
-		targetUrl?: string | undefined;
-	};
-};
-
-type WebSocketFrameHookEvent = HookEventBase & {
-	event: `websocket.frame.${WebSocketFrameRecord["direction"]}`;
-	frame: WebSocketFrameRecord;
-};
-
-type EventSourceMessageHookEvent = HookEventBase & {
-	event: "eventsource.message";
-	message: EventSourceMessageRecord;
-};
-
-// Published for a saved download only: a canceled one has no file to hand a plugin.
-type DownloadCompletedHookEvent = HookEventBase & {
-	download: DownloadRecord;
-	event: "download.completed";
-};
-
-type CaptureErrorHookEvent = HookEventBase & { error: ErrorRecord; event: "capture.error" };
-
-type HookEvent =
-	| CaptureErrorHookEvent
-	| DownloadCompletedHookEvent
-	| EventSourceMessageHookEvent
-	| ResponseCompletedHookEvent
-	| RunHookEvent
-	| WebSocketFrameHookEvent;
-
-type HookPublisher = {
-	close: () => Promise<void>;
-	publish: (event: HookEvent) => Promise<void>;
 };
 
 // Storage owns the run directory, so it also identifies the run to every hook event.
@@ -261,31 +248,31 @@ type LoggerStorage = RunRef & {
 	recordDownload: (download: DownloadRecord) => Promise<DownloadRecord>;
 	recordError: (error: ErrorRecord) => Promise<void>;
 	recordEventSourceMessage: (message: EventSourceMessageRecord) => Promise<void>;
+	// Writes the whole snapshot once and answers with its run-relative path.
+	recordStorageSnapshot: (snapshot: StorageSnapshot) => Promise<string>;
 	recordWebSocketFrame: (frame: WebSocketFrameRecord) => Promise<void>;
 };
 
 export type {
 	BodySaveResult,
-	CaptureErrorHookEvent,
 	CliOptions,
 	CompletedResponseMetadata,
-	DownloadCompletedHookEvent,
 	DownloadRecord,
 	ErrorRecord,
-	EventSourceMessageHookEvent,
 	EventSourceMessageRecord,
 	ExtraInfoState,
-	HookEvent,
-	HookEventName,
-	HookPublisher,
+	IndexedDbDatabaseSnapshot,
+	IndexedDbEntrySnapshot,
+	IndexedDbObjectStoreSnapshot,
 	LoggerStorage,
+	OriginStorageSnapshot,
 	RequestState,
 	RequestBodySaveResult,
 	RequestBodySource,
-	ResponseCompletedHookEvent,
 	RunRef,
-	RunHookEvent,
 	SessionInfo,
-	WebSocketFrameHookEvent,
+	StorageSnapshot,
+	StorageSnapshotCounts,
+	StorageSnapshotValue,
 	WebSocketFrameRecord,
 };

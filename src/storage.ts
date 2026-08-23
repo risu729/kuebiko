@@ -5,9 +5,9 @@ import { join } from "node:path";
 
 import type { Protocol } from "devtools-protocol";
 
-import { DOWNLOADS_DIRECTORY, TOOL_NAME, TOOL_VERSION } from "./constants";
+import { DOWNLOADS_DIRECTORY, STORAGE_SNAPSHOT_FILE, TOOL_NAME, TOOL_VERSION } from "./constants";
 import { createBodyFilename, relativeBodyPath, timestampForFile } from "./sanitize";
-import { createCaptureSummary } from "./summary";
+import { countStorageSnapshot, createCaptureSummary } from "./summary";
 import type { CaptureSummary } from "./summary";
 import type {
 	BodySaveResult,
@@ -18,6 +18,7 @@ import type {
 	LoggerStorage,
 	RequestState,
 	RequestBodySaveResult,
+	StorageSnapshot,
 	WebSocketFrameRecord,
 } from "./types";
 
@@ -39,6 +40,8 @@ type RunInfo = {
 	note?: string | undefined;
 	pid: number;
 	runDirectory: string;
+	// Records whether the run may hold a live session in storage-snapshot.json.
+	snapshotStorage: boolean;
 	// Records whether bodies came from Network.streamResourceContent.
 	// That also explains why every streamed body line reports base64Encoded true.
 	streamBodies: boolean;
@@ -50,6 +53,7 @@ type RunInfo = {
 type RunAnnotations = Pick<RunInfo, "labels" | "note"> & {
 	captureCookies?: boolean | undefined;
 	captureDownloads?: boolean | undefined;
+	snapshotStorage?: boolean | undefined;
 	streamBodies?: boolean | undefined;
 };
 
@@ -144,6 +148,8 @@ const createRunInfo = (
 	note: annotations.note?.trim() ? annotations.note : undefined,
 	pid: process.pid,
 	runDirectory,
+	// Always present too, so the directory says whether it holds a storage snapshot.
+	snapshotStorage: annotations.snapshotStorage ?? false,
 	// Always present too, so the directory says how its bodies were retrieved.
 	streamBodies: annotations.streamBodies ?? false,
 	tool: TOOL_NAME,
@@ -327,6 +333,19 @@ const createStorage = async (
 		recordEventSourceMessage: async (message: EventSourceMessageRecord) => {
 			summary.recordEventSourceMessage();
 			await eventSource.append(message);
+		},
+		// A point-in-time document, not a stream of events.
+		// It is therefore written whole once instead of appended to line by line.
+		// The summary counts only what the file holds, so a failed write prints no
+		// Snapshot line for a file that does not exist.
+		recordStorageSnapshot: async (snapshot: StorageSnapshot) => {
+			await Bun.write(
+				join(runDirectory, STORAGE_SNAPSHOT_FILE),
+				`${JSON.stringify(snapshot, null, "\t")}\n`,
+			);
+			summary.recordStorageSnapshot(countStorageSnapshot(snapshot));
+
+			return STORAGE_SNAPSHOT_FILE;
 		},
 		recordWebSocketFrame: async (frame: WebSocketFrameRecord) => {
 			summary.recordWebSocketFrame();

@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { bodyToBytes, createStorage, sha256 } from "./storage";
 import type { RunInfo } from "./storage";
-import type { RequestState } from "./types";
+import type { RequestState, StorageSnapshot } from "./types";
 
 // Chromium identifies a download by a UUID, which is the only name storage will join.
 const DOWNLOAD_GUID = "9f1c8d7e-4b2a-4c3d-9e5f-6a7b8c9d0e1f";
@@ -347,6 +347,7 @@ describe("createStorage", () => {
 				captureDownloads: true,
 				labels: ["account-a", "billing"],
 				note: "manual sweep",
+				snapshotStorage: true,
 				streamBodies: true,
 			},
 			"2026-07-06T12:34:56Z",
@@ -360,6 +361,7 @@ describe("createStorage", () => {
 		expect(runInfo.captureCookies).toBe(true);
 		expect(runInfo.streamBodies).toBe(true);
 		expect(runInfo.captureDownloads).toBe(true);
+		expect(runInfo.snapshotStorage).toBe(true);
 		expect(runInfo.createdAt).toBe("2026-07-06T12:34:56Z");
 	});
 
@@ -381,7 +383,100 @@ describe("createStorage", () => {
 			// Plain booleans, so they stay in run.json even when the flags are off.
 			expect(runInfo["captureCookies"]).toBe(false);
 			expect(runInfo["captureDownloads"]).toBe(false);
+			expect(runInfo["snapshotStorage"]).toBe(false);
 			expect(runInfo["streamBodies"]).toBe(false);
 		}
+	});
+
+	// One point-in-time document, so it is written whole instead of appended to.
+	it("writes the storage snapshot as one JSON file in the run directory", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "kuebiko-"));
+		const storage = await createStorage(
+			dir,
+			"http://127.0.0.1:9222",
+			{ snapshotStorage: true },
+			"2026-07-06T12:34:56Z",
+		);
+		const snapshot: StorageSnapshot = {
+			cookies: [
+				{
+					domain: "example.test",
+					expires: -1,
+					httpOnly: true,
+					name: "session",
+					path: "/",
+					priority: "Medium",
+					secure: true,
+					session: true,
+					size: 10,
+					sourcePort: 443,
+					sourceScheme: "Secure",
+					value: "abc",
+				},
+			],
+			origins: [
+				{
+					databases: [
+						{
+							name: "app-cache",
+							objectStores: [
+								{
+									autoIncrement: false,
+									entries: [
+										{
+											key: { type: "string", value: "session" },
+											primaryKey: { type: "string", value: "session" },
+											value: { type: "object" },
+										},
+									],
+									hasMore: false,
+									name: "sessions",
+								},
+							],
+							version: 3,
+						},
+					],
+					localStorage: { theme: "dark" },
+					securityOrigin: "https://example.test",
+					sessionStorage: {},
+				},
+			],
+			runTimestamp: "2026-07-06T12:34:56Z",
+			timestamp: "2026-07-06T13:00:00Z",
+		};
+
+		const file = await storage.recordStorageSnapshot(snapshot);
+		await storage.close();
+
+		expect(file).toBe("storage-snapshot.json");
+		const written = (await Bun.file(join(dir, file)).json()) as StorageSnapshot;
+		expect(written).toEqual(snapshot);
+		expect(storage.summary.render().split("\n")).toContain(
+			"summary snapshot_origins=1 cookies=1 items=1 databases=1 entries=1",
+		);
+	});
+
+	// A snapshot line for a file that was never written would misreport the run.
+	it("counts the storage snapshot only once the file is written", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "kuebiko-"));
+		const storage = await createStorage(
+			dir,
+			"http://127.0.0.1:9222",
+			{ snapshotStorage: true },
+			"2026-07-06T12:34:56Z",
+		);
+		// Bun.write creates missing parents, so a directory in the file's place is what
+		// Makes the whole-file write fail.
+		await mkdir(join(storage.runDirectory, "storage-snapshot.json"));
+
+		await expect(
+			storage.recordStorageSnapshot({
+				cookies: [],
+				origins: [],
+				runTimestamp: "2026-07-06T12:34:56Z",
+				timestamp: "2026-07-06T13:00:00Z",
+			}),
+		).rejects.toThrow();
+		expect(storage.summary.render()).not.toContain("snapshot_origins=");
 	});
 });

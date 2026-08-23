@@ -16,11 +16,11 @@ import {
 import { defineConfig } from "./config";
 import type { LoggerConfig, LoggerPluginConfig } from "./config";
 import { createPluginHost } from "./plugins";
-import type { LoggerPlugin, PluginContext } from "./plugins";
+import type { HookEvent, HookEventName, LoggerPlugin, PluginContext } from "./plugins";
 import { getDefaultBaseDirectory, getDefaultCaptureDirectory } from "./sanitize";
 import { createStorage } from "./storage";
 import type { RunAnnotations } from "./storage";
-import type { CliOptions, HookEvent, HookEventName } from "./types";
+import type { CliOptions } from "./types";
 
 const waitForShutdown = (): Promise<void> =>
 	new Promise((resolve) => {
@@ -77,8 +77,33 @@ const getRunAnnotations = (options: CliOptions): RunAnnotations => ({
 	captureDownloads: options.captureDownloads,
 	labels: options.labels,
 	note: options.note,
+	snapshotStorage: options.snapshotStorage,
 	streamBodies: options.streamBodies,
 });
+
+type RunParts = {
+	browser?: StartedBrowser | undefined;
+	logger?: Awaited<ReturnType<typeof startCdpLogger>> | undefined;
+	plugins?: Awaited<ReturnType<typeof createPluginHost>> | undefined;
+	storage?: Awaited<ReturnType<typeof createStorage>> | undefined;
+};
+
+// Every teardown step is reported instead of thrown so the summary is always printed.
+// The storage snapshot goes first because it is the last capture work of the run.
+// It needs both the browser and the CDP connection, which the next two steps remove.
+const stopRun = async ({ browser, logger, plugins, storage }: RunParts): Promise<void> => {
+	await logger?.snapshotStorage().catch(reportTeardownError);
+	await plugins?.stopping().catch(reportTeardownError);
+	const requestBrowserClose = logger ? () => logger.closeBrowser() : undefined;
+	// Close the browser first: closing the CDP client rejects Browser.close in flight.
+	await browser?.close(requestBrowserClose).catch(reportTeardownError);
+	await logger?.close().catch(reportTeardownError);
+	await plugins?.close().catch(reportTeardownError);
+	await storage?.close().catch(reportTeardownError);
+	if (storage) {
+		process.stdout.write(`${storage.summary.render()}\n`);
+	}
+};
 
 const runLogger = async (options: CliOptions): Promise<void> => {
 	const out = options.out ?? getDefaultCaptureDirectory();
@@ -106,6 +131,7 @@ const runLogger = async (options: CliOptions): Promise<void> => {
 			hooks: plugins,
 			include: options.include,
 			maxBodyBytes: options.maxBodyBytes,
+			snapshotStorage: options.snapshotStorage,
 			storage,
 			streamBodies: options.streamBodies,
 			verbose: options.verbose,
@@ -113,18 +139,7 @@ const runLogger = async (options: CliOptions): Promise<void> => {
 		process.stdout.write(`${READY_MESSAGE}\n`);
 		await Promise.race([waitForShutdown(), logger.closed]);
 	} finally {
-		// Every teardown step is reported instead of thrown so the summary is always printed.
-		await plugins?.stopping().catch(reportTeardownError);
-		const activeLogger = logger;
-		const requestBrowserClose = activeLogger ? () => activeLogger.closeBrowser() : undefined;
-		// Close the browser first: closing the CDP client rejects Browser.close in flight.
-		await browser?.close(requestBrowserClose).catch(reportTeardownError);
-		await logger?.close().catch(reportTeardownError);
-		await plugins?.close().catch(reportTeardownError);
-		await storage?.close().catch(reportTeardownError);
-		if (storage) {
-			process.stdout.write(`${storage.summary.render()}\n`);
-		}
+		await stopRun({ browser, logger, plugins, storage });
 	}
 };
 
@@ -156,6 +171,7 @@ export {
 	parseArgs,
 	renderHelp,
 	runLogger,
+	stopRun,
 };
 export type {
 	HookEvent,

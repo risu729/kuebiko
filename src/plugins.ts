@@ -2,6 +2,8 @@ import { mkdir } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
+import type { Protocol } from "devtools-protocol";
+
 import { parseLoggerConfig } from "./config";
 import type { LoggerConfig } from "./config";
 import type {
@@ -9,16 +11,103 @@ import type {
 	DownloadRecord,
 	ErrorRecord,
 	EventSourceMessageRecord,
-	HookEvent,
-	HookEventName,
-	HookPublisher,
 	LoggerStorage,
+	RequestBodySource,
 	RunRef,
+	StorageSnapshotCounts,
 	WebSocketFrameRecord,
 } from "./types";
 
 // The plugin-authoring surface lives with the runtime that loads and calls it.
 type MaybePromise<T> = T | Promise<T>;
+
+type HookEventBase = {
+	run: RunRef;
+	timestamp: string;
+	version: 1;
+};
+
+// Derived from the events so no plugin can subscribe to a name never published.
+type HookEventName = HookEvent["event"];
+
+type RunHookEvent = HookEventBase & { event: "run.started" | "run.stopping" | "run.stopped" };
+
+type ResponseCompletedHookEvent = HookEventBase & {
+	event: "response.completed";
+	request: {
+		bodyFile?: string | undefined;
+		bodyLength?: number | undefined;
+		bodySaved?: boolean | undefined;
+		bodySha256?: string | undefined;
+		bodySource?: RequestBodySource | undefined;
+		headers?: Protocol.Network.Headers | undefined;
+		method?: string | undefined;
+		requestId: string;
+		sessionId: string;
+		url?: string | undefined;
+	};
+	response: {
+		base64Encoded?: boolean | undefined;
+		bodyFile?: string | undefined;
+		bodyLength?: number | undefined;
+		bodySaved: boolean;
+		bodySha256?: string | undefined;
+		encodedDataLength?: number | undefined;
+		headers?: Protocol.Network.Headers | undefined;
+		mimeType?: string | undefined;
+		redirect?: boolean | undefined;
+		redirectIndex?: number | undefined;
+		status?: number | undefined;
+		statusText?: string | undefined;
+	};
+	// Written out, not derived from SessionInfo, so no internal field widens it.
+	target: {
+		targetId?: string | undefined;
+		targetType?: string | undefined;
+		targetUrl?: string | undefined;
+	};
+};
+
+type WebSocketFrameHookEvent = HookEventBase & {
+	event: `websocket.frame.${WebSocketFrameRecord["direction"]}`;
+	frame: WebSocketFrameRecord;
+};
+
+type EventSourceMessageHookEvent = HookEventBase & {
+	event: "eventsource.message";
+	message: EventSourceMessageRecord;
+};
+
+// Published for a saved download only: a canceled one has no file to hand a plugin.
+type DownloadCompletedHookEvent = HookEventBase & {
+	download: DownloadRecord;
+	event: "download.completed";
+};
+
+// Path-based like every other event: the snapshot file is named and counted only.
+// Its contents are session cookies and web storage, so they never go inline.
+type StorageSnapshotHookEvent = HookEventBase & {
+	counts: StorageSnapshotCounts;
+	event: "storage.snapshot";
+	file: string;
+	truncated: boolean;
+};
+
+type CaptureErrorHookEvent = HookEventBase & { error: ErrorRecord; event: "capture.error" };
+
+type HookEvent =
+	| CaptureErrorHookEvent
+	| DownloadCompletedHookEvent
+	| EventSourceMessageHookEvent
+	| ResponseCompletedHookEvent
+	| RunHookEvent
+	| StorageSnapshotHookEvent
+	| WebSocketFrameHookEvent;
+
+type HookPublisher = {
+	close: () => Promise<void>;
+	publish: (event: HookEvent) => Promise<void>;
+};
 
 type PluginContext = {
 	configDirectory: string;
@@ -51,6 +140,7 @@ const HOOK_EVENT_NAMES = new Set<HookEventName>([
 	"websocket.frame.sent",
 	"eventsource.message",
 	"download.completed",
+	"storage.snapshot",
 	"capture.error",
 ]);
 
@@ -449,6 +539,25 @@ const createDownloadCompletedHookEvent = (
 	version: 1,
 });
 
+// The snapshot holds live credentials, so only its path and its totals travel here.
+const createStorageSnapshotHookEvent = (
+	file: string,
+	counts: StorageSnapshotCounts,
+	truncated: boolean,
+	storage: LoggerStorage,
+): HookEvent => ({
+	counts,
+	event: "storage.snapshot",
+	file,
+	run: {
+		runDirectory: storage.runDirectory,
+		runTimestamp: storage.runTimestamp,
+	},
+	timestamp: nowIso(),
+	truncated,
+	version: 1,
+});
+
 const createCaptureErrorHookEvent = (error: ErrorRecord, storage: LoggerStorage): HookEvent => ({
 	error,
 	event: "capture.error",
@@ -487,8 +596,23 @@ export {
 	createEventSourceMessageHookEvent,
 	createPluginHost,
 	createResponseCompletedHookEvent,
+	createStorageSnapshotHookEvent,
 	createWebSocketFrameHookEvent,
 	loadConfig,
 	loadPlugins,
 };
-export type { LoggerPlugin, MaybePromise, PluginContext };
+export type {
+	CaptureErrorHookEvent,
+	DownloadCompletedHookEvent,
+	EventSourceMessageHookEvent,
+	HookEvent,
+	HookEventName,
+	HookPublisher,
+	LoggerPlugin,
+	MaybePromise,
+	PluginContext,
+	ResponseCompletedHookEvent,
+	RunHookEvent,
+	StorageSnapshotHookEvent,
+	WebSocketFrameHookEvent,
+};

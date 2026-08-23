@@ -5,6 +5,7 @@ import {
 	assertCapturedDownload,
 	assertCapturedEventSourceMessages,
 	assertCapturedRawHeaders,
+	assertCapturedStorageSnapshot,
 	assertCapturedWebSocketFrames,
 	assertNetLog,
 	assertRunSummary,
@@ -21,6 +22,7 @@ import {
 	loadPageAndWaitForCapture,
 	maybeBrowserIt,
 	startContext,
+	waitForStorageWrites,
 } from "./cdp-fixture";
 import type { TestContext } from "./cdp-fixture";
 import { DOWNLOAD_CSV } from "./fixture-server";
@@ -46,6 +48,15 @@ const assertCapturedTraffic = async (context: TestContext): Promise<void> => {
 	});
 };
 
+// Everything the run only produces once it has shut down: the snapshot file, the
+// Summary the logger prints last, and the NetLog Chrome finalizes on exit.
+const assertShutdownOutputs = async (context: TestContext, pageOrigin: string): Promise<void> => {
+	const summaryOutput = await context.loggerStdout.completed;
+	await assertCapturedStorageSnapshot(context.captureDirectory, pageOrigin, summaryOutput);
+	assertRunSummary(summaryOutput);
+	assertNetLog(await readNetLog(context.netLogPath));
+};
+
 describe("CDP launch-mode browser e2e", () => {
 	afterEach(cleanupRuns);
 
@@ -53,16 +64,19 @@ describe("CDP launch-mode browser e2e", () => {
 		"captures localhost payloads and writes Chromium NetLog from the CLI",
 		async () => {
 			const context = await startContext();
+			// The fixture server reports no port once it is stopped in closeContext.
+			const pageOrigin = `http://127.0.0.1:${context.fixtureServer.port}`;
 
 			try {
 				await loadPageAndWaitForCapture(context);
 				await assertCapturedTraffic(context);
+				// The snapshot is taken during shutdown, so the writes must land first.
+				await waitForStorageWrites(context.captureDirectory);
 			} finally {
 				await closeContext(context);
 			}
 
-			assertRunSummary(await context.loggerStdout.completed);
-			assertNetLog(await readNetLog(context.netLogPath));
+			await assertShutdownOutputs(context, pageOrigin);
 		},
 		BROWSER_E2E_TIMEOUT_MS,
 	);
