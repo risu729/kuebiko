@@ -6,13 +6,7 @@ import { cliArgs } from "./cli-args";
 import type { CliArgDefinition, LoggerArgs } from "./cli-args";
 import { DEFAULT_CDP_ENDPOINT, TOOL_NAME, TOOL_VERSION } from "./constants";
 import type { CliOptions } from "./types";
-import {
-	optionalNonEmptyString,
-	optionalStringArray,
-	parseNonEmptyText,
-	parseRegex,
-	parseSafeInteger,
-} from "./validation";
+import { nonEmptyString, optionalStringArray, parseRegex, parseSafeInteger } from "./validation";
 
 type ParseOption = {
 	default?: boolean | string;
@@ -34,16 +28,16 @@ const validFlags = new Set([
 const CliOptionsSchema: z.ZodType<CliOptions> = z
 	.object({
 		browserArgs: optionalStringArray,
-		browserCommand: optionalNonEmptyString,
-		browserPath: optionalNonEmptyString,
-		browserProfile: optionalNonEmptyString,
+		browserCommand: nonEmptyString("--browser-command"),
+		browserPath: nonEmptyString("--browser-path"),
+		// Blank would silently launch into the default browser profile directory.
+		browserProfile: nonEmptyString("--browser-profile"),
 		captureCookies: z.boolean(),
 		captureDownloads: z.boolean(),
-		// Blank is rejected rather than dropped: a wrapper passing an unset variable would
-		// Otherwise run with every plugin silently disabled and nothing recording that.
-		config: z.optional(z.string()).transform((value) => parseNonEmptyText(value, "--config")),
+		// Blank would otherwise run with every plugin silently disabled.
+		config: nonEmptyString("--config"),
 		cdp: z.url(),
-		cdpPort: optionalNonEmptyString.transform((value) => {
+		cdpPort: nonEmptyString("--cdp-port").transform((value) => {
 			const port = parseSafeInteger(value, "--cdp-port", 1);
 			if (port === undefined || port > 65_535) {
 				throw new Error("--cdp-port must be an integer between 1 and 65535.");
@@ -51,25 +45,27 @@ const CliOptionsSchema: z.ZodType<CliOptions> = z
 
 			return port;
 		}),
-		exclude: optionalNonEmptyString.transform((value) =>
+		// Blank would capture exactly the traffic the caller meant to leave out.
+		exclude: nonEmptyString("--exclude").transform((value) =>
 			value ? parseRegex(value, "--exclude") : undefined,
 		),
 		help: z.boolean(),
-		include: optionalNonEmptyString.transform((value) =>
+		include: nonEmptyString("--include").transform((value) =>
 			value ? parseRegex(value, "--include") : undefined,
 		),
 		labels: optionalStringArray,
 		launchBrowser: z.boolean(),
-		maxBodyBytes: optionalNonEmptyString.transform((value) =>
+		// Blank would retrieve every body however large, with no cap recorded anywhere.
+		maxBodyBytes: nonEmptyString("--max-body-bytes").transform((value) =>
 			parseSafeInteger(value, "--max-body-bytes", 0),
 		),
 		netlog: z.boolean(),
 		noPlugins: z.boolean(),
-		// A blank --note is rejected instead of dropped, so a mistyped note cannot vanish.
-		note: z.optional(z.string()).transform((value) => parseNonEmptyText(value, "--note")),
+		// Blank would drop a mistyped note without a word.
+		note: nonEmptyString("--note"),
 		// Blank would fall back to the default capture root, writing the run somewhere the
 		// Caller never named.
-		out: z.optional(z.string()).transform((value) => parseNonEmptyText(value, "--out")),
+		out: nonEmptyString("--out"),
 		snapshotStorage: z.boolean(),
 		streamBodies: z.boolean(),
 		verbose: z.boolean(),
@@ -92,15 +88,6 @@ const CliOptionsSchema: z.ZodType<CliOptions> = z
 				code: "custom",
 				message: "Use only one of --browser-command or --browser-path.",
 				path: ["browserCommand"],
-			});
-		}
-		// Launch mode connects to the port it started the browser on, so an endpoint given
-		// Here was discarded: the run and run.json both used --cdp-port instead.
-		if (options.cdp !== DEFAULT_CDP_ENDPOINT) {
-			context.addIssue({
-				code: "custom",
-				message: "Use --cdp-port instead of --cdp with --launch-browser.",
-				path: ["cdp"],
 			});
 		}
 	});
@@ -134,8 +121,22 @@ const assertKnownFlags = (argv: string[]): void => {
 	}
 };
 
-const normalizeArgs = (args: LoggerArgs): CliOptions =>
-	CliOptionsSchema.parse({
+// Launch mode connects to the port it started the browser on, so an endpoint given here
+// Was discarded: the run and run.json both used --cdp-port instead.
+// Passing the flag is what conflicts, not the endpoint it names.
+// Comparing against the default accepted --cdp with the default spelled out and rejected
+// The one spelling that is internally consistent, --cdp matching --cdp-port.
+// Presence is only visible before the default is applied, so this runs on the raw args.
+const assertNoCdpEndpoint = (args: LoggerArgs): void => {
+	if (args["launch-browser"] === true && args.cdp !== undefined) {
+		throw new Error("Use --cdp-port instead of --cdp with --launch-browser.");
+	}
+};
+
+const normalizeArgs = (args: LoggerArgs): CliOptions => {
+	assertNoCdpEndpoint(args);
+
+	return CliOptionsSchema.parse({
 		browserArgs: args["browser-arg"],
 		browserCommand: args["browser-command"],
 		browserPath: args["browser-path"],
@@ -143,7 +144,7 @@ const normalizeArgs = (args: LoggerArgs): CliOptions =>
 		captureCookies: args["capture-cookies"] ?? false,
 		captureDownloads: args["capture-downloads"] ?? false,
 		config: args.config,
-		cdp: args.cdp,
+		cdp: args.cdp ?? DEFAULT_CDP_ENDPOINT,
 		cdpPort: args["cdp-port"],
 		exclude: args.exclude,
 		help: args.help ?? false,
@@ -160,6 +161,7 @@ const normalizeArgs = (args: LoggerArgs): CliOptions =>
 		verbose: args.verbose ?? false,
 		version: args.version ?? false,
 	});
+};
 
 const createParseOption = (definition: CliArgDefinition): ParseOption => ({
 	...(definition.default === undefined ? {} : { default: definition.default }),

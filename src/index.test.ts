@@ -131,18 +131,39 @@ describe("parseArgs", () => {
 		expect(() => parseArgs(["--out", ""])).toThrow("--out must not be empty.");
 	});
 
+	// The same unset variable in a wrapper script captured exactly the traffic --exclude
+	// Named, lifted the body cap, and launched into the default browser profile.
+	it("rejects a blank value for every flag that takes one", () => {
+		for (const flag of [
+			"--browser-command",
+			"--browser-path",
+			"--browser-profile",
+			"--cdp-port",
+			"--exclude",
+			"--include",
+			"--max-body-bytes",
+		]) {
+			expect(() => parseArgs([flag, ""])).toThrow(`${flag} must not be empty.`);
+		}
+	});
+
 	// Launch mode connects to --cdp-port, so an endpoint given here was discarded and
 	// Run.json recorded a port the invocation never named.
+	// The flag is what conflicts, not the endpoint: comparing values accepted the default
+	// Spelled out and rejected the one spelling that agrees with --cdp-port.
 	it("rejects an endpoint given together with launch mode", () => {
+		const launch = ["--launch-browser", "--browser-command", "chrome"];
+		for (const endpoint of ["http://127.0.0.1:9999", "http://127.0.0.1:9222"]) {
+			expect(() => parseArgs([...launch, "--cdp", endpoint])).toThrow(
+				"Use --cdp-port instead of --cdp with --launch-browser.",
+			);
+		}
 		expect(() =>
-			parseArgs([
-				"--launch-browser",
-				"--browser-command",
-				"chrome",
-				"--cdp",
-				"http://127.0.0.1:9999",
-			]),
+			parseArgs([...launch, "--cdp-port", "9333", "--cdp", "http://127.0.0.1:9333"]),
 		).toThrow("Use --cdp-port instead of --cdp with --launch-browser.");
+		// Attach mode still takes the flag, and launch mode without it still parses.
+		expect(parseArgs([...launch, "--cdp-port", "9333"]).cdpPort).toBe(9333);
+		expect(parseArgs(["--cdp", "http://127.0.0.1:9333"]).cdp).toBe("http://127.0.0.1:9333");
 	});
 
 	// Number() also accepts exponents, hex, and padding, so a typo became a silent cap.

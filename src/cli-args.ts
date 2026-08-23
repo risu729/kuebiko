@@ -49,9 +49,10 @@ const cliArgs = {
 		type: "string",
 		valueHint: "path",
 	},
+	// No default here: normalizeArgs applies it, so the parsed args still say whether the
+	// Flag was passed at all. Launch mode has to reject the flag rather than its value.
 	cdp: {
-		default: DEFAULT_CDP_ENDPOINT,
-		description: "CDP endpoint.",
+		description: `CDP endpoint, ${DEFAULT_CDP_ENDPOINT} by default.`,
 		type: "string",
 		valueHint: "url",
 	},
