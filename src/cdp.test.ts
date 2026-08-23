@@ -31,6 +31,7 @@ class FakeClient extends EventEmitter {
 				body: '{"ok":true}',
 			}),
 		),
+		streamResourceContent: mock(() => Promise.resolve({ bufferedData: "" })),
 	};
 
 	Target = {
@@ -263,6 +264,28 @@ const emitResponseReceived = (client: FakeClient, url: string): void => {
 			type: "Document",
 		},
 		"session-1",
+	);
+};
+
+// Base64 is how CDP carries streamed payloads, so tests build chunks the same way.
+const toBase64 = (text: string): string => Buffer.from(text).toString("base64");
+
+// The `data` field is only present once streaming is enabled for the request.
+// A chunk emitted without it stands for one Chrome buffered before that point.
+const emitDataReceived = (
+	client: FakeClient,
+	chunk: { data?: string | undefined; requestId?: string; sessionId?: string },
+): void => {
+	client.emit(
+		"Network.dataReceived",
+		{
+			dataLength: chunk.data === undefined ? 0 : Buffer.from(chunk.data, "base64").byteLength,
+			encodedDataLength: 0,
+			requestId: chunk.requestId ?? "request-1",
+			timestamp: 4,
+			...(chunk.data === undefined ? {} : { data: chunk.data }),
+		},
+		chunk.sessionId ?? "session-1",
 	);
 };
 
@@ -2002,5 +2025,205 @@ describe("CdpResponseLogger", () => {
 		await waitForAsyncEvent();
 
 		expect(storage.metadata[0]?.rawRequestHeaders).toBeUndefined();
+	});
+
+	it("assembles a streamed body from the buffered prefix and later chunks in order", async () => {
+		const client = new FakeClient();
+		client.Network.streamResourceContent.mockResolvedValueOnce({ bufferedData: toBase64("PRE") });
+		const storage = createStorage();
+		const logger = new CdpResponseLogger(client as never, {
+			cdp: "http://127.0.0.1:9222",
+			storage,
+			streamBodies: true,
+			verbose: false,
+		});
+
+		await logger.start();
+		attachPageTarget(client);
+		await waitForAsyncEvent();
+		emitRequestWillBeSent(client, { url: "https://example.test/api" });
+		await waitForAsyncEvent();
+		// The responseReceived event enables streaming; the chunks then carry the bytes.
+		emitResponseReceived(client, "https://example.test/api");
+		emitDataReceived(client, { data: toBase64("chunk1") });
+		emitDataReceived(client, { data: toBase64("chunk2") });
+		emitLoadingFinished(client);
+		await waitForAsyncEvent();
+
+		expect(client.Network.streamResourceContent).toHaveBeenCalledWith(
+			{ requestId: "request-1" },
+			"session-1",
+		);
+		expect(client.Network.getResponseBody).not.toHaveBeenCalled();
+		expect(storage.recordBody).toHaveBeenCalledWith(expect.anything(), {
+			base64Encoded: true,
+			body: toBase64("PREchunk1chunk2"),
+		});
+		expect(storage.metadata[0]).toMatchObject({
+			bodyFile: "bodies/body.json",
+			bodySaved: true,
+			url: "https://example.test/api",
+		});
+	});
+
+	it("ignores a dataReceived chunk that has no data, since the prefix already covers it", async () => {
+		const client = new FakeClient();
+		client.Network.streamResourceContent.mockResolvedValueOnce({ bufferedData: toBase64("PRE") });
+		const storage = createStorage();
+		const logger = new CdpResponseLogger(client as never, {
+			cdp: "http://127.0.0.1:9222",
+			storage,
+			streamBodies: true,
+			verbose: false,
+		});
+
+		await logger.start();
+		attachPageTarget(client);
+		await waitForAsyncEvent();
+		emitRequestWillBeSent(client, { url: "https://example.test/api" });
+		await waitForAsyncEvent();
+		emitResponseReceived(client, "https://example.test/api");
+		// A chunk before streaming was enabled reports no data and must not be appended.
+		emitDataReceived(client, {});
+		emitDataReceived(client, { data: toBase64("tail") });
+		emitLoadingFinished(client);
+		await waitForAsyncEvent();
+
+		expect(storage.recordBody).toHaveBeenCalledWith(expect.anything(), {
+			base64Encoded: true,
+			body: toBase64("PREtail"),
+		});
+	});
+
+	it("falls back to getResponseBody when streamResourceContent is not supported", async () => {
+		const client = new FakeClient();
+		client.Network.streamResourceContent.mockRejectedValueOnce(new Error("not supported"));
+		const storage = createStorage();
+		const logger = new CdpResponseLogger(client as never, {
+			cdp: "http://127.0.0.1:9222",
+			storage,
+			streamBodies: true,
+			verbose: false,
+		});
+
+		await logger.start();
+		attachPageTarget(client);
+		await waitForAsyncEvent();
+		emitRequestWillBeSent(client, { url: "https://example.test/api" });
+		await waitForAsyncEvent();
+		emitResponseReceived(client, "https://example.test/api");
+		emitDataReceived(client, { data: toBase64("ignored") });
+		emitLoadingFinished(client);
+		await waitForAsyncEvent();
+
+		expect(client.Network.getResponseBody).toHaveBeenCalledWith(
+			{ requestId: "request-1" },
+			"session-1",
+		);
+		expect(storage.metadata[0]).toMatchObject({
+			base64Encoded: false,
+			bodyFile: "bodies/body.json",
+			bodySaved: true,
+		});
+		expect(storage.errors).toHaveLength(0);
+	});
+
+	it("aborts a streamed body over --max-body-bytes and records it as a skip", async () => {
+		const client = new FakeClient();
+		client.Network.streamResourceContent.mockResolvedValueOnce({ bufferedData: toBase64("PRE") });
+		const storage = createStorage();
+		const logger = new CdpResponseLogger(client as never, {
+			cdp: "http://127.0.0.1:9222",
+			maxBodyBytes: 5,
+			storage,
+			streamBodies: true,
+			verbose: false,
+		});
+
+		await logger.start();
+		attachPageTarget(client);
+		await waitForAsyncEvent();
+		emitRequestWillBeSent(client, { url: "https://example.test/large" });
+		await waitForAsyncEvent();
+		emitResponseReceived(client, "https://example.test/large");
+		// The first chunk alone pushes the running total past the 5-byte limit.
+		emitDataReceived(client, { data: toBase64("chunk1") });
+		// A chunk after the abort is dropped rather than reviving the freed buffer.
+		emitDataReceived(client, { data: toBase64("chunk2") });
+		emitLoadingFinished(client);
+		await waitForAsyncEvent();
+
+		expect(client.Network.getResponseBody).not.toHaveBeenCalled();
+		expect(storage.recordBody).not.toHaveBeenCalled();
+		expect(storage.metadata[0]).toMatchObject({
+			bodySaved: false,
+			error: "Skipped because the streamed body exceeded --max-body-bytes 5.",
+			url: "https://example.test/large",
+		});
+		expect(storage.errors[0]).toMatchObject({
+			event: "Network.getResponseBody.skipped",
+			requestId: "request-1",
+			url: "https://example.test/large",
+		});
+	});
+
+	it("never streams and ignores dataReceived without --stream-bodies", async () => {
+		const client = new FakeClient();
+		const storage = createStorage();
+		const logger = new CdpResponseLogger(client as never, {
+			cdp: "http://127.0.0.1:9222",
+			storage,
+			verbose: false,
+		});
+
+		await logger.start();
+		expect(client.listenerCount("Network.dataReceived")).toBe(0);
+
+		attachPageTarget(client);
+		await waitForAsyncEvent();
+		emitRequestWillBeSent(client, { url: "https://example.test/api" });
+		await waitForAsyncEvent();
+		emitResponseReceived(client, "https://example.test/api");
+		emitDataReceived(client, { data: toBase64("chunk1") });
+		emitLoadingFinished(client);
+		await waitForAsyncEvent();
+
+		expect(client.Network.streamResourceContent).not.toHaveBeenCalled();
+		expect(client.Network.getResponseBody).toHaveBeenCalledTimes(1);
+		expect(storage.metadata[0]).toMatchObject({
+			base64Encoded: false,
+			bodySaved: true,
+		});
+	});
+
+	it("drops a partial stream buffer when the target detaches mid-stream", async () => {
+		const client = new FakeClient();
+		client.Network.streamResourceContent.mockResolvedValueOnce({ bufferedData: toBase64("PRE") });
+		const storage = createStorage();
+		const logger = new CdpResponseLogger(client as never, {
+			cdp: "http://127.0.0.1:9222",
+			storage,
+			streamBodies: true,
+			verbose: false,
+		});
+
+		await logger.start();
+		attachPageTarget(client);
+		await waitForAsyncEvent();
+		emitRequestWillBeSent(client, { url: "https://example.test/api" });
+		await waitForAsyncEvent();
+		emitResponseReceived(client, "https://example.test/api");
+		emitDataReceived(client, { data: toBase64("chunk1") });
+		client.emit("Target.detachedFromTarget", { sessionId: "session-1", targetId: "target-1" });
+		await waitForAsyncEvent();
+		// The finish arrives after the detach already dropped the request and its buffer.
+		emitLoadingFinished(client);
+		await waitForAsyncEvent();
+
+		expect(storage.recordBody).not.toHaveBeenCalled();
+		expect(storage.metadata).toHaveLength(0);
+		expect(storage.errors).toContainEqual(
+			expect.objectContaining({ event: "Target.detachedFromTarget" }),
+		);
 	});
 });

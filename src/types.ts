@@ -21,6 +21,7 @@ type CliOptions = {
 	noPlugins: boolean;
 	note?: string | undefined;
 	out?: string | undefined;
+	streamBodies: boolean;
 	verbose: boolean;
 	version: boolean;
 };
@@ -75,8 +76,7 @@ type RequestBodySource = "requestWillBeSent" | "getRequestPostData";
 
 type RequestBodySaveResult = BodySaveResult & { source: RequestBodySource };
 
-// Carries the response body result verbatim; only the skip flag stays internal.
-// The raw ExtraInfo fields sit next to the refined headers, absent without the flag.
+// Carries the body result verbatim minus the internal skip flag; raw ExtraInfo fields sit beside the refined headers, absent without the flag.
 type CompletedResponseMetadata = Omit<BodySaveResult, "skipped"> & {
 	base64Encoded?: boolean | undefined;
 	encodedDataLength?: number | undefined;
@@ -88,8 +88,7 @@ type CompletedResponseMetadata = Omit<BodySaveResult, "skipped"> & {
 	protocol?: string | undefined;
 	// Set on redirect hops only; a terminal response never carries it.
 	redirect?: boolean | undefined;
-	// Present on every record of a request that redirected, hops being 0-based.
-	// The terminal response takes the index after the last hop.
+	// On every record of a request that redirected, hops 0-based; terminal takes the next index.
 	redirectIndex?: number | undefined;
 	remoteIPAddress?: string | undefined;
 	remotePort?: number | undefined;
@@ -267,6 +266,7 @@ type StartLoggerOptions = {
 	hooks?: HookPublisher | undefined;
 	include?: RegExp | undefined;
 	maxBodyBytes?: number | undefined;
+	streamBodies?: boolean | undefined;
 	storage: LoggerStorage;
 	verbose: boolean;
 };

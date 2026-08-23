@@ -15,7 +15,8 @@ analytics, parsers, dashboards, or HAR viewers.
 Use this when you want raw local capture files from normal manual browsing in a
 throwaway browser profile:
 
-- response bodies from CDP `Network.getResponseBody`
+- response bodies from CDP `Network.getResponseBody`, or
+  `Network.streamResourceContent` with `--stream-bodies`
 - request payloads that the browser exposes through CDP
 - request/response metadata in append-only NDJSON
 - Chromium NetLog in the same run directory when using browser launch mode
@@ -169,6 +170,24 @@ it the logger never subscribes the ExtraInfo events. Plugin events keep the
 refined headers only, so raw cookies stay inside the capture directory, and
 `run.json` records `captureCookies` so the directory says whether it may hold
 them.
+
+`--stream-bodies` is experimental. By default a body is read back with
+`Network.getResponseBody` once a request finishes, which depends on Chromium
+still holding it in its resource buffer. With this flag the logger instead
+enables `Network.streamResourceContent` on each response that passes the
+filters, then assembles the body from the buffered prefix the call returns
+followed by the streamed `Network.dataReceived` chunks. This recovers bodies the
+buffer path can miss: streaming responses, service-worker and cached responses,
+single responses above `maxResourceBufferSize`, and bodies dropped when a
+navigation or target teardown clears the buffer mid-fetch. Enabling the stream
+also moves the `--include` and `--exclude` decision earlier, to the response
+event, to bound the overhead. If a stream cannot be enabled or the method is
+unsupported, that request falls back to `Network.getResponseBody`, so nothing is
+lost relative to the default. Because a streamed body cannot be size-checked
+before it is fetched, `--max-body-bytes` instead aborts accumulation once the
+running total passes the limit, frees the partial buffer, and records the body
+as a skip, exactly like the buffer path's pre-fetch guard. The flag is off by
+default while the CDP method is experimental.
 
 A redirect chain reuses one CDP request ID, so it produces several metadata
 lines. Each `3xx` hop is written when the browser follows it, with
@@ -553,6 +572,8 @@ Options:
   --exclude <regex>        Do not persist matching response URLs
   --max-body-bytes <num>   Skip body retrieval above encoded byte length
   --capture-cookies        Also record raw wire headers, including live cookies
+  --stream-bodies          Assemble bodies from Network.streamResourceContent
+                           (experimental)
   --label <label>          Label recorded in run.json
   --note <text>            Free-form note recorded in run.json
   --config <path>          TS/JS logger config with plugin modules
@@ -615,7 +636,11 @@ mise run compile
 ## Known Limitations
 
 - CDP may fail to return bodies for downloads, streaming responses, very large
-  responses, cached responses, service-worker cases, or after navigation races.
+  responses, cached responses, service-worker cases, or after navigation races,
+  because the default path reads them back from Chromium's retained resource
+  buffer. `--stream-bodies` recovers many of these by assembling the body from
+  `Network.streamResourceContent` instead, and falls back to the buffer path
+  when a stream cannot be enabled.
 - Redirect hops are recorded as metadata only. Their status, `location`, and
   `set-cookie` headers are saved, but no response body exists to save, and a
   hop the logger did not observe from its start is skipped. `redirectIndex`

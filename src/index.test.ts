@@ -14,6 +14,7 @@ describe("parseArgs", () => {
 			launchBrowser: false,
 			netlog: true,
 			noPlugins: false,
+			streamBodies: false,
 			verbose: false,
 			version: false,
 		});

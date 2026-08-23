@@ -32,6 +32,13 @@ type ResponseReceivedEvent = Protocol.Network.ResponseReceivedEvent;
 type ResponseReceivedExtraInfoEvent = Protocol.Network.ResponseReceivedExtraInfoEvent;
 type LoadingFinishedEvent = Protocol.Network.LoadingFinishedEvent;
 type LoadingFailedEvent = Protocol.Network.LoadingFailedEvent;
+type DataReceivedEvent = Protocol.Network.DataReceivedEvent;
+// The chrome-remote-interface types bundle an older devtools-protocol without this method.
+// The pinned devtools-protocol types it, so the call is widened onto the Network domain.
+type StreamResourceContent = (
+	params: Protocol.Network.StreamResourceContentRequest,
+	sessionId?: string,
+) => Promise<Protocol.Network.StreamResourceContentResponse>;
 type WebSocketCreatedEvent = Protocol.Network.WebSocketCreatedEvent;
 type WebSocketClosedEvent = Protocol.Network.WebSocketClosedEvent;
 type WebSocketFrameErrorEvent = Protocol.Network.WebSocketFrameErrorEvent;
@@ -50,6 +57,27 @@ type WebSocketFrameEvent =
 type PendingExtraInfo = ExtraInfoState & {
 	orphanedRequests: number;
 	orphanedResponses: number;
+};
+
+// Response bytes assembled from Network.streamResourceContent, only with --stream-bodies.
+// The bufferedData prefix holds everything the stream had before streaming was enabled.
+// The dataReceived events carrying `data` are the bytes streamed after that point.
+// Chrome only sets `data` once streaming is on, so a chunk without it sits in the prefix.
+// Such a chunk is ignored, and every data-carrying chunk is strictly after the prefix.
+// The assembled body is therefore the buffered prefix followed by the chunks in order.
+type StreamAccumulator = {
+	// Streaming ran past --max-body-bytes; the partial buffer is freed and the body skipped.
+	aborted: boolean;
+	// Streamed dataReceived payloads after the prefix, decoded and in arrival order.
+	chunks: Buffer[];
+	// Resolves once streamResourceContent settled: its prefix stored here, or failed set.
+	enabling: Promise<void>;
+	// A rejected or unsupported streamResourceContent makes loadingFinished refetch instead.
+	failed: boolean;
+	// The buffered prefix from streamResourceContent, decoded; undefined until it resolves.
+	prefix?: Buffer | undefined;
+	// Decoded bytes accumulated so far, prefix included; drives the --max-body-bytes abort.
+	totalBytes: number;
 };
 
 const TARGET_TYPES = new Set(["page", "iframe", "worker", "shared_worker", "service_worker"]);
@@ -232,6 +260,9 @@ class CdpResponseLogger {
 	readonly #pendingEvents = new Set<Promise<void>>();
 	readonly #requests = new Map<string, RequestState>();
 	readonly #sessions = new Map<string, SessionInfo>();
+	// Streamed body buffers keyed like #requests, only populated with --stream-bodies.
+	// Held only while a request is in flight, then dropped on finish, failure, or detach.
+	readonly #streams = new Map<string, StreamAccumulator>();
 	// Socket URLs keyed like #requests.
 	// A WebSocket handshake produces no Network.requestWillBeSent event.
 	// Nothing else maps a frame requestId back to its URL.
@@ -285,6 +316,13 @@ class CdpResponseLogger {
 		this.#client.on("Network.responseReceived", (event, sessionId) => {
 			this.#handleResponseReceived(event as ResponseReceivedEvent, sessionId);
 		});
+		// Only --stream-bodies streams resources, so nothing else needs the chunk events.
+		// Their `data` field is only populated once streaming is enabled for a request.
+		if (this.#options.streamBodies) {
+			this.#client.on("Network.dataReceived", (event, sessionId) => {
+				this.#handleDataReceived(event as DataReceivedEvent, sessionId);
+			});
+		}
 		// The ExtraInfo events are the only source of Cookie and Set-Cookie headers.
 		// A run without --capture-cookies never subscribes them and buffers nothing.
 		// The chrome-remote-interface types bundle an older devtools-protocol copy.
@@ -444,8 +482,9 @@ class CdpResponseLogger {
 
 		// Neither map is keyed by session.
 		// Buffered ExtraInfo whose base event never arrives would outlive its session.
+		// A stream whose loadingFinished never comes would keep its partial buffer alive.
 		const sessionPrefix = `${event.sessionId}:`;
-		for (const keyed of [this.#webSockets, this.#extraInfo]) {
+		for (const keyed of [this.#webSockets, this.#extraInfo, this.#streams]) {
 			for (const key of keyed.keys()) {
 				if (key.startsWith(sessionPrefix)) {
 					keyed.delete(key);
@@ -607,6 +646,83 @@ class CdpResponseLogger {
 			session,
 			type: event.type,
 		});
+
+		// Streaming is enabled here so subsequent dataReceived events carry the payload.
+		// A redirect hop is reported through redirectResponse, never responseReceived.
+		// So hops are never streamed, and the hop path below is left untouched.
+		// The filter runs now, earlier than loadingFinished, to bound streaming overhead.
+		if (
+			this.#options.streamBodies &&
+			!this.#streams.has(key) &&
+			matchesFilters(event.response.url, this.#options.include, this.#options.exclude)
+		) {
+			this.#beginStream(key, event.requestId, sessionId);
+		}
+	}
+
+	#beginStream(key: string, requestId: string, sessionId: string): void {
+		const accumulator: StreamAccumulator = {
+			aborted: false,
+			chunks: [],
+			enabling: Promise.resolve(),
+			failed: false,
+			totalBytes: 0,
+		};
+		this.#streams.set(key, accumulator);
+		accumulator.enabling = this.#enableStream(accumulator, requestId, sessionId);
+	}
+
+	async #enableStream(
+		accumulator: StreamAccumulator,
+		requestId: string,
+		sessionId: string,
+	): Promise<void> {
+		try {
+			const network = this.#client.Network as unknown as {
+				streamResourceContent: StreamResourceContent;
+			};
+			const { bufferedData } = await network.streamResourceContent({ requestId }, sessionId);
+			// A chunk that ran past the limit while enabling already freed the buffer.
+			if (accumulator.aborted || !bufferedData) {
+				return;
+			}
+			const prefix = Buffer.from(bufferedData, "base64");
+			accumulator.prefix = prefix;
+			this.#accountStreamBytes(accumulator, prefix.byteLength);
+		} catch {
+			// An unsupported method, or a request the browser no longer holds, refetches instead.
+			accumulator.failed = true;
+		}
+	}
+
+	// The buffered prefix and every streamed chunk both add to the running total.
+	// Past --max-body-bytes the partial buffer is freed and the body recorded as a skip.
+	#accountStreamBytes(accumulator: StreamAccumulator, added: number): void {
+		if (accumulator.aborted) {
+			return;
+		}
+		accumulator.totalBytes += added;
+		const limit = this.#options.maxBodyBytes;
+		if (limit !== undefined && accumulator.totalBytes > limit) {
+			accumulator.aborted = true;
+			accumulator.chunks = [];
+			accumulator.prefix = undefined;
+		}
+	}
+
+	#handleDataReceived(event: DataReceivedEvent, sessionId?: string): void {
+		if (!sessionId) {
+			return;
+		}
+		const accumulator = this.#streams.get(requestKey(sessionId, event.requestId));
+		// A chunk without `data` predates streaming and is already inside the prefix.
+		// Nothing is accumulated once the stream failed or was aborted for its size.
+		if (!accumulator || accumulator.aborted || accumulator.failed || event.data === undefined) {
+			return;
+		}
+		const chunk = Buffer.from(event.data, "base64");
+		accumulator.chunks.push(chunk);
+		this.#accountStreamBytes(accumulator, chunk.byteLength);
 	}
 
 	#pendingExtraInfo(key: string): PendingExtraInfo {
@@ -724,8 +840,10 @@ class CdpResponseLogger {
 		}
 		const key = requestKey(sessionId, event.requestId);
 		const state = this.#requests.get(key);
+		const stream = this.#streams.get(key);
 		// The request is over either way, so nothing buffered under it can still be joined.
 		this.#extraInfo.delete(key);
+		this.#streams.delete(key);
 		if (!state) {
 			return;
 		}
@@ -739,7 +857,7 @@ class CdpResponseLogger {
 			return;
 		}
 
-		const bodyResult = await this.#getBodyResult(state, event);
+		const bodyResult = await this.#getResponseBodyResult(state, event, stream);
 		const requestBodyResult = await this.#getRequestBodyResult(state);
 		const metadata = createCompletedMetadata(
 			state,
@@ -841,6 +959,50 @@ class CdpResponseLogger {
 		}
 	}
 
+	// A streamed request finalizes from its accumulated bytes; anything else refetches.
+	// A stream that failed or is unsupported also falls back so no body is lost.
+	async #getResponseBodyResult(
+		state: RequestState,
+		event: LoadingFinishedEvent,
+		stream: StreamAccumulator | undefined,
+	): Promise<ResponseBodyResult> {
+		if (!stream) {
+			return await this.#getBodyResult(state, event);
+		}
+
+		// Wait for the buffered prefix, or for the failure that sends us to the fallback.
+		await stream.enabling;
+		if (stream.failed) {
+			return await this.#getBodyResult(state, event);
+		}
+		if (stream.aborted) {
+			return {
+				bodySaved: false,
+				error: `Skipped because the streamed body exceeded --max-body-bytes ${this.#options.maxBodyBytes}.`,
+				skipped: true,
+			};
+		}
+
+		return await this.#finalizeStream(state, stream);
+	}
+
+	// The prefix is everything up to enabling, so it leads the streamed chunks.
+	async #finalizeStream(
+		state: RequestState,
+		stream: StreamAccumulator,
+	): Promise<ResponseBodyResult> {
+		const parts = stream.prefix ? [stream.prefix, ...stream.chunks] : stream.chunks;
+		const assembled = Buffer.concat(parts);
+		// Drop the per-chunk references before the write; the completed body is not retained.
+		stream.chunks = [];
+		stream.prefix = undefined;
+		// The streamed bytes arrive base64 over CDP exactly like a getResponseBody result.
+		return await this.#options.storage.recordBody(state, {
+			base64Encoded: true,
+			body: assembled.toString("base64"),
+		});
+	}
+
 	async #getBodyResult(
 		state: RequestState,
 		event: LoadingFinishedEvent,
@@ -883,6 +1045,7 @@ class CdpResponseLogger {
 		this.#requests.delete(key);
 		this.#hopWrites.delete(key);
 		this.#extraInfo.delete(key);
+		this.#streams.delete(key);
 
 		// Hops that already completed belong in the capture before the failure.
 		await hopWrites;

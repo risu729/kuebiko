@@ -83,8 +83,7 @@ const runLogger = async (options: CliOptions): Promise<void> => {
 			labels: options.labels,
 			note: options.note,
 		});
-		process.stdout.write(`capture_dir=${storage.runDirectory}\n`);
-		process.stdout.write(`cdp=${cdp}\n`);
+		process.stdout.write(`capture_dir=${storage.runDirectory}\ncdp=${cdp}\n`);
 
 		plugins = await createPluginHost({
 			configPath: options.config,
@@ -100,6 +99,7 @@ const runLogger = async (options: CliOptions): Promise<void> => {
 			include: options.include,
 			maxBodyBytes: options.maxBodyBytes,
 			storage,
+			streamBodies: options.streamBodies,
 			verbose: options.verbose,
 		});
 		process.stdout.write(`${READY_MESSAGE}\n`);
