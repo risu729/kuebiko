@@ -852,4 +852,63 @@ describe("CdpResponseLogger", () => {
 			requestId: "request-1",
 		});
 	});
+
+	it("marks bodies dropped by --max-body-bytes as skipped instead of failed", async () => {
+		const client = new FakeClient();
+		const storage = createStorage();
+		const logger = new CdpResponseLogger(client as never, {
+			cdp: "http://127.0.0.1:9222",
+			maxBodyBytes: 10,
+			storage,
+			verbose: false,
+		});
+
+		await logger.start();
+		client.emit("Target.attachedToTarget", {
+			sessionId: "session-1",
+			targetInfo: {
+				attached: true,
+				browserContextId: "context-1",
+				canAccessOpener: false,
+				targetId: "target-1",
+				title: "Example",
+				type: "page",
+				url: "https://example.test",
+			},
+			waitingForDebugger: false,
+		});
+		await waitForAsyncEvent();
+		client.emit(
+			"Network.responseReceived",
+			{
+				frameId: "frame-1",
+				hasExtraInfo: false,
+				loaderId: "loader-1",
+				requestId: "request-1",
+				response: {
+					headers: {},
+					mimeType: "application/json",
+					status: 200,
+					statusText: "OK",
+					url: "https://example.test/large",
+				},
+				timestamp: 2,
+				type: "XHR",
+			},
+			"session-1",
+		);
+		client.emit(
+			"Network.loadingFinished",
+			{ encodedDataLength: 123, requestId: "request-1", timestamp: 3 },
+			"session-1",
+		);
+		await waitForAsyncEvent();
+
+		expect(client.Network.getResponseBody).not.toHaveBeenCalled();
+		expect(storage.errors[0]).toMatchObject({
+			event: "Network.getResponseBody.skipped",
+			requestId: "request-1",
+			url: "https://example.test/large",
+		});
+	});
 });

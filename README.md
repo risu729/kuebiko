@@ -151,6 +151,32 @@ do not stop the logger.
 
 `netlog.json` is Chromium NetLog for network-stack debugging.
 
+## Run Summary
+
+When a run ends, the logger prints a summary to stdout so silent losses are
+visible without opening `errors.ndjson`:
+
+```text
+summary responses=482 response_bytes=19203112 requests=37 request_bytes=8241
+summary websocket_frames=126 errors=4
+summary_errors host=example.test total=2 Network.getResponseBody=2
+summary_errors host=cdn.example.test total=1 Network.loadingFailed=1
+summary_errors host=plugin:json-api-mirror total=1 Plugin.onEvent=1
+```
+
+`responses` and `requests` count saved body files, and the byte totals are the
+bytes written for them. One `summary_errors` line is printed per host with the
+`errors.ndjson` `event` counts behind it, ordered by failure count. Only the top
+20 hosts get a line; the rest are collapsed into a final remainder line.
+
+Plugin failures have no URL, so they are grouped under `plugin:<id>` instead of
+a host. Host `unknown` collects failures whose URL the browser never delivered,
+such as `Network.loadingFailed` for a request that started before the logger
+attached to its target. Bodies dropped by `--max-body-bytes` are counted as
+`Network.getResponseBody.skipped` so a size policy is not mistaken for a
+capture failure. Error counts cover all observed traffic, while the saved-body
+counts only cover responses that passed `--include` and `--exclude`.
+
 ## What Gets Saved
 
 For completed responses, metadata includes request and response fields such as:

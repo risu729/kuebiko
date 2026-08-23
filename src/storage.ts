@@ -7,6 +7,8 @@ import type { Protocol } from "devtools-protocol";
 
 import { TOOL_NAME, TOOL_VERSION } from "./constants";
 import { createBodyFilename, relativeBodyPath, timestampForFile } from "./sanitize";
+import { createCaptureSummary } from "./summary";
+import type { CaptureSummary } from "./summary";
 import type {
 	BodySaveResult,
 	CompletedResponseMetadata,
@@ -21,6 +23,11 @@ import type {
 type NdjsonWriter = {
 	append: (record: unknown) => Promise<void>;
 	close: () => Promise<void>;
+};
+
+// Only the run owner reads the summary, so it stays off the LoggerStorage contract.
+type RunStorage = LoggerStorage & {
+	summary: CaptureSummary;
 };
 
 const sha256 = (bytes: Uint8Array): string => createHash("sha256").update(bytes).digest("hex");
@@ -95,7 +102,7 @@ const createStorage = async (
 	runDirectory: string,
 	cdpEndpoint: string,
 	runTimestamp = new Date().toISOString(),
-): Promise<LoggerStorage> => {
+): Promise<RunStorage> => {
 	const bodiesDirectory = join(runDirectory, "bodies");
 	const requestsDirectory = join(runDirectory, "requests");
 	await mkdir(bodiesDirectory, { recursive: true });
@@ -108,6 +115,7 @@ const createStorage = async (
 	const metadata = createNdjsonWriter(join(runDirectory, "metadata.ndjson"));
 	const errors = createNdjsonWriter(join(runDirectory, "errors.ndjson"));
 	const websocket = createNdjsonWriter(join(runDirectory, "websocket.ndjson"));
+	const summary = createCaptureSummary();
 	let bodyCounter = 0;
 	let requestCounter = 0;
 
@@ -141,6 +149,7 @@ const createStorage = async (
 				requestCounter,
 				state.requestContentType,
 			);
+			summary.recordSavedRequestBody(bytes.byteLength);
 
 			return {
 				bodyFile: join("requests", filename),
@@ -172,6 +181,7 @@ const createStorage = async (
 				bodyCounter,
 				state.response?.mimeType,
 			);
+			summary.recordSavedResponseBody(bytes.byteLength);
 
 			return {
 				base64Encoded: body.base64Encoded,
@@ -201,13 +211,17 @@ const createStorage = async (
 			await metadata.append(record);
 		},
 		recordError: async (record: ErrorRecord) => {
+			// Count before the write so a failing errors.ndjson still shows up in the summary.
+			summary.recordError(record);
 			await errors.append(record);
 		},
 		recordWebSocketFrame: async (frame: WebSocketFrameRecord) => {
+			summary.recordWebSocketFrame();
 			await websocket.append(frame);
 		},
 		runDirectory,
 		runTimestamp,
+		summary,
 	};
 };
 

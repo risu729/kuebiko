@@ -66,6 +66,10 @@ const requestBodyErrorEvent = (source: RequestBodySource | undefined): string =>
 		? "Network.requestWillBeSent.postData"
 		: "Network.getRequestPostData";
 
+// A body dropped by --max-body-bytes is a policy decision, not a capture failure.
+const responseBodyErrorEvent = (skipped: boolean | undefined): string =>
+	skipped === true ? "Network.getResponseBody.skipped" : "Network.getResponseBody";
+
 const createErrorRecord = (
 	event: string,
 	session: SessionInfo | undefined,
@@ -415,7 +419,12 @@ class CdpResponseLogger {
 		);
 
 		if (!bodyResult.bodySaved && bodyResult.error) {
-			await this.#recordRequestError("Network.getResponseBody", state, bodyResult.error, url);
+			await this.#recordRequestError(
+				responseBodyErrorEvent(bodyResult.skipped),
+				state,
+				bodyResult.error,
+				url,
+			);
 		}
 
 		if (!requestBodyResult.bodySaved && requestBodyResult.error) {
@@ -486,6 +495,7 @@ class CdpResponseLogger {
 		bodySaved: boolean;
 		bodySha256?: string | undefined;
 		error?: string | undefined;
+		skipped?: boolean | undefined;
 	}> {
 		if (
 			this.#options.maxBodyBytes !== undefined &&
@@ -494,6 +504,7 @@ class CdpResponseLogger {
 			return {
 				bodySaved: false,
 				error: `Skipped because encodedDataLength ${event.encodedDataLength} exceeds --max-body-bytes ${this.#options.maxBodyBytes}.`,
+				skipped: true,
 			};
 		}
 
