@@ -1,14 +1,10 @@
 import { join } from "node:path";
 
-import {
-	cleanupRuns,
-	createRunDirectories,
-	startFixtureServer,
-	startLoggerProcess,
-} from "./cdp-fixture";
+import { cleanupRuns, createRunDirectories, startLoggerProcess } from "./cdp-fixture";
 import type { TestContext } from "./cdp-fixture";
 import { stopBrowser, stopProcess, waitForProcessExit } from "./cdp-process";
 import type { BrowserProcess } from "./cdp-process";
+import startFixtureServer from "./fixture-server";
 import waitFor from "./poll";
 
 type AttachTestContext = TestContext & {

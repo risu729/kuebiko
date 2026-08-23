@@ -61,18 +61,12 @@ type BodySaveResult = {
 
 type RequestBodySource = "requestWillBeSent" | "getRequestPostData";
 
-type RequestBodySaveResult = BodySaveResult & {
-	source: RequestBodySource;
-};
+type RequestBodySaveResult = BodySaveResult & { source: RequestBodySource };
 
-type CompletedResponseMetadata = {
+// Carries the response body result verbatim; only the skip flag stays internal.
+type CompletedResponseMetadata = Omit<BodySaveResult, "skipped"> & {
 	base64Encoded?: boolean | undefined;
-	bodyFile?: string | undefined;
-	bodyLength?: number | undefined;
-	bodySaved: boolean;
-	bodySha256?: string | undefined;
 	encodedDataLength?: number | undefined;
-	error?: string | undefined;
 	fromDiskCache?: boolean | undefined;
 	fromPrefetchCache?: boolean | undefined;
 	fromServiceWorker?: boolean | undefined;
@@ -118,10 +112,8 @@ type ErrorRecord = {
 	url?: string | undefined;
 };
 
-type WebSocketFrameRecord = {
-	direction: "sent" | "received";
-	opcode: number;
-	payloadData: string;
+// Streams are recorded per frame or message, with no url when the stream is unknown.
+type StreamRecord = {
 	requestId: string;
 	sessionId: string;
 	targetId?: string | undefined;
@@ -129,27 +121,35 @@ type WebSocketFrameRecord = {
 	url?: string | undefined;
 };
 
+type EventSourceMessageRecord = StreamRecord & {
+	data: string;
+	eventId: string;
+	eventName: string;
+};
+
+type WebSocketFrameRecord = StreamRecord & {
+	direction: "sent" | "received";
+	opcode: number;
+	payloadData: string;
+};
+
 type RunRef = {
 	runDirectory: string;
 	runTimestamp: string;
 };
 
-type HookEventName =
-	| "run.started"
-	| "run.stopping"
-	| "run.stopped"
-	| "response.completed"
-	| `websocket.frame.${WebSocketFrameRecord["direction"]}`
-	| "capture.error";
-
-type RunHookEvent = {
-	event: "run.started" | "run.stopping" | "run.stopped";
+type HookEventBase = {
 	run: RunRef;
 	timestamp: string;
 	version: 1;
 };
 
-type ResponseCompletedHookEvent = {
+// Derived from the events so no plugin can subscribe to a name never published.
+type HookEventName = HookEvent["event"];
+
+type RunHookEvent = HookEventBase & { event: "run.started" | "run.stopping" | "run.stopped" };
+
+type ResponseCompletedHookEvent = HookEventBase & {
 	event: "response.completed";
 	request: {
 		bodyFile?: string | undefined;
@@ -177,34 +177,29 @@ type ResponseCompletedHookEvent = {
 		status?: number | undefined;
 		statusText?: string | undefined;
 	};
-	run: RunRef;
+	// Written out, not derived from SessionInfo, so no internal field widens it.
 	target: {
 		targetId?: string | undefined;
 		targetType?: string | undefined;
 		targetUrl?: string | undefined;
 	};
-	timestamp: string;
-	version: 1;
 };
 
-type WebSocketFrameHookEvent = {
+type WebSocketFrameHookEvent = HookEventBase & {
 	event: `websocket.frame.${WebSocketFrameRecord["direction"]}`;
 	frame: WebSocketFrameRecord;
-	run: RunRef;
-	timestamp: string;
-	version: 1;
 };
 
-type CaptureErrorHookEvent = {
-	error: ErrorRecord;
-	event: "capture.error";
-	run: RunRef;
-	timestamp: string;
-	version: 1;
+type EventSourceMessageHookEvent = HookEventBase & {
+	event: "eventsource.message";
+	message: EventSourceMessageRecord;
 };
+
+type CaptureErrorHookEvent = HookEventBase & { error: ErrorRecord; event: "capture.error" };
 
 type HookEvent =
 	| CaptureErrorHookEvent
+	| EventSourceMessageHookEvent
 	| ResponseCompletedHookEvent
 	| RunHookEvent
 	| WebSocketFrameHookEvent;
@@ -257,6 +252,7 @@ type LoggerStorage = {
 	) => Promise<BodySaveResult & { base64Encoded: boolean }>;
 	recordCompletedResponse: (metadata: CompletedResponseMetadata) => Promise<void>;
 	recordError: (error: ErrorRecord) => Promise<void>;
+	recordEventSourceMessage: (message: EventSourceMessageRecord) => Promise<void>;
 	recordWebSocketFrame: (frame: WebSocketFrameRecord) => Promise<void>;
 	runDirectory: string;
 	runTimestamp: string;
@@ -278,6 +274,8 @@ export type {
 	CliOptions,
 	CompletedResponseMetadata,
 	ErrorRecord,
+	EventSourceMessageHookEvent,
+	EventSourceMessageRecord,
 	HookEvent,
 	HookEventName,
 	HookPublisher,

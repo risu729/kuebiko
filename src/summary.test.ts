@@ -32,11 +32,12 @@ describe("createCaptureSummary", () => {
 		summary.recordSavedRequestBody(17);
 		summary.recordWebSocketFrame();
 		summary.recordWebSocketFrame();
+		summary.recordEventSourceMessage();
 
 		expect(summary.render()).toBe(
 			[
 				"summary responses=2 response_bytes=100 requests=1 request_bytes=17",
-				"summary websocket_frames=2 redirects=0 errors=0",
+				"summary websocket_frames=2 eventsource_messages=1 redirects=0 errors=0",
 			].join("\n"),
 		);
 	});
@@ -49,7 +50,7 @@ describe("createCaptureSummary", () => {
 
 		expect(summary.render().split("\n")).toEqual([
 			"summary responses=1 response_bytes=11 requests=0 request_bytes=0",
-			"summary websocket_frames=0 redirects=2 errors=0",
+			"summary websocket_frames=0 eventsource_messages=0 redirects=2 errors=0",
 		]);
 	});
 

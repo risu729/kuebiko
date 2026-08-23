@@ -110,6 +110,15 @@ describe("createStorage", () => {
 			sessionId: "session-1",
 			timestamp: "2026-07-06T12:34:57Z",
 		});
+		await storage.recordEventSourceMessage({
+			data: '{"price":1}',
+			eventId: "1",
+			eventName: "price",
+			requestId: "request-3",
+			sessionId: "session-1",
+			timestamp: "2026-07-06T12:34:57Z",
+			url: "https://stream.example.test/prices",
+		});
 		await storage.recordError({
 			error: "No data found for resource with given identifier",
 			event: "Network.getResponseBody",
@@ -120,7 +129,7 @@ describe("createStorage", () => {
 
 		expect(storage.summary.render().split("\n")).toEqual([
 			"summary responses=1 response_bytes=11 requests=1 request_bytes=5",
-			"summary websocket_frames=1 redirects=0 errors=1",
+			"summary websocket_frames=1 eventsource_messages=1 redirects=0 errors=1",
 			"summary_errors host=example.test total=1 Network.getResponseBody=1",
 		]);
 	});
@@ -150,7 +159,7 @@ describe("createStorage", () => {
 
 		expect(storage.summary.render().split("\n")).toEqual([
 			"summary responses=0 response_bytes=0 requests=0 request_bytes=0",
-			"summary websocket_frames=0 redirects=1 errors=0",
+			"summary websocket_frames=0 eventsource_messages=0 redirects=1 errors=0",
 		]);
 	});
 

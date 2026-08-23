@@ -4,8 +4,13 @@ import { join } from "node:path";
 
 import { READY_MESSAGE } from "kuebiko";
 
-import type { CapturedApiRecord, CapturedWebSocketFrame } from "./assertions";
+import type {
+	CapturedApiRecord,
+	CapturedEventSourceMessage,
+	CapturedWebSocketFrame,
+} from "./assertions";
 import openNewPage from "./cdp-page";
+import startFixtureServer from "./fixture-server";
 import waitFor from "./poll";
 
 type LoggerProcess = ReturnType<typeof Bun.spawn> & {
@@ -80,48 +85,6 @@ const reservePort = (): number => {
 
 	return port;
 };
-
-const startFixtureServer = (): ReturnType<typeof Bun.serve> =>
-	Bun.serve({
-		fetch: async (request, server) => {
-			const url = new URL(request.url);
-			if (url.pathname === "/socket") {
-				return server.upgrade(request, { data: undefined })
-					? undefined
-					: new Response("upgrade failed", { status: 400 });
-			}
-
-			if (url.pathname === "/api/data") {
-				return Response.json({
-					ok: true,
-					posted: JSON.parse(await request.text()) as unknown,
-					source: "cdp-e2e",
-				});
-			}
-
-			return new Response(
-				`<!doctype html>
-<meta charset="utf-8">
-<script>
-void fetch("/api/data", {
-  method: "POST",
-  headers: { "content-type": "application/json" },
-  body: JSON.stringify({ hello: "from-page" })
-});
-const socket = new WebSocket("ws://" + location.host + "/socket");
-socket.onopen = () => socket.send("hello-from-page");
-</script>`,
-				{ headers: { "content-type": "text/html; charset=utf-8" } },
-			);
-		},
-		hostname: "127.0.0.1",
-		port: 0,
-		websocket: {
-			message: (socket, message) => {
-				socket.send(`echo:${String(message)}`);
-			},
-		},
-	});
 
 const createRunDirectories = async (): Promise<RunDirectories> => {
 	await mkdir(e2eRoot, { recursive: true });
@@ -252,6 +215,17 @@ const findWebSocketFrames = async (captureDirectory: string): Promise<CapturedWe
 		return directions.has("sent") && directions.has("received") ? frames : undefined;
 	});
 
+// The fixture pushes two events over one stream, so both must land before asserting.
+const findEventSourceMessages = async (
+	captureDirectory: string,
+): Promise<CapturedEventSourceMessage[]> =>
+	await waitFor("captured EventSource messages", async () => {
+		const messages = await readNdjson<CapturedEventSourceMessage>(
+			join(captureDirectory, "eventsource.ndjson"),
+		);
+		return messages.length >= 2 ? messages : undefined;
+	});
+
 const startContext = async (path = requireBrowserPath()): Promise<TestContext> => {
 	const directories = await createRunDirectories();
 	const fixtureServer = startFixtureServer();
@@ -288,11 +262,11 @@ export {
 	closeContext,
 	createRunDirectories,
 	findCapturedApiRecord,
+	findEventSourceMessages,
 	findWebSocketFrames,
 	loadPageAndWaitForCapture,
 	maybeBrowserIt,
 	reservePort,
-	startFixtureServer,
 	startContext,
 	startLoggerProcess,
 };

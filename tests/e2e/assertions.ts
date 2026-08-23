@@ -9,6 +9,13 @@ type CapturedApiRecord = {
 	requestMethod?: string | undefined;
 };
 
+type CapturedEventSourceMessage = {
+	data?: string | undefined;
+	eventId?: string | undefined;
+	eventName?: string | undefined;
+	url?: string | undefined;
+};
+
 type CapturedWebSocketFrame = {
 	direction?: string | undefined;
 	payloadData?: string | undefined;
@@ -54,9 +61,22 @@ const assertCapturedWebSocketFrames = (
 	expect(attributed.map((frame) => frame.payloadData)).toContain("echo:hello-from-page");
 };
 
+// An EventSource connection does produce Network.requestWillBeSent, unlike a
+// WebSocket handshake, so every message must carry the stream URL.
+const assertCapturedEventSourceMessages = (
+	messages: CapturedEventSourceMessage[],
+	streamUrl: string,
+): void => {
+	const attributed = messages.filter((message) => message.url === streamUrl);
+	expect(attributed.map((message) => message.data)).toEqual(['{"price":1}', '{"price":2}']);
+	expect(attributed.map((message) => message.eventName)).toEqual(["price", "price"]);
+	expect(attributed.map((message) => message.eventId)).toEqual(["1", "2"]);
+};
+
 const assertRunSummary = (output: string): void => {
 	expect(output).toContain("summary responses=");
 	expect(output).toContain("summary websocket_frames=");
+	expect(output).toContain("eventsource_messages=");
 };
 
 const readNetLog = async (path: string): Promise<NetLogRecord> => {
@@ -86,10 +106,11 @@ const assertNetLog = (netLog: NetLogRecord): void => {
 
 export {
 	assertCapturedApi,
+	assertCapturedEventSourceMessages,
 	assertCapturedWebSocketFrames,
 	assertNetLog,
 	assertRunSummary,
 	readCapturedBodies,
 	readNetLog,
 };
-export type { CapturedApiRecord, CapturedWebSocketFrame };
+export type { CapturedApiRecord, CapturedEventSourceMessage, CapturedWebSocketFrame };

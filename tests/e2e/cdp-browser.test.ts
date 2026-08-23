@@ -2,6 +2,7 @@ import { afterEach, describe } from "bun:test";
 
 import {
 	assertCapturedApi,
+	assertCapturedEventSourceMessages,
 	assertCapturedWebSocketFrames,
 	assertNetLog,
 	assertRunSummary,
@@ -12,13 +13,28 @@ import {
 	cleanupRuns,
 	closeContext,
 	findCapturedApiRecord,
+	findEventSourceMessages,
 	findWebSocketFrames,
 	loadPageAndWaitForCapture,
 	maybeBrowserIt,
 	startContext,
 } from "./cdp-fixture";
+import type { TestContext } from "./cdp-fixture";
 
 const BROWSER_E2E_TIMEOUT_MS = 30_000;
+
+const assertCapturedTraffic = async (context: TestContext): Promise<void> => {
+	const metadata = await findCapturedApiRecord(context.captureDirectory);
+	assertCapturedApi(metadata, await readCapturedBodies(context.captureDirectory, metadata));
+	assertCapturedWebSocketFrames(
+		await findWebSocketFrames(context.captureDirectory),
+		`ws://127.0.0.1:${context.fixtureServer.port}/socket`,
+	);
+	assertCapturedEventSourceMessages(
+		await findEventSourceMessages(context.captureDirectory),
+		`http://127.0.0.1:${context.fixtureServer.port}/events`,
+	);
+};
 
 describe("CDP launch-mode browser e2e", () => {
 	afterEach(cleanupRuns);
@@ -30,13 +46,7 @@ describe("CDP launch-mode browser e2e", () => {
 
 			try {
 				await loadPageAndWaitForCapture(context);
-				const metadata = await findCapturedApiRecord(context.captureDirectory);
-				const bodies = await readCapturedBodies(context.captureDirectory, metadata);
-				assertCapturedApi(metadata, bodies);
-				assertCapturedWebSocketFrames(
-					await findWebSocketFrames(context.captureDirectory),
-					`ws://127.0.0.1:${context.fixtureServer.port}/socket`,
-				);
+				await assertCapturedTraffic(context);
 			} finally {
 				await closeContext(context);
 			}

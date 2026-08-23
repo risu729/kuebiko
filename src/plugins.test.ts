@@ -8,6 +8,7 @@ import { createPluginHost } from "./plugins";
 import type {
 	BodySaveResult,
 	ErrorRecord,
+	EventSourceMessageRecord,
 	HookEvent,
 	LoggerStorage,
 	RequestBodySaveResult,
@@ -60,6 +61,7 @@ const createStorage = (runDirectory: string): LoggerStorage & { errors: ErrorRec
 			errors.push(error);
 			return Promise.resolve();
 		}),
+		recordEventSourceMessage: mock((_message: EventSourceMessageRecord) => Promise.resolve()),
 		recordRequestBody: mock((_state: RequestState): Promise<RequestBodySaveResult> =>
 			Promise.resolve({ bodySaved: true, source: "requestWillBeSent" }),
 		),
