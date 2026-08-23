@@ -171,6 +171,7 @@ export {
 	parseArgs,
 	renderHelp,
 	runLogger,
+	stopRun,
 };
 export type {
 	HookEvent,

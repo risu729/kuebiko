@@ -455,4 +455,28 @@ describe("createStorage", () => {
 			"summary snapshot_origins=1 cookies=1 items=1 databases=1 entries=1",
 		);
 	});
+
+	// A snapshot line for a file that was never written would misreport the run.
+	it("counts the storage snapshot only once the file is written", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "kuebiko-"));
+		const storage = await createStorage(
+			dir,
+			"http://127.0.0.1:9222",
+			{ snapshotStorage: true },
+			"2026-07-06T12:34:56Z",
+		);
+		// Bun.write creates missing parents, so a directory in the file's place is what
+		// Makes the whole-file write fail.
+		await mkdir(join(storage.runDirectory, "storage-snapshot.json"));
+
+		await expect(
+			storage.recordStorageSnapshot({
+				cookies: [],
+				origins: [],
+				runTimestamp: "2026-07-06T12:34:56Z",
+				timestamp: "2026-07-06T13:00:00Z",
+			}),
+		).rejects.toThrow();
+		expect(storage.summary.render()).not.toContain("snapshot_origins=");
+	});
 });

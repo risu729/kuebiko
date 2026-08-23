@@ -48,6 +48,15 @@ const assertCapturedTraffic = async (context: TestContext): Promise<void> => {
 	});
 };
 
+// Everything the run only produces once it has shut down: the snapshot file, the
+// Summary the logger prints last, and the NetLog Chrome finalizes on exit.
+const assertShutdownOutputs = async (context: TestContext, pageOrigin: string): Promise<void> => {
+	const summaryOutput = await context.loggerStdout.completed;
+	await assertCapturedStorageSnapshot(context.captureDirectory, pageOrigin, summaryOutput);
+	assertRunSummary(summaryOutput);
+	assertNetLog(await readNetLog(context.netLogPath));
+};
+
 describe("CDP launch-mode browser e2e", () => {
 	afterEach(cleanupRuns);
 
@@ -67,9 +76,7 @@ describe("CDP launch-mode browser e2e", () => {
 				await closeContext(context);
 			}
 
-			await assertCapturedStorageSnapshot(context.captureDirectory, pageOrigin);
-			assertRunSummary(await context.loggerStdout.completed);
-			assertNetLog(await readNetLog(context.netLogPath));
+			await assertShutdownOutputs(context, pageOrigin);
 		},
 		BROWSER_E2E_TIMEOUT_MS,
 	);

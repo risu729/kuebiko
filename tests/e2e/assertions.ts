@@ -139,13 +139,24 @@ const assertCapturedDownload = async (
 // Everything asserted here comes from Storage, DOMStorage, and IndexedDB alone.
 // No page script runs for it.
 // It therefore proves those domains answer as the logger assumes at the end of a run.
+const readCapturedStorageSnapshot = async (
+	captureDirectory: string,
+): Promise<CapturedStorageSnapshot> => {
+	const file = Bun.file(join(captureDirectory, "storage-snapshot.json"));
+	expect(await file.exists()).toBe(true);
+
+	return (await file.json()) as CapturedStorageSnapshot;
+};
+
 const assertCapturedStorageSnapshot = async (
 	captureDirectory: string,
 	origin: string,
+	summaryOutput: string,
 ): Promise<void> => {
-	const file = Bun.file(join(captureDirectory, "storage-snapshot.json"));
-	expect(await file.exists()).toBe(true);
-	const snapshot = (await file.json()) as CapturedStorageSnapshot;
+	const snapshot = await readCapturedStorageSnapshot(captureDirectory);
+	// The summary line belongs here rather than in assertRunSummary: it is printed only
+	// For a run that took a snapshot, which is what this assertion already knows.
+	expect(summaryOutput).toContain("summary snapshot_origins=");
 
 	expect(snapshot.cookies?.map((cookie) => cookie.name)).toContain("e2e");
 	const captured = snapshot.origins?.find((entry) => entry.securityOrigin === origin);
@@ -161,7 +172,6 @@ const assertRunSummary = (output: string): void => {
 	expect(output).toContain("summary websocket_frames=");
 	expect(output).toContain("eventsource_messages=");
 	expect(output).toContain("downloads=");
-	expect(output).toContain("summary snapshot_origins=");
 };
 
 const readNetLog = async (path: string): Promise<NetLogRecord> => {

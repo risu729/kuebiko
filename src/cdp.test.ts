@@ -27,39 +27,56 @@ import type {
 } from "./types";
 
 class FakeClient extends EventEmitter {
+	// Every CDP method the logger sends, in order.
+	// It is also how the tests assert that no Runtime method beyond the resume is used.
+	sent: { method: string; params?: object | undefined; sessionId?: string | undefined }[] = [];
+
+	// A domain accessor is the other way into the client, so it records like send() does.
+	// Otherwise an assertion over `sent` would miss, say, a future client.Runtime.enable().
+	#domain =
+		<Result>(method: string, reply: () => Promise<Result>) =>
+		(params?: object, sessionId?: string): Promise<Result> => {
+			this.sent.push({ method, params, sessionId });
+			return reply();
+		};
+
 	Browser = {
-		close: mock(() => Promise.resolve()),
-		setDownloadBehavior: mock(() => Promise.resolve()),
+		close: mock(this.#domain("Browser.close", () => Promise.resolve())),
+		setDownloadBehavior: mock(this.#domain("Browser.setDownloadBehavior", () => Promise.resolve())),
 	};
 
 	Network = {
-		enable: mock(() => Promise.resolve()),
-		getRequestPostData: mock(() =>
-			Promise.resolve({
-				postData: '{"from":"getRequestPostData"}',
-			}),
+		enable: mock(this.#domain("Network.enable", () => Promise.resolve())),
+		getRequestPostData: mock(
+			this.#domain("Network.getRequestPostData", () =>
+				Promise.resolve({
+					postData: '{"from":"getRequestPostData"}',
+				}),
+			),
 		),
-		getResponseBody: mock(() =>
-			Promise.resolve({
-				base64Encoded: false,
-				body: '{"ok":true}',
-			}),
+		getResponseBody: mock(
+			this.#domain("Network.getResponseBody", () =>
+				Promise.resolve({
+					base64Encoded: false,
+					body: '{"ok":true}',
+				}),
+			),
 		),
-		streamResourceContent: mock(() => Promise.resolve({ bufferedData: "" })),
+		streamResourceContent: mock(
+			this.#domain("Network.streamResourceContent", () => Promise.resolve({ bufferedData: "" })),
+		),
 	};
 
 	Target = {
-		attachToTarget: mock(() => Promise.resolve({ sessionId: "session-1" })),
-		getTargets: mock(() => Promise.resolve({ targetInfos: [] })),
-		setAutoAttach: mock(() => Promise.resolve()),
-		setDiscoverTargets: mock(() => Promise.resolve()),
+		attachToTarget: mock(
+			this.#domain("Target.attachToTarget", () => Promise.resolve({ sessionId: "session-1" })),
+		),
+		getTargets: mock(this.#domain("Target.getTargets", () => Promise.resolve({ targetInfos: [] }))),
+		setAutoAttach: mock(this.#domain("Target.setAutoAttach", () => Promise.resolve())),
+		setDiscoverTargets: mock(this.#domain("Target.setDiscoverTargets", () => Promise.resolve())),
 	};
 
 	close = mock(() => Promise.resolve());
-
-	// Every raw CDP method the logger sends, in order.
-	// It is also how the tests assert that no Runtime method beyond the resume is used.
-	sent: { method: string; params?: object | undefined; sessionId?: string | undefined }[] = [];
 
 	// Answers a raw send: an Error rejects, a function is called with the params.
 	// Anything not listed resolves empty, the way a void CDP command does.
@@ -3304,6 +3321,71 @@ describe("CdpResponseLogger storage snapshot", () => {
 			expect.objectContaining({ error: "Snapshot stopped after 5ms.", event: "Storage.snapshot" }),
 		]);
 		expect(hooks.events.map((event) => event.event)).toContain("storage.snapshot");
+	});
+
+	// A browser that is connected but wedged answers Target.getTargets never.
+	// That call runs before the reader, so without a bound of its own it would hold
+	// Up plugin shutdown, the browser close, and the run summary forever.
+	it("stops waiting for the live target list at the deadline", async () => {
+		const client = new FakeClient();
+		const storage = createStorage();
+		const hooks = createHooks();
+		primeStorageReplies(client);
+		const logger = createSnapshotLogger(client, storage, { hooks, snapshotTimeoutMs: 5 });
+
+		await logger.start();
+		attachTarget(client, {
+			session: "session-1",
+			targetId: "target-1",
+			type: "page",
+			url: "https://example.test/app",
+		});
+		// The next Target.getTargets is the one the snapshot itself sends.
+		client.Target.getTargets.mockReturnValueOnce(Promise.withResolvers<never>().promise);
+		await waitForAsyncEvent();
+		await logger.snapshotStorage();
+
+		expect(storage.errors.map((error) => error.event)).toContain("Target.getTargets");
+		expect(storage.snapshots).toHaveLength(1);
+		expect(storage.snapshots[0]?.truncated).toBe(true);
+		expect(storage.snapshots[0]?.origins).toEqual([]);
+		expect(hooks.events.map((event) => event.event)).toContain("storage.snapshot");
+	});
+
+	// The race only abandons the read, so the reader has to stop itself.
+	// A record written after the deadline would reach a storage writer already closed.
+	it("sends and records nothing more once the deadline abandoned the read", async () => {
+		const client = new FakeClient();
+		const storage = createStorage();
+		primeStorageReplies(client);
+		// An origin checks the deadline only where it starts, so a DOM storage read that
+		// Answers after it used to leave the whole IndexedDB half of that origin running.
+		client.sendReplies.set("DOMStorage.getDOMStorageItems", async () => {
+			await Bun.sleep(50);
+			throw new Error("answered after the deadline");
+		});
+		const logger = createSnapshotLogger(client, storage, { snapshotTimeoutMs: 5 });
+
+		await logger.start();
+		attachTarget(client, {
+			session: "session-1",
+			targetId: "target-1",
+			type: "page",
+			url: "https://example.test/app",
+		});
+		await waitForAsyncEvent();
+		await logger.snapshotStorage();
+		const sentAtDeadline = sentMethods(client);
+		await Bun.sleep(100);
+
+		expect(sentMethods(client)).toEqual(sentAtDeadline);
+		expect(sentMethods(client)).not.toContain("IndexedDB.enable");
+		expect(storage.errors.map((error) => error.event)).toEqual(["Storage.snapshot"]);
+		expect(storage.snapshots).toHaveLength(1);
+		expect(storage.snapshots[0]?.origins[0]).toMatchObject({
+			databases: [],
+			securityOrigin: "https://example.test",
+		});
 	});
 
 	// The browser being gone is the normal launch-mode race, not a reason to crash.

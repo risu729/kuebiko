@@ -336,12 +336,14 @@ const createStorage = async (
 		},
 		// A point-in-time document, not a stream of events.
 		// It is therefore written whole once instead of appended to line by line.
+		// The summary counts only what the file holds, so a failed write prints no
+		// Snapshot line for a file that does not exist.
 		recordStorageSnapshot: async (snapshot: StorageSnapshot) => {
-			summary.recordStorageSnapshot(countStorageSnapshot(snapshot));
 			await Bun.write(
 				join(runDirectory, STORAGE_SNAPSHOT_FILE),
 				`${JSON.stringify(snapshot, null, "\t")}\n`,
 			);
+			summary.recordStorageSnapshot(countStorageSnapshot(snapshot));
 
 			return STORAGE_SNAPSHOT_FILE;
 		},

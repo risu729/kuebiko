@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 
-import { DEFAULT_CDP_ENDPOINT, parseArgs, renderHelp } from "./index";
+import { DEFAULT_CDP_ENDPOINT, parseArgs, renderHelp, stopRun } from "./index";
 
 describe("parseArgs", () => {
 	it("uses defaults", () => {
@@ -98,6 +98,10 @@ describe("parseArgs", () => {
 		expect(parseArgs(["--capture-downloads"]).captureDownloads).toBe(true);
 	});
 
+	it("parses the storage snapshot opt-in", () => {
+		expect(parseArgs(["--snapshot-storage"]).snapshotStorage).toBe(true);
+	});
+
 	it("rejects unknown flags", () => {
 		expect(() => parseArgs(["--wat"])).toThrow("Unknown argument: --wat");
 	});
@@ -116,5 +120,57 @@ describe("parseArgs", () => {
 	it("renders local help output", () => {
 		expect(renderHelp()).toContain("kuebiko [options]");
 		expect(renderHelp()).toContain("--no-plugins");
+	});
+});
+
+describe("stopRun", () => {
+	// The snapshot needs both the browser and the CDP connection, which the steps
+	// After it take away, so its place in this order is the whole design.
+	it("snapshots storage before the plugins stop and the browser closes", async () => {
+		const calls: string[] = [];
+		const record = (name: string) => (): Promise<void> => {
+			calls.push(name);
+			return Promise.resolve();
+		};
+
+		await stopRun({
+			browser: { close: record("browser.close") },
+			logger: {
+				close: record("logger.close"),
+				closeBrowser: record("logger.closeBrowser"),
+				snapshotStorage: record("logger.snapshotStorage"),
+			},
+			plugins: { close: record("plugins.close"), stopping: record("plugins.stopping") },
+			storage: { close: record("storage.close"), summary: { render: () => "summary responses=0" } },
+		} as unknown as Parameters<typeof stopRun>[0]);
+
+		expect(calls).toEqual([
+			"logger.snapshotStorage",
+			"plugins.stopping",
+			"browser.close",
+			"logger.close",
+			"plugins.close",
+			"storage.close",
+		]);
+	});
+
+	// A teardown step that throws is reported, not rethrown, so the rest still runs.
+	it("keeps stopping after a failing snapshot", async () => {
+		const calls: string[] = [];
+		const record = (name: string) => (): Promise<void> => {
+			calls.push(name);
+			return Promise.resolve();
+		};
+
+		await stopRun({
+			logger: {
+				close: record("logger.close"),
+				closeBrowser: record("logger.closeBrowser"),
+				snapshotStorage: () => Promise.reject(new Error("snapshot failed")),
+			},
+			plugins: { close: record("plugins.close"), stopping: record("plugins.stopping") },
+		} as unknown as Parameters<typeof stopRun>[0]);
+
+		expect(calls).toEqual(["plugins.stopping", "logger.close", "plugins.close"]);
 	});
 });

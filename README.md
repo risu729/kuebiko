@@ -52,8 +52,8 @@ Launch mode and the logger are passive by default:
   logger sends `Runtime.runIfWaitingForDebugger` for that target session; it
   does not otherwise use the Runtime domain.
 
-`--snapshot-storage` adds three domains, and it is opt-in. It does not change
-browser behavior and it is not observable from page script:
+`--snapshot-storage` adds three domains, and it is opt-in. It executes no page
+script and changes no browser setting:
 
 - It enables `DOMStorage` and `IndexedDB` on the page and iframe target sessions
   it reads, and only for the moment it reads them, at the very end of the run.
@@ -65,6 +65,20 @@ browser behavior and it is not observable from page script:
   them: there is still no `Runtime.enable` and no `Runtime.evaluate`, which is
   exactly why the snapshot is done this way rather than by evaluating
   `localStorage` or an IndexedDB cursor in the page.
+
+Two things about it are nevertheless visible from inside the browser, and both
+are accepted rather than worked around:
+
+- Reading IndexedDB opens a real connection and a readonly transaction on the
+  page's own database. A `versionchange` upgrade the page starts at the same
+  moment can therefore see a transient `blocked` event, for the moment at the
+  end of the run in which the store is read.
+- Each value CDP hands back is wrapped in a remote object that stays pinned in
+  the renderer's inspector object group. Releasing it would take
+  `Runtime.releaseObjectGroup`, which this tool deliberately does not call, so
+  the group is left un-released and the browser frees it when the connection
+  goes away. That is a documented gap, not an oversight: no Runtime method is
+  worth adding for it.
 
 `--capture-downloads` is the one exception, and it is opt-in. That flag does
 change browser behavior rather than only observing it:
@@ -363,7 +377,10 @@ from the URL each target had when it attached, which for a page is usually
 has no target to ask on, and its web storage is not reachable from the pages the
 run observed. Each origin is read on its own target session, which is also what
 makes `sessionStorage` belong to the tab it came from. An origin open in several
-tabs is read once. Worker targets are skipped, along with `about:`, `chrome:`,
+tabs is read once, so only the first of those tabs contributes its
+`sessionStorage`. Every read addresses storage by security origin, which Chrome
+resolves to a first-party storage key, so partitioned third-party storage is not
+what comes back. Worker targets are skipped, along with `about:`, `chrome:`,
 `devtools:`, and extension targets, none of which have web storage the storage
 domains can address by origin.
 
@@ -381,8 +398,9 @@ The snapshot is bounded so shutdown cannot hang or run out of memory on a large
 database: at most 20 origins, 20 databases per origin, 20 object stores per
 database, 500 entries per object store, 5000 entries in total, and a 15 second
 deadline for the whole snapshot. Every cap that drops something sets `truncated`
-on the file, an object store that had more sets its own `hasMore`, and an origin
-that had more databases records `truncatedDatabases`, so a short read is visible
+on the file, an object store that had more sets its own `hasMore`, an origin
+that had more databases records `truncatedDatabases`, and a database that had
+more object stores records `truncatedObjectStores`, so a short read is visible
 rather than looking like empty storage. There is no paging past the first page
 of an object store.
 
@@ -887,13 +905,23 @@ mise run compile
 - The snapshot covers the origins of attached page and iframe targets only, and
   it is a single point in time at shutdown. Storage of an origin whose tab was
   closed earlier in the run is not in it, and neither is storage of an origin
-  the run only made requests to. Partitioned third-party storage is read on the
-  frame's own target session, so a frame that never attached is not covered.
+  the run only made requests to. A tab that navigated across origins contributes
+  only the origin it ended on.
+- An origin open in several tabs is read once, on the first session seen for it.
+  `localStorage` and IndexedDB are shared by those tabs anyway, but
+  `sessionStorage` is not: the other tabs' `sessionStorage` is silently absent
+  from the file, with nothing marking it as missing.
+- Every read addresses storage by security origin, which Chrome resolves to a
+  first-party storage key. Partitioned third-party storage is therefore not
+  covered: a cross-site iframe's partitioned `localStorage`, `sessionStorage`,
+  and IndexedDB are not what comes back, even when that frame attached and was
+  read on its own session.
 - The snapshot caps what it reads: 20 origins, 20 databases per origin, 20
   object stores per database, 500 entries per object store, 5000 entries in
   total, and a 15 second deadline. It never pages past the first page of an
-  object store. Everything dropped is flagged with `truncated`, `hasMore`, or
-  `truncatedDatabases` rather than being silently missing.
+  object store. Everything dropped is flagged with `truncated`, `hasMore`,
+  `truncatedDatabases`, or `truncatedObjectStores` rather than being silently
+  missing.
 - This tool does not parse, analyze, classify, or display responses.
 - Plugins are trusted local code running in the logger process. They are useful
   for local real-time consumers, but they are not sandboxed.

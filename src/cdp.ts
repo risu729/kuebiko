@@ -258,6 +258,24 @@ const finishesWithin = async (work: Promise<void>, timeout: number): Promise<boo
 	}
 };
 
+// The same bound for work that answers with a value instead of only finishing.
+// A timeout answers with the fallback; the abandoned work is left to settle unused.
+const resolvesWithin = async <Value>(
+	work: Promise<Value>,
+	timeout: number,
+	fallback: Value,
+): Promise<Value> => {
+	const { promise, resolve } = Promise.withResolvers<Value>();
+	const timer = setTimeout(() => {
+		resolve(fallback);
+	}, timeout);
+	try {
+		return await Promise.race([work, promise]);
+	} finally {
+		clearTimeout(timer);
+	}
+};
+
 // Web storage is keyed by origin, so only an http(s) target has any to read.
 // Targets on about:, chrome:, devtools:, and extension schemes are left out.
 const snapshotOriginOf = (url: string | undefined): string | undefined => {
@@ -470,6 +488,10 @@ const headerValue = (
 // Each read answers with a fallback instead of throwing, so one failed origin
 // Cannot lose the rest of the file.
 class StorageSnapshotReader {
+	// Set when the caller's deadline race gave up on this reader.
+	// Only some steps watch the deadline, so an abandoned read would otherwise keep
+	// Enabling domains and recording errors on a storage writer the run has closed.
+	#aborted = false;
 	readonly #deadline: number;
 	// Entries read so far across the whole snapshot, against MAX_SNAPSHOT_ENTRIES.
 	#entries = 0;
@@ -501,6 +523,12 @@ class StorageSnapshotReader {
 		});
 	}
 
+	// Stops the reader from sending or recording anything else.
+	// The caller calls this once its own race around read() has been decided.
+	abort(): void {
+		this.#aborted = true;
+	}
+
 	#expired(): boolean {
 		if (Date.now() < this.#deadline) {
 			return false;
@@ -517,10 +545,16 @@ class StorageSnapshotReader {
 		origin: SnapshotOrigin | undefined,
 		fallback: Result,
 	): Promise<Result> {
+		if (this.#aborted) {
+			return fallback;
+		}
+
 		try {
 			return (await this.#send(method, params, origin?.sessionId)) as Result;
 		} catch (error) {
-			await this.#recordError(method, error, origin);
+			if (!this.#aborted) {
+				await this.#recordError(method, error, origin);
+			}
 			return fallback;
 		}
 	}
@@ -529,12 +563,18 @@ class StorageSnapshotReader {
 	// They are read.
 	// A run without the flag never enables them at all.
 	async #enable(domain: string, origin: SnapshotOrigin): Promise<boolean> {
+		if (this.#aborted) {
+			return false;
+		}
+
 		const method = `${domain}.enable`;
 		try {
 			await this.#send(method, {}, origin.sessionId);
 			return true;
 		} catch (error) {
-			await this.#recordError(method, error, origin);
+			if (!this.#aborted) {
+				await this.#recordError(method, error, origin);
+			}
 			return false;
 		}
 	}
@@ -544,9 +584,12 @@ class StorageSnapshotReader {
 	// Nothing narrows the answer to the origins below: a stored session usually needs
 	// Cookies of an API host that was never navigated to, which has no target at all.
 	async #readCookies(): Promise<void> {
+		// Every request below is annotated with its protocol type, because the widened
+		// Send() would otherwise accept a misspelled parameter until it reached Chrome.
+		const params: Protocol.Storage.GetCookiesRequest = {};
 		const { cookies } = await this.#call<Protocol.Storage.GetCookiesResponse>(
 			"Storage.getCookies",
-			{},
+			params,
 			undefined,
 			{ cookies: [] },
 		);
@@ -584,9 +627,12 @@ class StorageSnapshotReader {
 		origin: SnapshotOrigin,
 		isLocalStorage: boolean,
 	): Promise<Record<string, string> | undefined> {
+		const params: Protocol.DOMStorage.GetDOMStorageItemsRequest = {
+			storageId: { isLocalStorage, securityOrigin: origin.securityOrigin },
+		};
 		const entries = await this.#call<Protocol.DOMStorage.GetDOMStorageItemsResponse | undefined>(
 			"DOMStorage.getDOMStorageItems",
-			{ storageId: { isLocalStorage, securityOrigin: origin.securityOrigin } },
+			params,
 			origin,
 			undefined,
 		);
@@ -599,9 +645,12 @@ class StorageSnapshotReader {
 			return;
 		}
 
+		const params: Protocol.IndexedDB.RequestDatabaseNamesRequest = {
+			securityOrigin: origin.securityOrigin,
+		};
 		const { databaseNames } = await this.#call<Protocol.IndexedDB.RequestDatabaseNamesResponse>(
 			"IndexedDB.requestDatabaseNames",
-			{ securityOrigin: origin.securityOrigin },
+			params,
 			origin,
 			{ databaseNames: [] },
 		);
@@ -621,9 +670,13 @@ class StorageSnapshotReader {
 		origin: SnapshotOrigin,
 		databaseName: string,
 	): Promise<IndexedDbDatabaseSnapshot> {
+		const params: Protocol.IndexedDB.RequestDatabaseRequest = {
+			databaseName,
+			securityOrigin: origin.securityOrigin,
+		};
 		const database = await this.#call<Protocol.IndexedDB.RequestDatabaseResponse | undefined>(
 			"IndexedDB.requestDatabase",
-			{ databaseName, securityOrigin: origin.securityOrigin },
+			params,
 			origin,
 			undefined,
 		);
@@ -664,17 +717,18 @@ class StorageSnapshotReader {
 			return { ...shape, entries: [], hasMore: true };
 		}
 
+		// No indexName is sent, which is what asks for the object store itself.
+		// Chrome reads an empty one as a request for an index and fails the call.
+		const params: Protocol.IndexedDB.RequestDataRequest = {
+			databaseName,
+			objectStoreName: store.name,
+			pageSize,
+			securityOrigin: origin.securityOrigin,
+			skipCount: 0,
+		};
 		const data = await this.#call<Protocol.IndexedDB.RequestDataResponse | undefined>(
 			"IndexedDB.requestData",
-			// No indexName is sent, which is what asks for the object store itself.
-			// Chrome reads an empty one as a request for an index and fails the call.
-			{
-				databaseName,
-				objectStoreName: store.name,
-				pageSize,
-				securityOrigin: origin.securityOrigin,
-				skipCount: 0,
-			},
+			params,
 			origin,
 			undefined,
 		);
@@ -758,6 +812,9 @@ class CdpResponseLogger {
 		}
 
 		const timeout = this.#options.snapshotTimeoutMs ?? SNAPSHOT_TIMEOUT_MS;
+		// One deadline covers the whole snapshot, target lookup included, so shutdown
+		// Waits for this step at most once.
+		const deadline = Date.now() + timeout;
 		const snapshot: StorageSnapshot = {
 			cookies: [],
 			origins: [],
@@ -767,7 +824,7 @@ class CdpResponseLogger {
 		const reader = new StorageSnapshotReader(
 			this.#client,
 			snapshot,
-			Date.now() + timeout,
+			deadline,
 			async (event, error, origin) => {
 				await this.#recordCaptureError(
 					createErrorRecord(event, undefined, error, undefined, origin?.securityOrigin),
@@ -777,9 +834,12 @@ class CdpResponseLogger {
 
 		const origins = collectSnapshotOrigins(
 			this.#sessions.values(),
-			await this.#currentTargetUrls(),
+			await this.#currentTargetUrls(timeout),
 		);
-		if (!(await finishesWithin(reader.read(origins), timeout))) {
+		const remaining = Math.max(deadline - Date.now(), 0);
+		if (!(await finishesWithin(reader.read(origins), remaining))) {
+			// The race only abandons the read; this is what stops the reader itself.
+			reader.abort();
 			snapshot.truncated = true;
 			await this.#recordCaptureError(
 				createErrorRecord("Storage.snapshot", undefined, `Snapshot stopped after ${timeout}ms.`),
@@ -792,8 +852,31 @@ class CdpResponseLogger {
 	// A session only ever recorded the URL its target had when it attached.
 	// A page target usually attaches on about:blank and navigates afterwards.
 	// The live target list is therefore what says which origin each session is on now.
+	// A browser that is connected but wedged answers this call never, and it runs before
+	// The reader's deadline guards anything, so it carries the same bound itself.
+	// Timing out leaves the map empty, exactly like a failure does.
+	async #currentTargetUrls(timeout: number): Promise<Map<string, string>> {
+		const urls = await resolvesWithin<Map<string, string> | undefined>(
+			this.#requestTargetUrls(),
+			timeout,
+			undefined,
+		);
+		if (urls !== undefined) {
+			return urls;
+		}
+		await this.#recordCaptureError(
+			createErrorRecord(
+				"Target.getTargets",
+				undefined,
+				`Target.getTargets stopped after ${timeout}ms.`,
+			),
+		);
+
+		return new Map();
+	}
+
 	// A failure leaves the map empty, so the attach-time URLs answer instead.
-	async #currentTargetUrls(): Promise<Map<string, string>> {
+	async #requestTargetUrls(): Promise<Map<string, string>> {
 		try {
 			const { targetInfos } = await this.#client.Target.getTargets({});
 			return new Map(targetInfos.map((info) => [info.targetId, info.url]));
