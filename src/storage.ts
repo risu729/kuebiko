@@ -36,6 +36,9 @@ type RunInfo = {
 	note?: string | undefined;
 	pid: number;
 	runDirectory: string;
+	// Records whether bodies came from Network.streamResourceContent.
+	// That also explains why every streamed body line reports base64Encoded true.
+	streamBodies: boolean;
 	tool: string;
 	version: string;
 };
@@ -43,6 +46,7 @@ type RunInfo = {
 // How the run was started: the owner's free-form description plus capture settings.
 type RunAnnotations = Pick<RunInfo, "labels" | "note"> & {
 	captureCookies?: boolean | undefined;
+	streamBodies?: boolean | undefined;
 };
 
 // Only the run owner reads the summary, so it stays off the LoggerStorage contract.
@@ -120,6 +124,8 @@ const createRunInfo = (
 	note: annotations.note?.trim() ? annotations.note : undefined,
 	pid: process.pid,
 	runDirectory,
+	// Always present too, so the directory says how its bodies were retrieved.
+	streamBodies: annotations.streamBodies ?? false,
 	tool: TOOL_NAME,
 	version: TOOL_VERSION,
 });
@@ -195,12 +201,13 @@ const createStorage = async (
 		}
 	};
 
-	const recordBody = async (
+	// A streamed body is assembled as bytes already.
+	// Saving them here avoids re-encoding to base64 only to decode it again.
+	const recordBodyBytes = async (
 		state: RequestState,
-		body: Protocol.Network.GetResponseBodyResponse,
-	): Promise<BodySaveResult & { base64Encoded: boolean }> => {
+		bytes: Uint8Array,
+	): Promise<BodySaveResult> => {
 		try {
-			const bytes = bodyToBytes(body);
 			bodyCounter += 1;
 			const { filename, sha256: bodySha256 } = await saveBytes(
 				bodiesDirectory,
@@ -212,7 +219,6 @@ const createStorage = async (
 			summary.recordSavedResponseBody(bytes.byteLength);
 
 			return {
-				base64Encoded: body.base64Encoded,
 				bodyFile: relativeBodyPath(filename),
 				bodyLength: bytes.byteLength,
 				bodySaved: true,
@@ -220,12 +226,20 @@ const createStorage = async (
 			};
 		} catch (error) {
 			return {
-				base64Encoded: body.base64Encoded,
 				bodySaved: false,
 				error: errorMessage(error),
 			};
 		}
 	};
+
+	// How CDP delivered the body is recorded verbatim, saved or not.
+	const recordBody = async (
+		state: RequestState,
+		body: Protocol.Network.GetResponseBodyResponse,
+	): Promise<BodySaveResult & { base64Encoded: boolean }> => ({
+		...(await recordBodyBytes(state, bodyToBytes(body))),
+		base64Encoded: body.base64Encoded,
+	});
 
 	return {
 		close: async () => {
@@ -240,6 +254,7 @@ const createStorage = async (
 		},
 		recordRequestBody,
 		recordBody,
+		recordBodyBytes,
 		recordCompletedResponse: async (record: CompletedResponseMetadata) => {
 			if (record.redirect === true) {
 				summary.recordRedirectHop();

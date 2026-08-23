@@ -19,7 +19,6 @@ type CliArgDefinition = {
 	valueHint?: string | undefined;
 };
 
-// The subset of node:util parseArgs option config that the CLI definitions use.
 type ParseOption = {
 	default?: boolean | string;
 	multiple?: boolean;
@@ -115,6 +114,10 @@ const cliArgs = {
 		description: "Load plugins from --config.",
 		type: "boolean",
 	},
+	"stream-bodies": {
+		description: "Assemble bodies from Network.streamResourceContent (experimental).",
+		type: "boolean",
+	},
 	verbose: {
 		description: "Print verbose status logs.",
 		type: "boolean",
@@ -181,6 +184,7 @@ const CliOptionsSchema: z.ZodType<CliOptions> = z
 		// That deviates on purpose from the optionalNonEmptyString flags such as --out.
 		note: z.optional(z.string()).transform((value) => parseNonEmptyText(value, "--note")),
 		out: optionalNonEmptyString,
+		streamBodies: z.boolean(),
 		verbose: z.boolean(),
 		version: z.boolean(),
 	})
@@ -238,6 +242,7 @@ const normalizeArgs = (args: LoggerArgs): CliOptions =>
 		noPlugins: args.plugins === false,
 		note: args.note,
 		out: args.out,
+		streamBodies: args["stream-bodies"] ?? false,
 		verbose: args.verbose ?? false,
 		version: args.version ?? false,
 	});
@@ -263,7 +268,6 @@ const parseRawArgs = (argv: string[]): LoggerArgs => {
 		options: createParseOptions(),
 		strict: true,
 	});
-
 	return values as LoggerArgs;
 };
 
@@ -277,12 +281,11 @@ const formatOption = (name: string, definition: CliArgDefinition): string => {
 		definition.type === "boolean"
 			? `--${definition.default === true ? "no-" : ""}${name}`
 			: `--${name} <${definition.valueHint ?? "value"}>`;
-
 	return `  ${flag.padEnd(24)} ${definition.description}`;
 };
 
-const renderHelp = (): string => {
-	const lines = [
+const renderHelp = (): string =>
+	`${[
 		`${TOOL_NAME} [options]`,
 		"",
 		"Save CDP response bodies and metadata.",
@@ -291,10 +294,7 @@ const renderHelp = (): string => {
 		...Object.entries(cliArgs).map(([name, definition]) => formatOption(name, definition)),
 		"  --help, -h               Show help",
 		"  --version, -v            Show version",
-	];
-
-	return `${lines.join("\n")}\n`;
-};
+	].join("\n")}\n`;
 
 export { DEFAULT_CDP_ENDPOINT, TOOL_VERSION, cliArgs, normalizeArgs, parseArgs, renderHelp };
 export { READY_MESSAGE } from "./constants";

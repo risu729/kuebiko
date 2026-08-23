@@ -56,6 +56,7 @@ const createStorage = (runDirectory: string): LoggerStorage & { errors: ErrorRec
 		recordBody: mock((): Promise<BodySaveResult & { base64Encoded: boolean }> =>
 			Promise.resolve({ base64Encoded: false, bodySaved: true }),
 		),
+		recordBodyBytes: mock((): Promise<BodySaveResult> => Promise.resolve({ bodySaved: true })),
 		recordCompletedResponse: mock(() => Promise.resolve()),
 		recordError: mock((error) => {
 			errors.push(error);

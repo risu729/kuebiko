@@ -18,6 +18,7 @@ import type { LoggerConfig, LoggerPluginConfig } from "./config";
 import { createPluginHost } from "./plugins";
 import { getDefaultBaseDirectory, getDefaultCaptureDirectory } from "./sanitize";
 import { createStorage } from "./storage";
+import type { RunAnnotations } from "./storage";
 import type { CliOptions, HookEvent, HookEventName, LoggerPlugin, PluginContext } from "./types";
 
 const waitForShutdown = (): Promise<void> =>
@@ -69,6 +70,14 @@ const startConfiguredBrowser = async (
 	return browser;
 };
 
+// How the run was started, recorded in run.json next to the capture files.
+const getRunAnnotations = (options: CliOptions): RunAnnotations => ({
+	captureCookies: options.captureCookies,
+	labels: options.labels,
+	note: options.note,
+	streamBodies: options.streamBodies,
+});
+
 const runLogger = async (options: CliOptions): Promise<void> => {
 	const out = options.out ?? getDefaultCaptureDirectory();
 	await mkdir(out, { recursive: true });
@@ -78,13 +87,8 @@ const runLogger = async (options: CliOptions): Promise<void> => {
 	let logger: undefined | Awaited<ReturnType<typeof startCdpLogger>>;
 	let plugins: undefined | Awaited<ReturnType<typeof createPluginHost>>;
 	try {
-		storage = await createStorage(out, cdp, {
-			captureCookies: options.captureCookies,
-			labels: options.labels,
-			note: options.note,
-		});
-		process.stdout.write(`capture_dir=${storage.runDirectory}\n`);
-		process.stdout.write(`cdp=${cdp}\n`);
+		storage = await createStorage(out, cdp, getRunAnnotations(options));
+		process.stdout.write(`capture_dir=${storage.runDirectory}\ncdp=${cdp}\n`);
 
 		plugins = await createPluginHost({
 			configPath: options.config,
@@ -100,6 +104,7 @@ const runLogger = async (options: CliOptions): Promise<void> => {
 			include: options.include,
 			maxBodyBytes: options.maxBodyBytes,
 			storage,
+			streamBodies: options.streamBodies,
 			verbose: options.verbose,
 		});
 		process.stdout.write(`${READY_MESSAGE}\n`);

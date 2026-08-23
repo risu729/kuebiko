@@ -21,6 +21,7 @@ type CliOptions = {
 	noPlugins: boolean;
 	note?: string | undefined;
 	out?: string | undefined;
+	streamBodies: boolean;
 	verbose: boolean;
 	version: boolean;
 };
@@ -33,8 +34,7 @@ type SessionInfo = {
 };
 
 // Raw wire headers and cookie diagnostics, only collected with --capture-cookies.
-// Both ExtraInfo events can arrive before or after the base event they belong to.
-// The logger therefore buffers this same shape while waiting for that base event.
+// Either ExtraInfo event can precede its base event, so the logger buffers this shape.
 type ExtraInfoState = {
 	blockedCookies?: Protocol.Network.BlockedSetCookieWithReason[] | undefined;
 	cookiePartitionKey?: Protocol.Network.CookiePartitionKey | undefined;
@@ -75,8 +75,7 @@ type RequestBodySource = "requestWillBeSent" | "getRequestPostData";
 
 type RequestBodySaveResult = BodySaveResult & { source: RequestBodySource };
 
-// Carries the response body result verbatim; only the skip flag stays internal.
-// The raw ExtraInfo fields sit next to the refined headers, absent without the flag.
+// Carries the body result verbatim minus the internal skip flag; raw ExtraInfo fields sit beside the refined headers, absent without the flag.
 type CompletedResponseMetadata = Omit<BodySaveResult, "skipped"> & {
 	base64Encoded?: boolean | undefined;
 	encodedDataLength?: number | undefined;
@@ -88,8 +87,7 @@ type CompletedResponseMetadata = Omit<BodySaveResult, "skipped"> & {
 	protocol?: string | undefined;
 	// Set on redirect hops only; a terminal response never carries it.
 	redirect?: boolean | undefined;
-	// Present on every record of a request that redirected, hops being 0-based.
-	// The terminal response takes the index after the last hop.
+	// On every record of a request that redirected, hops 0-based; terminal takes the next index.
 	redirectIndex?: number | undefined;
 	remoteIPAddress?: string | undefined;
 	remotePort?: number | undefined;
@@ -244,19 +242,20 @@ type HookPublisher = {
 	publish: (event: HookEvent) => Promise<void>;
 };
 
-type LoggerStorage = {
+// Storage owns the run directory, so it also identifies the run to every hook event.
+type LoggerStorage = RunRef & {
 	close: () => Promise<void>;
 	recordRequestBody: (state: RequestState, postData: string) => Promise<RequestBodySaveResult>;
 	recordBody: (
 		state: RequestState,
 		body: Protocol.Network.GetResponseBodyResponse,
 	) => Promise<BodySaveResult & { base64Encoded: boolean }>;
+	// Bytes already assembled, saved without the base64 round-trip recordBody needs.
+	recordBodyBytes: (state: RequestState, bytes: Uint8Array) => Promise<BodySaveResult>;
 	recordCompletedResponse: (metadata: CompletedResponseMetadata) => Promise<void>;
 	recordError: (error: ErrorRecord) => Promise<void>;
 	recordEventSourceMessage: (message: EventSourceMessageRecord) => Promise<void>;
 	recordWebSocketFrame: (frame: WebSocketFrameRecord) => Promise<void>;
-	runDirectory: string;
-	runTimestamp: string;
 };
 
 type StartLoggerOptions = {
@@ -267,6 +266,7 @@ type StartLoggerOptions = {
 	hooks?: HookPublisher | undefined;
 	include?: RegExp | undefined;
 	maxBodyBytes?: number | undefined;
+	streamBodies?: boolean | undefined;
 	storage: LoggerStorage;
 	verbose: boolean;
 };
