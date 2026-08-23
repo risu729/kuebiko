@@ -712,26 +712,28 @@ class CdpResponseLogger {
 	async #handleDetached(event: TargetDetachedEvent): Promise<void> {
 		const session = this.#sessions.get(event.sessionId);
 		this.#sessions.delete(event.sessionId);
-		let dropped = 0;
-
-		for (const [key, state] of this.#requests) {
-			if (state.session.sessionId === event.sessionId) {
-				this.#requests.delete(key);
-				this.#hopWrites.delete(key);
-				dropped += 1;
-			}
-		}
-
-		// Neither map is keyed by session.
-		// Buffered ExtraInfo whose base event never arrives would outlive its session.
-		// A stream whose loadingFinished never comes would keep its partial buffer alive.
+		// Every counted map is keyed by session and request id, so one prefix sweeps them all.
+		// Request state is only ever stored under the key built from the session it names.
+		// The prefix assumes no session id is itself a prefix of another, as Chrome's hex ids are not.
+		// What each map would otherwise leak past its session counts as its own dropped record.
+		// That is a request nothing can complete, or buffered ExtraInfo no base event will claim.
+		// It is a stream still filling its buffer too, or a socket url nothing else would delete.
 		const sessionPrefix = `${event.sessionId}:`;
-		for (const keyed of [this.#webSockets, this.#extraInfo, this.#streams]) {
+		let dropped = 0;
+		for (const keyed of [this.#requests, this.#extraInfo, this.#streams, this.#webSockets]) {
 			for (const key of keyed.keys()) {
 				if (key.startsWith(sessionPrefix)) {
 					keyed.delete(key);
 					dropped += 1;
 				}
+			}
+		}
+
+		// A hop write in flight belongs to a request the loop above already counted.
+		// Counting it again would inflate the dropped total, so it is swept on its own.
+		for (const key of this.#hopWrites.keys()) {
+			if (key.startsWith(sessionPrefix)) {
+				this.#hopWrites.delete(key);
 			}
 		}
 
@@ -1143,23 +1145,36 @@ class CdpResponseLogger {
 		applyResponseExtraInfo(this.#pendingExtraInfo(key), event);
 	}
 
+	// A request ends at loadingFinished or at loadingFailed, and both end it the same way.
+	// Every map keyed under it is dropped, whether or not the handler goes on to record.
+	// Buffered ExtraInfo has no base event left to join, so it is dropped without being read.
+	// Taking them together is what keeps the next map from being forgotten in one of the two.
+	#takeRequest(key: string): {
+		hopWrites: Promise<void> | undefined;
+		state: RequestState | undefined;
+		stream: StreamAccumulator | undefined;
+	} {
+		const taken = {
+			hopWrites: this.#hopWrites.get(key),
+			state: this.#requests.get(key),
+			stream: this.#streams.get(key),
+		};
+		this.#requests.delete(key);
+		this.#hopWrites.delete(key);
+		this.#extraInfo.delete(key);
+		this.#streams.delete(key);
+
+		return taken;
+	}
+
 	async #handleLoadingFinished(event: LoadingFinishedEvent, sessionId?: string): Promise<void> {
 		if (!sessionId) {
 			return;
 		}
-		const key = requestKey(sessionId, event.requestId);
-		const state = this.#requests.get(key);
-		const stream = this.#streams.get(key);
-		// The request is over either way, so nothing buffered under it can still be joined.
-		this.#extraInfo.delete(key);
-		this.#streams.delete(key);
+		const { hopWrites, state, stream } = this.#takeRequest(requestKey(sessionId, event.requestId));
 		if (!state) {
 			return;
 		}
-
-		const hopWrites = this.#hopWrites.get(key);
-		this.#requests.delete(key);
-		this.#hopWrites.delete(key);
 
 		const url = state.response?.url ?? state.requestUrl;
 		if (!matchesFilters(url, this.#options.include, this.#options.exclude)) {
@@ -1361,13 +1376,7 @@ class CdpResponseLogger {
 		if (!sessionId) {
 			return;
 		}
-		const key = requestKey(sessionId, event.requestId);
-		const state = this.#requests.get(key);
-		const hopWrites = this.#hopWrites.get(key);
-		this.#requests.delete(key);
-		this.#hopWrites.delete(key);
-		this.#extraInfo.delete(key);
-		this.#streams.delete(key);
+		const { hopWrites, state } = this.#takeRequest(requestKey(sessionId, event.requestId));
 
 		// Hops that already completed belong in the capture before the failure.
 		await hopWrites;
