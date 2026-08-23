@@ -2836,6 +2836,37 @@ describe("CdpResponseLogger", () => {
 		expect(storage.errors).toHaveLength(0);
 	});
 
+	// The reset used to share the one second drain budget and discard its result, so a
+	// Browser too busy to answer was abandoned in silence and kept saving downloads into
+	// A finished run directory with nothing in errors.ndjson to say so.
+	it("records an unanswered download behavior reset before the connection closes", async () => {
+		const client = new FakeClient();
+		const storage = createStorage();
+		const unanswered = Promise.withResolvers<void>();
+		const setDownloadBehavior = client.Browser.setDownloadBehavior as Mock<
+			(params?: object) => Promise<void>
+		>;
+		const logger = new CdpResponseLogger(client as never, {
+			captureDownloads: true,
+			cdp: "http://127.0.0.1:9222",
+			resetTimeoutMs: 5,
+			storage,
+			verbose: false,
+		});
+
+		await logger.start();
+		setDownloadBehavior.mockImplementation(() => unanswered.promise);
+		await logger.close();
+		unanswered.resolve();
+
+		expect(storage.errors).toContainEqual(
+			expect.objectContaining({
+				error: expect.stringContaining("did not answer within 5ms"),
+				event: "Browser.setDownloadBehavior",
+			}),
+		);
+	});
+
 	it("records a completed download whose file storage could not read", async () => {
 		const client = new FakeClient();
 		const storage = createStorage();
