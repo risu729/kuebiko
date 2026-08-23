@@ -747,14 +747,15 @@ class CdpResponseLogger {
 			// Several of the swept maps can hold an entry for the very same request.
 			// A websocket holds an entry here without ever having had request state.
 			// The total therefore counts dropped state entries, not active requests.
-			await this.#recordCaptureError({
-				error: `Target detached with ${dropped} dropped capture state ${dropped === 1 ? "entry" : "entries"}.`,
-				event: "Target.detachedFromTarget",
-				sessionId: event.sessionId,
-				targetId: session.targetId,
-				timestamp: nowIso(),
-				url: session.targetUrl,
-			});
+			await this.#recordCaptureError(
+				createErrorRecord(
+					"Target.detachedFromTarget",
+					session,
+					`Target detached with ${dropped} dropped capture state ${dropped === 1 ? "entry" : "entries"}.`,
+					undefined,
+					session.targetUrl,
+				),
+			);
 		}
 	}
 
@@ -1380,15 +1381,16 @@ class CdpResponseLogger {
 
 		// Hops that already completed belong in the capture before the failure.
 		await hopWrites;
-		await this.#recordCaptureError({
-			error: event.errorText,
-			event: "Network.loadingFailed",
-			requestId: event.requestId,
-			sessionId,
-			targetId: state?.session.targetId,
-			timestamp: nowIso(),
-			url: state?.response?.url ?? state?.requestUrl,
-		});
+		// A failure with no request state left names the session it arrived on and nothing more.
+		await this.#recordCaptureError(
+			createErrorRecord(
+				"Network.loadingFailed",
+				state?.session ?? { sessionId },
+				event.errorText,
+				event.requestId,
+				state?.response?.url ?? state?.requestUrl,
+			),
+		);
 	}
 
 	// Network.webSocketCreated carries the socket URL, and it is the only event that does.
@@ -1545,12 +1547,16 @@ class CdpResponseLogger {
 
 		const record = await this.#recordDownload(event, state, pending);
 		if (record.error !== undefined) {
-			await this.#recordCaptureError({
-				error: record.error,
-				event: "Browser.downloadProgress",
-				timestamp: nowIso(),
-				url: record.url,
-			});
+			// Downloads are browser-wide, so this one belongs to no session at all.
+			await this.#recordCaptureError(
+				createErrorRecord(
+					"Browser.downloadProgress",
+					undefined,
+					record.error,
+					undefined,
+					record.url,
+				),
+			);
 		}
 		// Only a saved download has a file to hand a plugin, so only it publishes.
 		if (record.state === "completed" && record.file !== undefined) {
@@ -1569,15 +1575,15 @@ class CdpResponseLogger {
 		if (!sessionId) {
 			return;
 		}
-		await this.#recordCaptureError({
-			error: event.errorMessage,
-			event: "Network.webSocketFrameError",
-			requestId: event.requestId,
-			sessionId,
-			targetId: this.#sessions.get(sessionId)?.targetId,
-			timestamp: nowIso(),
-			url: this.#webSockets.get(requestKey(sessionId, event.requestId)),
-		});
+		await this.#recordCaptureError(
+			createErrorRecord(
+				"Network.webSocketFrameError",
+				this.#sessions.get(sessionId) ?? { sessionId },
+				event.errorMessage,
+				event.requestId,
+				this.#webSockets.get(requestKey(sessionId, event.requestId)),
+			),
+		);
 	}
 }
 
