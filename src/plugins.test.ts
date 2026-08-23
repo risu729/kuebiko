@@ -242,6 +242,57 @@ export default defineConfig({
 		).resolves.toBe("call\ncall\n");
 	});
 
+	// One call is bounded by callWithTimeout and nothing bounded the backlog behind it, so
+	// A full queue of slow calls held close() for queueSize times timeoutMs: over an hour
+	// At the defaults, with the writers still open and the summary unprinted behind it.
+	it("bounds the shutdown drain and records what its budget dropped", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "kuebiko-plugin-"));
+		const runDirectory = join(dir, "run");
+		await Bun.write(
+			join(dir, "config.ts"),
+			`import { defineConfig } from ${JSON.stringify(packageEntryUrl)};
+
+export default defineConfig({
+      plugins: [{ module: "./hanging.ts", queueSize: 20, timeoutMs: 100 }]
+    });`,
+		);
+		await Bun.write(
+			join(dir, "hanging.ts"),
+			`export default {
+      id: "hanging-plugin",
+      version: "0.1.0",
+      events: ["response.completed"],
+      onEvent() {
+        return new Promise(() => {});
+      },
+    };`,
+		);
+		const storage = createStorage(runDirectory);
+		const host = await createPluginHost({
+			configPath: join(dir, "config.ts"),
+			disabled: false,
+			storage,
+			verbose: false,
+		});
+		const event = createResponseEvent(runDirectory);
+
+		for (let index = 0; index < 20; index += 1) {
+			await host.publish(event);
+		}
+		const started = Date.now();
+		await host.close();
+
+		// One budget for the whole backlog, not one per queued event.
+		expect(Date.now() - started).toBeLessThan(20 * 100);
+		expect(storage.errors).toContainEqual(
+			expect.objectContaining({
+				error: expect.stringContaining("dropped 19 queued event(s)"),
+				event: "Plugin.shutdownTimeout",
+				pluginId: "hanging-plugin",
+			}),
+		);
+	});
+
 	it("records plugin queue overflow and timeout errors without throwing", async () => {
 		const dir = await mkdtemp(join(tmpdir(), "kuebiko-plugin-"));
 		const runDirectory = join(dir, "run");

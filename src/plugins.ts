@@ -300,6 +300,8 @@ class PluginRuntime {
 	readonly #recordError: (record: ErrorRecord) => Promise<void>;
 	readonly #timeoutMs: number;
 	#closed = false;
+	// Set by close() only: the moment the whole shutdown drain stops taking new events.
+	#deadline: number | undefined;
 	#drainPromise: Promise<void> | undefined;
 	#queue: HookEvent[] = [];
 
@@ -367,14 +369,47 @@ class PluginRuntime {
 		this.#drainPromise ??= this.#startDrain();
 	}
 
+	// One call is bounded by callWithTimeout, and nothing bounded the backlog behind it:
+	// A full queue of slow calls held shutdown for queueSize times timeoutMs, minutes at
+	// The defaults, with the writers still open and the summary unprinted behind it.
+	// The whole drain therefore gets one budget, the same one a single call gets.
 	async close(): Promise<void> {
 		this.#closed = true;
+		this.#deadline = Date.now() + this.#timeoutMs;
 		// A drain that restarted for the events still queued has to finish here too.
 		while (this.#drainPromise !== undefined) {
 			await this.#drainPromise;
 		}
+		await this.#recordDroppedQueue();
 		if (this.#plugin.close) {
 			await this.#callPlugin("Plugin.close", () => this.#plugin.close?.(this.#context));
+		}
+	}
+
+	// Only close() sets a deadline, so nothing bounds the drain during capture.
+	// The call already running when it passes is still bounded by callWithTimeout.
+	#expired(): boolean {
+		return this.#deadline !== undefined && Date.now() >= this.#deadline;
+	}
+
+	// What the budget left behind is dropped here, while errors.ndjson is still open,
+	// So the loss is visible rather than silent.
+	async #recordDroppedQueue(): Promise<void> {
+		const dropped = this.#queue.length;
+		if (dropped === 0) {
+			return;
+		}
+
+		this.#queue = [];
+		try {
+			await this.#recordError({
+				error: `Plugin shutdown exceeded ${this.#timeoutMs}ms; dropped ${dropped} queued event(s).`,
+				event: "Plugin.shutdownTimeout",
+				pluginId: this.#plugin.id,
+				timestamp: nowIso(),
+			});
+		} catch {
+			// A failed error record must not skip the plugin's own close() as well.
 		}
 	}
 
@@ -387,7 +422,7 @@ class PluginRuntime {
 
 	async #drain(): Promise<void> {
 		try {
-			while (this.#queue.length > 0) {
+			while (this.#queue.length > 0 && !this.#expired()) {
 				const event = this.#queue.shift();
 				if (!event) {
 					continue;
@@ -399,7 +434,8 @@ class PluginRuntime {
 			this.#drainPromise = undefined;
 			// Restarted even while closing: a drain that stopped on a failed error record
 			// Would otherwise drop everything still queued without recording that either.
-			if (this.#queue.length > 0) {
+			// The shutdown budget is what ends the restarts, not the close() call itself.
+			if (this.#queue.length > 0 && !this.#expired()) {
 				this.#drainPromise = this.#startDrain();
 			}
 		}
