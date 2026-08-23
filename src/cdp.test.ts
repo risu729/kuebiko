@@ -2612,8 +2612,12 @@ describe("CdpResponseLogger", () => {
 
 		expect(storage.recordBody).not.toHaveBeenCalled();
 		expect(storage.metadata).toHaveLength(0);
+		// One request held both request state and a stream buffer, so two entries went with it.
 		expect(storage.errors).toContainEqual(
-			expect.objectContaining({ event: "Target.detachedFromTarget" }),
+			expect.objectContaining({
+				error: "Target detached with 2 dropped capture state entries.",
+				event: "Target.detachedFromTarget",
+			}),
 		);
 	});
 
@@ -2963,7 +2967,7 @@ describe("CdpResponseLogger", () => {
 
 		expect(storage.errors).toEqual([
 			expect.objectContaining({
-				error: "Target detached before 1 active request(s) completed.",
+				error: "Target detached with 1 dropped capture state entry.",
 				event: "Target.detachedFromTarget",
 				sessionId: "session-1",
 			}),

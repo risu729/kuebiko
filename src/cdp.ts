@@ -1193,8 +1193,11 @@ class CdpResponseLogger {
 		// Recording those would bury the detaches that did drop capture state.
 		// It would bury them in errors.ndjson and in the per-host breakdown alike.
 		if (session && dropped > 0) {
+			// Several of the swept maps can hold an entry for the very same request.
+			// A websocket holds an entry here without ever having had request state.
+			// The total therefore counts dropped state entries, not active requests.
 			await this.#recordCaptureError({
-				error: `Target detached before ${dropped} active request(s) completed.`,
+				error: `Target detached with ${dropped} dropped capture state ${dropped === 1 ? "entry" : "entries"}.`,
 				event: "Target.detachedFromTarget",
 				sessionId: event.sessionId,
 				targetId: session.targetId,
