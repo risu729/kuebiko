@@ -1,6 +1,15 @@
 import { describe, expect, it } from "bun:test";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 
-import { DEFAULT_CDP_ENDPOINT, parseArgs, renderHelp, stopRun } from "./index";
+import {
+	DEFAULT_CDP_ENDPOINT,
+	awaitShutdown,
+	forceQuitOnSignal,
+	parseArgs,
+	renderHelp,
+	stopRun,
+} from "./index";
 
 describe("parseArgs", () => {
 	it("uses defaults", () => {
@@ -123,6 +132,35 @@ describe("parseArgs", () => {
 	});
 });
 
+describe("awaitShutdown", () => {
+	// The listeners used to stay installed after the race, overriding the default handling.
+	// The first Ctrl-C during teardown therefore did nothing at all.
+	it("removes its listeners when the logger closes first", async () => {
+		const before = {
+			message: process.listenerCount("message"),
+			sigint: process.listenerCount("SIGINT"),
+			sigterm: process.listenerCount("SIGTERM"),
+		};
+
+		await awaitShutdown(Promise.resolve());
+
+		expect(process.listenerCount("SIGINT")).toBe(before.sigint);
+		expect(process.listenerCount("SIGTERM")).toBe(before.sigterm);
+		expect(process.listenerCount("message")).toBe(before.message);
+	});
+
+	it("removes its listeners when the shutdown request wins", async () => {
+		const before = process.listenerCount("SIGINT");
+		const never = Promise.withResolvers<void>();
+		const shutdown = awaitShutdown(never.promise);
+
+		process.emit("message", "shutdown");
+		await shutdown;
+
+		expect(process.listenerCount("SIGINT")).toBe(before);
+	});
+});
+
 describe("stopRun", () => {
 	// The snapshot needs both the browser and the CDP connection, which the steps
 	// After it take away, so its place in this order is the whole design.
@@ -172,5 +210,50 @@ describe("stopRun", () => {
 		} as unknown as Parameters<typeof stopRun>[0]);
 
 		expect(calls).toEqual(["plugins.stopping", "logger.close", "plugins.close"]);
+	});
+});
+
+describe("forceQuitOnSignal", () => {
+	// Teardown takes as long as the browser makes it take, so a second signal leaves at once.
+	// That drops the summary and aborts the writes in flight, which is the trade asked for.
+	// The trade only holds if the handler really does exit.
+	it("exits on the next signal instead of waiting for teardown", async () => {
+		const moduleUrl = pathToFileURL(join(import.meta.dir, "index.ts")).href;
+		const script = `
+			import { forceQuitOnSignal } from ${JSON.stringify(moduleUrl)};
+
+			forceQuitOnSignal();
+			process.stdout.write("armed");
+			setInterval(() => {}, 1_000);
+		`;
+		const child = Bun.spawn([process.execPath, "-e", script], {
+			stderr: "pipe",
+			stdout: "pipe",
+		});
+		if (!(child.stdout instanceof ReadableStream) || !(child.stderr instanceof ReadableStream)) {
+			throw new Error("The helper process was spawned without pipes.");
+		}
+		const reader = child.stdout.getReader();
+		await reader.read();
+		reader.releaseLock();
+
+		child.kill("SIGINT");
+		await child.exited;
+
+		// 130 is the shell's own code for a process ended by SIGINT.
+		expect(child.exitCode).toBe(130);
+		await expect(new Response(child.stderr).text()).resolves.toContain(
+			"shutdown interrupted; exiting now",
+		);
+	});
+
+	// The handler is removed once teardown is over.
+	// A signal after the run then behaves the way it does in any other process.
+	it("removes its listeners when teardown finishes", () => {
+		const before = process.listenerCount("SIGINT");
+
+		forceQuitOnSignal()();
+
+		expect(process.listenerCount("SIGINT")).toBe(before);
 	});
 });
