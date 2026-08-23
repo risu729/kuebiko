@@ -286,12 +286,14 @@ export default defineConfig({
 		expect(Date.now() - started).toBeLessThan(1_000);
 		const dropped = storage.errors.find((error) => error.event === "Plugin.shutdownTimeout");
 		expect(dropped?.pluginId).toBe("hanging-plugin");
-		// How many calls fit inside the budget is a matter of scheduling; that the queue
-		// Behind them is dropped rather than waited out is what the budget guarantees.
+		// Every call to this plugin runs the full 100ms before callWithTimeout ends it, so
+		// The 100ms budget fits two of them at the very most, and a slower machine fits one.
+		// The drain shifts its first event before close() sets the budget, so one is always
+		// Taken. That leaves 18 or 19 dropped, whatever the scheduling.
 		const count = Number(
 			/dropped (?<count>\d+) queued/u.exec(dropped?.error ?? "")?.groups?.["count"],
 		);
-		expect(count).toBeGreaterThan(10);
+		expect(count).toBeGreaterThan(17);
 		expect(count).toBeLessThan(20);
 	});
 

@@ -51,8 +51,12 @@ const awaitShutdown = async (closed: Promise<void>): Promise<void> => {
 	}
 };
 
-// Teardown drains capture work, which takes as long as it takes. A second signal is
-// The user saying they are done waiting, so it leaves instead of being swallowed.
+// Teardown drains capture work, which takes as long as it takes.
+// A second signal is the user saying they are done waiting, so it leaves at once instead
+// Of being swallowed.
+// Leaving aborts the writes still in flight: the summary is never printed, and the last
+// Line of an NDJSON file can be a partial one.
+// Writes are serialized per writer, so that is at most one trailing line per file.
 const forceQuitOnSignal = (): (() => void) => {
 	const onSignal = (): void => {
 		process.stderr.write("shutdown interrupted; exiting now\n");
@@ -213,6 +217,7 @@ export {
 	awaitShutdown,
 	cliArgs,
 	defineConfig,
+	forceQuitOnSignal,
 	getRunAnnotations,
 	main,
 	normalizeArgs,

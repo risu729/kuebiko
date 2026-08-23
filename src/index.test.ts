@@ -1,8 +1,11 @@
 import { describe, expect, it } from "bun:test";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 import {
 	DEFAULT_CDP_ENDPOINT,
 	awaitShutdown,
+	forceQuitOnSignal,
 	getRunAnnotations,
 	parseArgs,
 	renderHelp,
@@ -326,5 +329,50 @@ describe("stopRun", () => {
 		} as unknown as Parameters<typeof stopRun>[0]);
 
 		expect(calls).toEqual(["plugins.stopping", "logger.close", "plugins.close"]);
+	});
+});
+
+describe("forceQuitOnSignal", () => {
+	// Teardown can take as long as the browser makes it take, so a second signal leaves at
+	// Once. That drops the summary and aborts the writes in flight, which is a trade the
+	// User asked for, but it only holds if the handler really does exit.
+	it("exits on the next signal instead of waiting for teardown", async () => {
+		const moduleUrl = pathToFileURL(join(import.meta.dir, "index.ts")).href;
+		const script = `
+			import { forceQuitOnSignal } from ${JSON.stringify(moduleUrl)};
+
+			forceQuitOnSignal();
+			process.stdout.write("armed");
+			setInterval(() => {}, 1_000);
+		`;
+		const child = Bun.spawn([process.execPath, "-e", script], {
+			stderr: "pipe",
+			stdout: "pipe",
+		});
+		if (!(child.stdout instanceof ReadableStream) || !(child.stderr instanceof ReadableStream)) {
+			throw new Error("The helper process was spawned without pipes.");
+		}
+		const reader = child.stdout.getReader();
+		await reader.read();
+		reader.releaseLock();
+
+		child.kill("SIGINT");
+		await child.exited;
+
+		// 130 is the shell's own code for a process ended by SIGINT.
+		expect(child.exitCode).toBe(130);
+		await expect(new Response(child.stderr).text()).resolves.toContain(
+			"shutdown interrupted; exiting now",
+		);
+	});
+
+	// The handler is removed once teardown is over, so a signal after the run behaves the
+	// Way it does in any other process.
+	it("removes its listeners when teardown finishes", () => {
+		const before = process.listenerCount("SIGINT");
+
+		forceQuitOnSignal()();
+
+		expect(process.listenerCount("SIGINT")).toBe(before);
 	});
 });
