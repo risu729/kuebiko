@@ -2034,6 +2034,24 @@ type StartedCdpLogger = {
 	snapshotStorage: () => Promise<void>;
 };
 
+// Starting changes browser behavior before it is finished.
+// With --capture-downloads the browser already saves into this run directory by the time
+// The target calls run, and either of those calls can still throw.
+// A throw there left the user's own Chrome naming every later download after a GUID and
+// Writing it into a dead run, with the CDP client still connected.
+// Nothing else undoes either, because the run never sees a logger it could close.
+const startLogger = async (logger: CdpResponseLogger): Promise<void> => {
+	try {
+		await logger.start();
+	} catch (error) {
+		// Closing is the undo already written: it restores the behavior and closes the client.
+		// Its own failure must not replace the error that actually ended the run.
+		// Whatever it could not do is recorded in errors.ndjson by the call that failed.
+		await logger.close().catch(() => undefined);
+		throw error;
+	}
+};
+
 const startCdpLogger = async (options: StartLoggerOptions): Promise<StartedCdpLogger> => {
 	const endpoint = new URL(options.cdp);
 	const connectionOptions = {
@@ -2047,7 +2065,7 @@ const startCdpLogger = async (options: StartLoggerOptions): Promise<StartedCdpLo
 		client.on("disconnect", () => resolve());
 	});
 	const logger = new CdpResponseLogger(client, options);
-	await logger.start();
+	await startLogger(logger);
 	return {
 		close: () => logger.close(),
 		closeBrowser: () => client.Browser.close(),
@@ -2068,4 +2086,5 @@ export {
 	collectSnapshotOrigins,
 	createCompletedMetadata,
 	startCdpLogger,
+	startLogger,
 };

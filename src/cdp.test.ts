@@ -12,6 +12,7 @@ import {
 	NETWORK_BUFFER_OPTIONS,
 	collectSnapshotOrigins,
 	createCompletedMetadata,
+	startLogger,
 } from "./cdp";
 import type { HookEvent, HookPublisher } from "./plugins";
 import type {
@@ -3685,5 +3686,52 @@ describe("CdpResponseLogger storage snapshot", () => {
 				event: "Storage.snapshot",
 			}),
 		]);
+	});
+});
+
+describe("startLogger", () => {
+	// --capture-downloads points the user's own Chrome at this run directory before the
+	// Target calls run, and a throw there left the run with no logger to close.
+	// Chrome kept naming every later download after a GUID and writing it into a dead run.
+	it("restores the download behavior when starting fails", async () => {
+		const client = new FakeClient();
+		const storage = createStorage();
+		client.Target.setAutoAttach.mockImplementationOnce(() =>
+			Promise.reject(new Error("Target.setAutoAttach failed")),
+		);
+		const logger = createDownloadLogger(client, storage);
+
+		await expect(startLogger(logger)).rejects.toThrow("Target.setAutoAttach failed");
+
+		expect(client.Browser.setDownloadBehavior.mock.calls.map(([params]) => params)).toEqual([
+			expect.objectContaining({ behavior: "allowAndName", eventsEnabled: true }),
+			{ behavior: "default" },
+		]);
+		// The client is a socket this process owns, so a failed start must not leak it.
+		expect(client.close).toHaveBeenCalled();
+	});
+
+	// The unguarded Target.getTargets is the other call that can end start().
+	it("closes the client when attaching to existing targets fails", async () => {
+		const client = new FakeClient();
+		const storage = createStorage();
+		client.Target.getTargets.mockImplementationOnce(() =>
+			Promise.reject(new Error("Target.getTargets failed")),
+		);
+		const logger = createDownloadLogger(client, storage);
+
+		await expect(startLogger(logger)).rejects.toThrow("Target.getTargets failed");
+
+		expect(client.close).toHaveBeenCalled();
+	});
+
+	it("leaves a successful start untouched", async () => {
+		const client = new FakeClient();
+		const storage = createStorage();
+		const logger = createDownloadLogger(client, storage);
+
+		await expect(startLogger(logger)).resolves.toBeUndefined();
+
+		expect(client.close).not.toHaveBeenCalled();
 	});
 });
