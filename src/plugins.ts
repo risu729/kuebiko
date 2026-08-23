@@ -360,6 +360,8 @@ const createResponseCompletedHookEvent = (
 		encodedDataLength: metadata.encodedDataLength,
 		headers: metadata.responseHeaders,
 		mimeType: metadata.mimeType,
+		redirect: metadata.redirect,
+		redirectIndex: metadata.redirectIndex,
 		status: metadata.status,
 		statusText: metadata.statusText,
 	},

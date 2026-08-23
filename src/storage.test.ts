@@ -120,8 +120,37 @@ describe("createStorage", () => {
 
 		expect(storage.summary.render().split("\n")).toEqual([
 			"summary responses=1 response_bytes=11 requests=1 request_bytes=5",
-			"summary websocket_frames=1 errors=1",
+			"summary websocket_frames=1 redirects=0 errors=1",
 			"summary_errors host=example.test total=1 Network.getResponseBody=1",
+		]);
+	});
+
+	it("counts redirect hops in the run summary without counting them as bodies", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "kuebiko-"));
+		const storage = await createStorage(dir, "http://127.0.0.1:9222", {}, "2026-07-06T12:34:56Z");
+
+		await storage.recordCompletedResponse({
+			bodySaved: false,
+			redirect: true,
+			redirectIndex: 0,
+			requestId: "request-1",
+			runTimestamp: "2026-07-06T12:34:56Z",
+			sessionId: "session-1",
+			status: 302,
+		});
+		await storage.recordCompletedResponse({
+			bodySaved: false,
+			redirectIndex: 1,
+			requestId: "request-1",
+			runTimestamp: "2026-07-06T12:34:56Z",
+			sessionId: "session-1",
+			status: 200,
+		});
+		await storage.close();
+
+		expect(storage.summary.render().split("\n")).toEqual([
+			"summary responses=0 response_bytes=0 requests=0 request_bytes=0",
+			"summary websocket_frames=0 redirects=1 errors=0",
 		]);
 	});
 

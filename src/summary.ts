@@ -4,6 +4,7 @@ type EventCounts = Map<string, number>;
 
 type CaptureSummary = {
 	recordError: (record: ErrorRecord) => void;
+	recordRedirectHop: () => void;
 	recordSavedRequestBody: (byteLength: number) => void;
 	recordSavedResponseBody: (byteLength: number) => void;
 	recordWebSocketFrame: () => void;
@@ -74,6 +75,7 @@ const createCaptureSummary = (): CaptureSummary => {
 	const errorsByHost = new Map<string, EventCounts>();
 	let errorCount = 0;
 	let frameCount = 0;
+	let redirectHops = 0;
 	let requestBodies = 0;
 	let requestBytes = 0;
 	let responseBodies = 0;
@@ -81,7 +83,7 @@ const createCaptureSummary = (): CaptureSummary => {
 
 	const renderTotals = (): string[] => [
 		`summary responses=${responseBodies} response_bytes=${responseBytes} requests=${requestBodies} request_bytes=${requestBytes}`,
-		`summary websocket_frames=${frameCount} errors=${errorCount}`,
+		`summary websocket_frames=${frameCount} redirects=${redirectHops} errors=${errorCount}`,
 	];
 
 	return {
@@ -91,6 +93,10 @@ const createCaptureSummary = (): CaptureSummary => {
 			const events = errorsByHost.get(bucket) ?? new Map<string, number>();
 			increment(events, record.event);
 			errorsByHost.set(bucket, events);
+		},
+		// Redirect hops carry no body, so they would otherwise miss every total.
+		recordRedirectHop: (): void => {
+			redirectHops += 1;
 		},
 		recordSavedRequestBody: (byteLength: number): void => {
 			requestBodies += 1;

@@ -228,6 +228,9 @@ const createStorage = async (
 		recordRequestBody,
 		recordBody,
 		recordCompletedResponse: async (record: CompletedResponseMetadata) => {
+			if (record.redirect === true) {
+				summary.recordRedirectHop();
+			}
 			await metadata.append(record);
 		},
 		recordError: async (record: ErrorRecord) => {
