@@ -51,6 +51,8 @@ type StartLoggerOptions = {
 	hooks?: HookPublisher | undefined;
 	include?: RegExp | undefined;
 	maxBodyBytes?: number | undefined;
+	// Overrides the download-behavior reset budget; only tests need anything but the default.
+	resetTimeoutMs?: number | undefined;
 	// Reads the storage domains once at the end of the run; nothing is enabled before.
 	snapshotStorage?: boolean | undefined;
 	// Overrides the snapshot deadline; only tests need anything but the default.
@@ -144,6 +146,9 @@ const NETWORK_BUFFER_OPTIONS = {
 
 const CDP_CLOSE_TIMEOUT_MS = 5_000;
 const CDP_DRAIN_TIMEOUT_MS = 1_000;
+// Restoring the download behavior is one command sent to a browser that outlives the run.
+// It gets a round-trip budget instead of the drain budget it used to share.
+const CDP_RESET_TIMEOUT_MS = 5_000;
 // The writers close right after the drain, so a late append from a handler is refused.
 // Its record never reaches the file the summary already counted it in.
 // Hashing a download or assembling a large streamed body takes far longer than the rest.
@@ -862,7 +867,7 @@ class CdpResponseLogger {
 
 	async close(): Promise<void> {
 		// The override has to go back before the connection that installed it is closed.
-		await settlesWithin(this.#resetDownloadBehavior(), CDP_DRAIN_TIMEOUT_MS);
+		await this.#restoreDownloadBehavior();
 		const closing = this.#client.close();
 		if (!(await settlesWithin(closing, CDP_CLOSE_TIMEOUT_MS))) {
 			terminateClientSocket(this.#client);
@@ -880,6 +885,24 @@ class CdpResponseLogger {
 			);
 		}
 		await this.#recordAbandonedEvents();
+	}
+
+	// Restoring the default is a command round trip, not a drain, so it gets its own budget.
+	// A browser too busy to answer within it used to be abandoned in silence.
+	// That left the user's own Chrome saving every later download into a finished run.
+	async #restoreDownloadBehavior(): Promise<void> {
+		const budget = this.#options.resetTimeoutMs ?? CDP_RESET_TIMEOUT_MS;
+		if (await settlesWithin(this.#resetDownloadBehavior(), budget)) {
+			return;
+		}
+
+		await this.#recordCaptureError(
+			createErrorRecord(
+				"Browser.setDownloadBehavior",
+				undefined,
+				`Restoring the default download behavior did not answer within ${budget}ms; the browser may still save downloads into ${this.#downloadDirectory()}.`,
+			),
+		);
 	}
 
 	// A handler that outlived both budgets is abandoned here, and the writers close next.
@@ -2013,6 +2036,23 @@ type StartedCdpLogger = {
 	snapshotStorage: () => Promise<void>;
 };
 
+// Starting changes browser behavior before it is finished.
+// With --capture-downloads the browser saves into this run directory from early on.
+// Either call after that can still throw, and the run then never sees a logger at all.
+// Chrome was left naming every later download after a GUID and writing it into a dead run.
+// The CDP client was left connected with nothing to close it.
+const startLogger = async (logger: CdpResponseLogger): Promise<void> => {
+	try {
+		await logger.start();
+	} catch (error) {
+		// Closing is the undo already written: it restores the behavior and closes the client.
+		// Its own failure must not replace the error that actually ended the run.
+		// Whatever it could not do is recorded in errors.ndjson by the call that failed.
+		await logger.close().catch(() => undefined);
+		throw error;
+	}
+};
+
 const startCdpLogger = async (options: StartLoggerOptions): Promise<StartedCdpLogger> => {
 	const endpoint = new URL(options.cdp);
 	const connectionOptions = {
@@ -2026,7 +2066,7 @@ const startCdpLogger = async (options: StartLoggerOptions): Promise<StartedCdpLo
 		client.on("disconnect", () => resolve());
 	});
 	const logger = new CdpResponseLogger(client, options);
-	await logger.start();
+	await startLogger(logger);
 	return {
 		close: () => logger.close(),
 		closeBrowser: () => client.Browser.close(),
@@ -2047,4 +2087,5 @@ export {
 	collectSnapshotOrigins,
 	createCompletedMetadata,
 	startCdpLogger,
+	startLogger,
 };
