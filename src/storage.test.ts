@@ -1,9 +1,9 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, spyOn } from "bun:test";
 import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { bodyToBytes, createStorage, sha256 } from "./storage";
+import { bodyToBytes, createNdjsonWriter, createStorage, sha256 } from "./storage";
 import type { RunInfo } from "./storage";
 import type { RequestState, StorageSnapshot } from "./types";
 
@@ -19,6 +19,62 @@ describe("bodyToBytes", () => {
 		expect(Buffer.from(bodyToBytes({ base64Encoded: false, body: "hello" })).toString()).toBe(
 			"hello",
 		);
+	});
+});
+
+describe("createNdjsonWriter", () => {
+	// One record the writer cannot serialize used to reject every later append with the
+	// Same error, without ever writing them, so a healthy file recorded nothing again.
+	it("keeps recording after a record that cannot be serialized", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "kuebiko-"));
+		const path = join(dir, "metadata.ndjson");
+		const writer = createNdjsonWriter(path);
+		const cyclic: Record<string, unknown> = {};
+		cyclic["self"] = cyclic;
+
+		await writer.append({ line: 1 });
+		await expect(writer.append(cyclic)).rejects.toThrow();
+		await writer.append({ line: 3 });
+		await writer.close();
+
+		await expect(Bun.file(path).text()).resolves.toBe('{"line":1}\n{"line":3}\n');
+		// The file itself never failed, so nothing is reported against it.
+		expect(writer.failure()).toBeUndefined();
+	});
+
+	// A write error destroys the stream, which used to end the file for the whole run.
+	// A missing parent directory is the deterministic way to fail exactly one write.
+	it("reopens the file after a failed write and appends to it", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "kuebiko-"));
+		const path = join(dir, "late", "metadata.ndjson");
+		const writer = createNdjsonWriter(path);
+
+		await expect(writer.append({ line: 1 })).rejects.toThrow();
+		await mkdir(join(dir, "late"));
+		await writer.append({ line: 2 });
+		await writer.append({ line: 3 });
+		await writer.close();
+
+		await expect(Bun.file(path).text()).resolves.toBe('{"line":2}\n{"line":3}\n');
+		// Recovering does not erase the loss: the failed line is still gone.
+		expect(writer.failure()).toContain("ENOENT");
+	});
+
+	// A poisoned chain reported the first failure again for every later append.
+	it("reports each failed append against its own write", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "kuebiko-"));
+		const path = join(dir, "errors.ndjson");
+		await mkdir(path);
+		const writer = createNdjsonWriter(path);
+
+		const first = await writer.append({ line: 1 }).catch((error: unknown) => error);
+		const second = await writer.append({ line: 2 }).catch((error: unknown) => error);
+		await expect(writer.close()).resolves.toBeUndefined();
+
+		expect(first).toBeInstanceOf(Error);
+		expect(second).toBeInstanceOf(Error);
+		expect(second).not.toBe(first);
+		expect(writer.failure()).toContain("EISDIR");
 	});
 });
 
@@ -317,6 +373,41 @@ describe("createStorage", () => {
 		expect(storage.summary.render()).toContain(
 			"summary_errors host=example.test total=1 Target.detachedFromTarget=1",
 		);
+	});
+
+	// A writer that died mid-run closes without rejecting, so allSettled saw nothing.
+	// The run would then print counts for a file that stopped recording at t=0.
+	it("reports a writer that stopped recording in the summary and on stderr", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "kuebiko-"));
+		await mkdir(join(dir, "errors.ndjson"));
+		const storage = await createStorage(dir, "http://127.0.0.1:9222", {}, "2026-07-06T12:34:56Z");
+		const stderr = spyOn(process.stderr, "write").mockReturnValue(true);
+
+		await expect(
+			storage.recordError({
+				error: "No data found for resource with given identifier",
+				event: "Network.getResponseBody",
+				timestamp: "2026-07-06T12:34:57Z",
+				url: "https://example.test/api",
+			}),
+		).rejects.toThrow();
+		// The other writers are untouched, so only the dead one is named.
+		await storage.recordWebSocketFrame({
+			direction: "received",
+			opcode: 1,
+			payloadData: "ping",
+			requestId: "request-2",
+			sessionId: "session-1",
+			timestamp: "2026-07-06T12:34:57Z",
+		});
+		await storage.close();
+		const written = stderr.mock.calls.map(([line]) => String(line)).join("");
+		stderr.mockRestore();
+
+		expect(written).toContain("writer errors.ndjson failed:");
+		expect(written).toContain("EISDIR");
+		expect(storage.summary.render()).toContain("summary_writers errors=failed");
+		expect(storage.summary.render()).not.toContain("websocket=failed");
 	});
 
 	// Without a listener on the writer, a failing write emits an unhandled "error".

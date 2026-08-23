@@ -11,6 +11,8 @@ type CaptureSummary = {
 	recordSavedResponseBody: (byteLength: number) => void;
 	recordStorageSnapshot: (counts: StorageSnapshotCounts) => void;
 	recordWebSocketFrame: () => void;
+	// A record file that stopped recording, named after the writer that failed.
+	recordWriterFailure: (name: string) => void;
 	render: () => string;
 };
 
@@ -93,10 +95,13 @@ const countStorageSnapshot = (snapshot: StorageSnapshot): StorageSnapshotCounts 
 };
 
 // One tally keeps the counters together as more record kinds are captured.
+// The failed writers ride along: they say which of those counts reached no file.
 type RecordCounts = {
 	downloads: number;
 	errors: number;
 	eventSourceMessages: number;
+	// Names of the record files that stopped recording, empty in a healthy run.
+	failedWriters: Set<string>;
 	redirectHops: number;
 	requestBodies: number;
 	requestBytes: number;
@@ -104,6 +109,13 @@ type RecordCounts = {
 	responseBytes: number;
 	webSocketFrames: number;
 };
+
+// A failed writer means the run counted records that its file never received.
+// The line is printed only when one failed, so a healthy run reads as before.
+const renderWriterFailures = (failed: Set<string>): string[] =>
+	failed.size === 0
+		? []
+		: [`summary_writers ${[...failed].map((name) => `${name}=failed`).join(" ")}`];
 
 // Saved bodies first, then the records that have no body of their own.
 // The snapshot line is printed only when one was taken, so a normal run is unchanged.
@@ -120,12 +132,14 @@ const renderTotals = (
 				`summary snapshot_origins=${snapshot.origins} cookies=${snapshot.cookies} items=${snapshot.items} databases=${snapshot.databases} entries=${snapshot.entries}`,
 			]),
 	`summary errors=${counts.errors}`,
+	...renderWriterFailures(counts.failedWriters),
 ];
 
 const createRecordCounts = (): RecordCounts => ({
 	downloads: 0,
 	errors: 0,
 	eventSourceMessages: 0,
+	failedWriters: new Set<string>(),
 	redirectHops: 0,
 	requestBodies: 0,
 	requestBytes: 0,
@@ -174,6 +188,10 @@ const createCaptureSummary = (): CaptureSummary => {
 		},
 		recordWebSocketFrame: (): void => {
 			counts.webSocketFrames += 1;
+		},
+		// One line per run whatever a writer failed on, so repeats do not accumulate.
+		recordWriterFailure: (name: string): void => {
+			counts.failedWriters.add(name);
 		},
 		render: (): string =>
 			[...renderTotals(counts, snapshotCounts), ...renderHostLines(errorsByHost)].join("\n"),

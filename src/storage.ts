@@ -25,6 +25,8 @@ import type {
 type NdjsonWriter = {
 	append: (record: unknown) => Promise<void>;
 	close: () => Promise<void>;
+	// The first failure this writer hit, kept so a dead file stays visible after the run.
+	failure: () => string | undefined;
 };
 
 // Only storage writes run.json, so its shape stays with the writer.
@@ -82,34 +84,63 @@ const errorMessage = (error: unknown): string =>
 	error instanceof Error ? error.message : String(error);
 
 const createNdjsonWriter = (path: string): NdjsonWriter => {
-	const stream = createWriteStream(path, { flags: "a" });
 	// A failing write both rejects the write callback and emits "error".
 	// The callback is what append() and close() already report through.
 	// The event only needs a listener so it cannot take the capture down.
-	stream.on("error", () => undefined);
+	const open = (): ReturnType<typeof createWriteStream> => {
+		// Append mode is what lets a reopened stream keep adding to the same file.
+		const opened = createWriteStream(path, { flags: "a" });
+		opened.on("error", () => undefined);
+		return opened;
+	};
+	let stream = open();
+	// Never rejects: a failed append must not become the error every later one reports.
 	let pending = Promise.resolve();
+	let failure: string | undefined = undefined;
 
-	const writeLine = (line: string): Promise<void> =>
-		new Promise((resolve, reject) => {
-			stream.write(line, (error) => {
+	const writeLine = (line: string): Promise<void> => {
+		// A write error destroys the stream, so the file needs a new one to stay recording.
+		// Without this the first failure would end this file for the rest of the run.
+		if (stream.destroyed) {
+			stream = open();
+		}
+		const target = stream;
+
+		return new Promise((resolve, reject) => {
+			target.write(line, (error) => {
 				if (error) {
+					failure ??= errorMessage(error);
 					reject(error);
 					return;
 				}
 				resolve();
 			});
 		});
+	};
 
 	return {
 		append: async (record) => {
-			pending = pending.then(() => writeLine(`${JSON.stringify(record)}\n`));
-			await pending;
+			// Serialized before the chain, so an unserializable record fails only its own
+			// Append instead of the write of every record that follows it.
+			const line = `${JSON.stringify(record)}\n`;
+			const result = pending.then(async () => await writeLine(line));
+			// The chain keeps the file's line order; the swallowed copy keeps it usable.
+			pending = result.then(
+				() => undefined,
+				() => undefined,
+			);
+			await result;
 		},
 		close: async () => {
-			await pending.catch(() => undefined);
+			await pending;
+			// A destroyed stream is already closed, and ending it again only errors.
+			if (stream.destroyed) {
+				return;
+			}
 			await new Promise<void>((resolve, reject) => {
 				stream.end((error?: Error | null) => {
 					if (error) {
+						failure ??= errorMessage(error);
 						reject(error);
 						return;
 					}
@@ -117,6 +148,7 @@ const createNdjsonWriter = (path: string): NdjsonWriter => {
 				});
 			});
 		},
+		failure: () => failure,
 	};
 };
 
@@ -180,6 +212,14 @@ const createStorage = async (
 	const websocket = createNdjsonWriter(join(runDirectory, "websocket.ndjson"));
 	const eventSource = createNdjsonWriter(join(runDirectory, "eventsource.ndjson"));
 	const downloads = createNdjsonWriter(join(runDirectory, "downloads.ndjson"));
+	// Named so a writer that failed can be reported by the file it was recording into.
+	const writers: [string, NdjsonWriter][] = [
+		["metadata", metadata],
+		["errors", errors],
+		["websocket", websocket],
+		["eventsource", eventSource],
+		["downloads", downloads],
+	];
 	const summary = createCaptureSummary();
 	let bodyCounter = 0;
 	let requestCounter = 0;
@@ -297,13 +337,20 @@ const createStorage = async (
 		close: async () => {
 			// Shutdown runs from a finally block, where a rejection becomes an unhandled one.
 			// Settle them all so a writer that already failed cannot stop the others closing.
-			await Promise.allSettled([
-				metadata.close(),
-				errors.close(),
-				websocket.close(),
-				eventSource.close(),
-				downloads.close(),
-			]);
+			const results = await Promise.allSettled(writers.map(([, writer]) => writer.close()));
+			// A settled rejection is discarded unless it is read, and a writer that died
+			// Mid-run never rejects here at all. Both are reported, so the run says which
+			// File stopped recording instead of leaving it to be noticed later.
+			for (const [index, [name, writer]] of writers.entries()) {
+				const result = results[index];
+				const error =
+					result?.status === "rejected" ? errorMessage(result.reason) : writer.failure();
+				if (error === undefined) {
+					continue;
+				}
+				process.stderr.write(`writer ${name}.ndjson failed: ${error}\n`);
+				summary.recordWriterFailure(name);
+			}
 		},
 		recordRequestBody,
 		recordBody,
