@@ -149,6 +149,8 @@ code you opt into with `--config`.
 was made. Both fields are omitted when the flags are not used. A
 `captureCookies` boolean is always present so a capture directory says whether
 `--capture-cookies` was on and it may therefore hold plaintext session cookies.
+A `streamBodies` boolean is always present too, so the directory also says how
+its bodies were retrieved.
 
 `metadata.ndjson` contains one JSON object per completed response that passed
 the filters. When available, the same metadata line links to both a saved
@@ -183,11 +185,34 @@ navigation or target teardown clears the buffer mid-fetch. Enabling the stream
 also moves the `--include` and `--exclude` decision earlier, to the response
 event, to bound the overhead. If a stream cannot be enabled or the method is
 unsupported, that request falls back to `Network.getResponseBody`, so nothing is
-lost relative to the default. Because a streamed body cannot be size-checked
-before it is fetched, `--max-body-bytes` instead aborts accumulation once the
-running total passes the limit, frees the partial buffer, and records the body
-as a skip, exactly like the buffer path's pre-fetch guard. The flag is off by
-default while the CDP method is experimental.
+lost relative to the default. The first such failure of the run is recorded in
+`errors.ndjson` as `Network.streamResourceContent`, and later ones are
+suppressed so a Chromium without the method cannot flood the file. A stream that
+finishes with no bytes at all, which happens on some service-worker and cached
+paths, also falls back rather than saving an empty body.
+
+Server-Sent Events responses are never streamed: the connection normally never
+finishes, so its bytes would accumulate for the life of the page, and its
+messages are already captured in `eventsource.ndjson`.
+
+`--max-body-bytes` still guards the size, and it still compares the encoded wire
+bytes: the running total is summed from the `encodedDataLength` of every
+`Network.dataReceived` event of the request, which is what the buffer path's
+`Network.loadingFinished` total counts as well. Past the limit the partial
+buffer is freed and the body is recorded as a skip, marked in `errors.ndjson`
+with the same `Network.getResponseBody.skipped` event the buffer path uses, even
+though nothing was fetched with that call. Unlike the buffer path, the guard
+cannot avoid the transfer, because an enabled stream cannot be turned off again;
+it only avoids writing and hashing the body. Without `--max-body-bytes` a
+default limit of `maxResourceBufferSize` applies to a streamed body, so a
+response whose `Network.loadingFinished` never arrives cannot grow without
+bound.
+
+Every streamed body records `base64Encoded: true` in `metadata.ndjson` and in
+plugin events, where the buffer path reports `false` for a text response. That
+is only how CDP delivered the bytes; the saved file is byte-identical either
+way, and `run.json` records `streamBodies`. The flag is off by default while
+the CDP method is experimental.
 
 A redirect chain reuses one CDP request ID, so it produces several metadata
 lines. Each `3xx` hop is written when the browser follows it, with
@@ -263,10 +288,11 @@ the rest are collapsed into a final remainder line.
 Plugin failures have no URL, so they are grouped under `plugin:<id>` instead of
 a host. Host `unknown` collects failures whose URL the browser never delivered,
 such as `Network.loadingFailed` for a request that started before the logger
-attached to its target. Bodies dropped by `--max-body-bytes` are counted as
-`Network.getResponseBody.skipped` so a size policy is not mistaken for a
-capture failure. Error counts cover all observed traffic, while the saved-body
-counts only cover responses that passed `--include` and `--exclude`.
+attached to its target. Bodies dropped by a size limit are counted as
+`Network.getResponseBody.skipped` so a size policy is not mistaken for a capture
+failure, including a streamed body that never reached that call. Error counts
+cover all observed traffic, while the saved-body counts only cover responses
+that passed `--include` and `--exclude`.
 
 ## What Gets Saved
 
@@ -288,6 +314,8 @@ Response bodies are saved exactly from CDP's body result:
 
 - `base64Encoded: true` is decoded and written as bytes.
 - `base64Encoded: false` is written as UTF-8 bytes.
+- A `--stream-bodies` body is written from the assembled chunks as they are, and
+  always reports `base64Encoded: true`.
 
 Request payloads are written as UTF-8 bytes from CDP strings. The logger first
 uses inline `request.postData` from `Network.requestWillBeSent` when present. If
@@ -640,7 +668,8 @@ mise run compile
   because the default path reads them back from Chromium's retained resource
   buffer. `--stream-bodies` recovers many of these by assembling the body from
   `Network.streamResourceContent` instead, and falls back to the buffer path
-  when a stream cannot be enabled.
+  when a stream cannot be enabled, fails, or assembles nothing. It never streams
+  a Server-Sent Events response, which `eventsource.ndjson` already covers.
 - Redirect hops are recorded as metadata only. Their status, `location`, and
   `set-cookie` headers are saved, but no response body exists to save, and a
   hop the logger did not observe from its start is skipped. `redirectIndex`
@@ -654,7 +683,9 @@ mise run compile
   fail after navigation races and does not include uploaded files for multipart
   form data.
 - `--max-body-bytes` compares against CDP `encodedDataLength`; it is a skip
-  guard, not a perfect final decoded-size predictor.
+  guard, not a perfect final decoded-size predictor. With `--stream-bodies` it
+  compares the same encoded bytes, summed per chunk, but it can only skip the
+  write, not the transfer: an enabled stream cannot be turned off again.
 - WebSocket messages are not normal HTTP response bodies. Both directions are
   written to `websocket.ndjson` as individual frames, not reassembled messages,
   and a frame on a socket the logger never saw open has no `url`.

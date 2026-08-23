@@ -109,13 +109,13 @@ const cliArgs = {
 		type: "string",
 		valueHint: "capture-dir",
 	},
-	"stream-bodies": {
-		description: "Assemble bodies from Network.streamResourceContent (experimental).",
-		type: "boolean",
-	},
 	plugins: {
 		default: true,
 		description: "Load plugins from --config.",
+		type: "boolean",
+	},
+	"stream-bodies": {
+		description: "Assemble bodies from Network.streamResourceContent (experimental).",
 		type: "boolean",
 	},
 	verbose: {

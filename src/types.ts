@@ -34,8 +34,7 @@ type SessionInfo = {
 };
 
 // Raw wire headers and cookie diagnostics, only collected with --capture-cookies.
-// Both ExtraInfo events can arrive before or after the base event they belong to.
-// The logger therefore buffers this same shape while waiting for that base event.
+// Either ExtraInfo event can precede its base event, so the logger buffers this shape.
 type ExtraInfoState = {
 	blockedCookies?: Protocol.Network.BlockedSetCookieWithReason[] | undefined;
 	cookiePartitionKey?: Protocol.Network.CookiePartitionKey | undefined;
@@ -243,19 +242,20 @@ type HookPublisher = {
 	publish: (event: HookEvent) => Promise<void>;
 };
 
-type LoggerStorage = {
+// Storage owns the run directory, so it also identifies the run to every hook event.
+type LoggerStorage = RunRef & {
 	close: () => Promise<void>;
 	recordRequestBody: (state: RequestState, postData: string) => Promise<RequestBodySaveResult>;
 	recordBody: (
 		state: RequestState,
 		body: Protocol.Network.GetResponseBodyResponse,
 	) => Promise<BodySaveResult & { base64Encoded: boolean }>;
+	// Bytes already assembled, saved without the base64 round-trip recordBody needs.
+	recordBodyBytes: (state: RequestState, bytes: Uint8Array) => Promise<BodySaveResult>;
 	recordCompletedResponse: (metadata: CompletedResponseMetadata) => Promise<void>;
 	recordError: (error: ErrorRecord) => Promise<void>;
 	recordEventSourceMessage: (message: EventSourceMessageRecord) => Promise<void>;
 	recordWebSocketFrame: (frame: WebSocketFrameRecord) => Promise<void>;
-	runDirectory: string;
-	runTimestamp: string;
 };
 
 type StartLoggerOptions = {

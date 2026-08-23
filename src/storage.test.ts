@@ -65,6 +65,30 @@ describe("createStorage", () => {
 		expect(metadata.trim()).toContain('"bodySaved":true');
 	});
 
+	// A streamed body is handed over as bytes, so nothing round-trips through base64.
+	it("writes assembled bytes as a response body", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "kuebiko-"));
+		const storage = await createStorage(dir, "http://127.0.0.1:9222", {}, "2026-07-06T12:34:56Z");
+		const state: RequestState = {
+			requestId: "request-1",
+			session: { sessionId: "session-1" },
+		};
+		const bytes = Buffer.from([0, 1, 2, 250]);
+
+		const result = await storage.recordBodyBytes(state, bytes);
+		await storage.close();
+
+		expect(result).toMatchObject({
+			bodyLength: 4,
+			bodySaved: true,
+			bodySha256: sha256(bytes),
+		});
+		await expect(Bun.file(join(dir, result.bodyFile ?? "")).bytes()).resolves.toEqual(
+			new Uint8Array(bytes),
+		);
+		expect(storage.summary.render()).toContain("responses=1 response_bytes=4");
+	});
+
 	it("writes request bodies separately from response bodies", async () => {
 		const dir = await mkdtemp(join(tmpdir(), "kuebiko-"));
 		const storage = await createStorage(dir, "http://127.0.0.1:9222", {}, "2026-07-06T12:34:56Z");
@@ -224,7 +248,12 @@ describe("createStorage", () => {
 		const storage = await createStorage(
 			dir,
 			"http://127.0.0.1:9222",
-			{ captureCookies: true, labels: ["account-a", "billing"], note: "manual sweep" },
+			{
+				captureCookies: true,
+				labels: ["account-a", "billing"],
+				note: "manual sweep",
+				streamBodies: true,
+			},
 			"2026-07-06T12:34:56Z",
 		);
 		await storage.close();
@@ -234,10 +263,11 @@ describe("createStorage", () => {
 		expect(runInfo.labels).toEqual(["account-a", "billing"]);
 		expect(runInfo.note).toBe("manual sweep");
 		expect(runInfo.captureCookies).toBe(true);
+		expect(runInfo.streamBodies).toBe(true);
 		expect(runInfo.createdAt).toBe("2026-07-06T12:34:56Z");
 	});
 
-	it("omits labels and note but always records captureCookies in run.json", async () => {
+	it("omits labels and note but always records the capture flags in run.json", async () => {
 		for (const annotations of [{}, { labels: [], note: "  " }]) {
 			const dir = await mkdtemp(join(tmpdir(), "kuebiko-"));
 			const storage = await createStorage(
@@ -252,8 +282,9 @@ describe("createStorage", () => {
 
 			expect(Object.hasOwn(runInfo, "labels")).toBe(false);
 			expect(Object.hasOwn(runInfo, "note")).toBe(false);
-			// A plain boolean, so it stays in run.json even when the flag is off.
+			// Plain booleans, so they stay in run.json even when the flags are off.
 			expect(runInfo["captureCookies"]).toBe(false);
+			expect(runInfo["streamBodies"]).toBe(false);
 		}
 	});
 });
