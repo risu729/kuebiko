@@ -106,6 +106,51 @@ describe("parseArgs", () => {
 		expect(() => parseArgs(["--wat"])).toThrow("Unknown argument: --wat");
 	});
 
+	// Every browser arg starts with a dash, so treating the value as a flag of its own
+	// Replaced node:util's advice about the `--flag=-value` spelling with a wrong one.
+	it("leaves a dashed flag value to node:util to diagnose", () => {
+		expect(() => parseArgs(["--browser-arg", "--no-sandbox"])).toThrow(/ambiguous/u);
+		expect(() => parseArgs(["--exclude", "-tracking"])).toThrow(/ambiguous/u);
+		expect(() => parseArgs(["--note", "-note text"])).toThrow(/ambiguous/u);
+		expect(() => parseArgs(["--browser-arg=--no-sandbox", "--wat"])).toThrow(
+			"Unknown argument: --wat",
+		);
+	});
+
+	// Blank silently disabled every plugin, and --out silently fell back to the default
+	// Capture root, so a wrapper passing an unset variable lost either without a word.
+	it("rejects a blank config path and capture directory", () => {
+		expect(() => parseArgs(["--config", ""])).toThrow("--config must not be empty.");
+		expect(() => parseArgs(["--out", ""])).toThrow("--out must not be empty.");
+	});
+
+	// Launch mode connects to --cdp-port, so an endpoint given here was discarded and
+	// Run.json recorded a port the invocation never named.
+	it("rejects an endpoint given together with launch mode", () => {
+		expect(() =>
+			parseArgs([
+				"--launch-browser",
+				"--browser-command",
+				"chrome",
+				"--cdp",
+				"http://127.0.0.1:9999",
+			]),
+		).toThrow("Use --cdp-port instead of --cdp with --launch-browser.");
+	});
+
+	// Number() also accepts exponents, hex, and padding, so a typo became a silent cap.
+	it("rejects integers that are not written in decimal", () => {
+		for (const value of ["1e3", "0x10", " 12 ", "12.0"]) {
+			expect(() => parseArgs(["--max-body-bytes", value])).toThrow(
+				"--max-body-bytes must be an integer greater than or equal to 0.",
+			);
+		}
+		expect(() => parseArgs(["--cdp-port", "0x10"])).toThrow(
+			"--cdp-port must be an integer greater than or equal to 1.",
+		);
+		expect(parseArgs(["--max-body-bytes", "1000"]).maxBodyBytes).toBe(1_000);
+	});
+
 	it("rejects launch mode without an explicit browser", () => {
 		expect(() => parseArgs(["--launch-browser"])).toThrow(
 			"--launch-browser requires --browser-command or --browser-path.",

@@ -35,6 +35,10 @@ const parseNonEmptyText = (value: string | undefined, flag: string): string | un
 	return value;
 };
 
+// Number() also accepts exponents, hex, and surrounding whitespace, so a typo such as
+// `--max-body-bytes 1e3` silently became a 1000 byte cap instead of being rejected.
+const decimalIntegerRegex = /^\d+$/u;
+
 const parseSafeInteger = (
 	value: string | undefined,
 	flag: string,
@@ -45,7 +49,7 @@ const parseSafeInteger = (
 	}
 
 	const parsed = Number(value);
-	if (!Number.isSafeInteger(parsed) || parsed < minimum) {
+	if (!decimalIntegerRegex.test(value) || !Number.isSafeInteger(parsed) || parsed < minimum) {
 		throw new Error(`${flag} must be an integer greater than or equal to ${minimum}.`);
 	}
 

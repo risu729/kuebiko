@@ -39,7 +39,9 @@ const CliOptionsSchema: z.ZodType<CliOptions> = z
 		browserProfile: optionalNonEmptyString,
 		captureCookies: z.boolean(),
 		captureDownloads: z.boolean(),
-		config: optionalNonEmptyString,
+		// Blank is rejected rather than dropped: a wrapper passing an unset variable would
+		// Otherwise run with every plugin silently disabled and nothing recording that.
+		config: z.optional(z.string()).transform((value) => parseNonEmptyText(value, "--config")),
 		cdp: z.url(),
 		cdpPort: optionalNonEmptyString.transform((value) => {
 			const port = parseSafeInteger(value, "--cdp-port", 1);
@@ -64,9 +66,10 @@ const CliOptionsSchema: z.ZodType<CliOptions> = z
 		netlog: z.boolean(),
 		noPlugins: z.boolean(),
 		// A blank --note is rejected instead of dropped, so a mistyped note cannot vanish.
-		// That deviates on purpose from the optionalNonEmptyString flags such as --out.
 		note: z.optional(z.string()).transform((value) => parseNonEmptyText(value, "--note")),
-		out: optionalNonEmptyString,
+		// Blank would fall back to the default capture root, writing the run somewhere the
+		// Caller never named.
+		out: z.optional(z.string()).transform((value) => parseNonEmptyText(value, "--out")),
 		snapshotStorage: z.boolean(),
 		streamBodies: z.boolean(),
 		verbose: z.boolean(),
@@ -91,18 +94,43 @@ const CliOptionsSchema: z.ZodType<CliOptions> = z
 				path: ["browserCommand"],
 			});
 		}
+		// Launch mode connects to the port it started the browser on, so an endpoint given
+		// Here was discarded: the run and run.json both used --cdp-port instead.
+		if (options.cdp !== DEFAULT_CDP_ENDPOINT) {
+			context.addIssue({
+				code: "custom",
+				message: "Use --cdp-port instead of --cdp with --launch-browser.",
+				path: ["cdp"],
+			});
+		}
 	});
 
+const valueFlags = new Set(
+	Object.entries(cliArgs)
+		.filter(([, definition]) => definition.type === "string")
+		.map(([name]) => `--${name}`),
+);
+
+// The token after a value-taking flag is that flag's argument, whatever it looks like.
+// Every browser arg starts with a dash, so treating those as flags here answered
+// `--browser-arg --no-sandbox` with "Unknown argument: --no-sandbox" and hid node:util's
+// Advice about the `--browser-arg=-XYZ` spelling, which is what the user actually needs.
+const flagOf = (arg: string): string => (arg.includes("=") ? (arg.split("=", 1)[0] ?? arg) : arg);
+
 const assertKnownFlags = (argv: string[]): void => {
+	let expectsValue = false;
 	for (const arg of argv) {
-		if (!arg.startsWith("-")) {
+		const isValue = expectsValue;
+		expectsValue = false;
+		if (isValue || !arg.startsWith("-")) {
 			continue;
 		}
 
-		const flag = arg.includes("=") ? (arg.split("=", 1)[0] ?? arg) : arg;
+		const flag = flagOf(arg);
 		if (!validFlags.has(flag)) {
 			throw new Error(`Unknown argument: ${flag}`);
 		}
+		expectsValue = arg === flag && valueFlags.has(flag);
 	}
 };
 
