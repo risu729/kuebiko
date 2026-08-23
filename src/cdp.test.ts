@@ -232,6 +232,23 @@ const attachPageTarget = (client: FakeClient, session = "session-1", target = "t
 	});
 };
 
+// A popup target, which is the one an opener can reach and a debugger can hold.
+const attachPopupTarget = (client: FakeClient, waitingForDebugger: boolean): void => {
+	client.emit("Target.attachedToTarget", {
+		sessionId: "session-1",
+		targetInfo: {
+			attached: true,
+			browserContextId: "context-1",
+			canAccessOpener: true,
+			targetId: "target-1",
+			title: "Popup",
+			type: "page",
+			url: "https://example.test/popup",
+		},
+		waitingForDebugger,
+	});
+};
+
 const createRedirectResponse = (options: {
 	location: string;
 	status: number;
@@ -518,18 +535,43 @@ const emitDownloadProgress = (
 	});
 };
 
-const createDownloadLogger = (
-	client: FakeClient,
-	storage: ReturnType<typeof createStorage>,
-	hooks?: HookPublisher,
-): CdpResponseLogger =>
-	new CdpResponseLogger(client as never, {
-		captureDownloads: true,
+type LoggerOptions = ConstructorParameters<typeof CdpResponseLogger>[1];
+
+type LoggerSetup = {
+	client: FakeClient;
+	hooks: ReturnType<typeof createHooks>;
+	logger: CdpResponseLogger;
+	storage: ReturnType<typeof createStorage>;
+};
+
+// One started logger over a fake client, with one page target attached.
+// Every test needs that much, so each one passes only the options it is about.
+// `start: false` leaves both steps to the test; `attach: false` leaves only the attach.
+const setupLogger = async (
+	overrides: Partial<LoggerOptions> & { attach?: boolean; start?: boolean } = {},
+): Promise<LoggerSetup> => {
+	const { start = true, attach = start, ...options } = overrides;
+	const client = new FakeClient();
+	const hooks = createHooks();
+	const storage = createStorage();
+	const logger = new CdpResponseLogger(client as never, {
 		cdp: "http://127.0.0.1:9222",
 		hooks,
 		storage,
 		verbose: false,
+		...options,
 	});
+
+	if (start) {
+		await logger.start();
+	}
+	if (attach) {
+		attachPageTarget(client);
+		await waitForAsyncEvent();
+	}
+
+	return { client, hooks, logger, storage };
+};
 
 describe("createCompletedMetadata", () => {
 	it("creates one appendable metadata object per response", () => {
@@ -656,31 +698,7 @@ describe("createCompletedMetadata", () => {
 
 describe("CdpResponseLogger", () => {
 	it("captures completed response bodies and metadata", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
-		const hooks = createHooks();
-		const logger = new CdpResponseLogger(client as never, {
-			cdp: "http://127.0.0.1:9222",
-			hooks,
-			storage,
-			verbose: false,
-		});
-
-		await logger.start();
-		client.emit("Target.attachedToTarget", {
-			sessionId: "session-1",
-			targetInfo: {
-				attached: true,
-				browserContextId: "context-1",
-				canAccessOpener: false,
-				targetId: "target-1",
-				title: "Example",
-				type: "page",
-				url: "https://example.test",
-			},
-			waitingForDebugger: false,
-		});
-		await waitForAsyncEvent();
+		const { client, hooks, storage } = await setupLogger();
 		client.emit(
 			"Network.requestWillBeSent",
 			{
@@ -769,28 +787,9 @@ describe("CdpResponseLogger", () => {
 	});
 
 	it("enables network before resuming attached targets", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
-		const logger = new CdpResponseLogger(client as never, {
-			cdp: "http://127.0.0.1:9222",
-			storage,
-			verbose: false,
-		});
+		const { client } = await setupLogger({ attach: false });
 
-		await logger.start();
-		client.emit("Target.attachedToTarget", {
-			sessionId: "session-1",
-			targetInfo: {
-				attached: true,
-				browserContextId: "context-1",
-				canAccessOpener: true,
-				targetId: "target-1",
-				title: "Popup",
-				type: "page",
-				url: "https://example.test/popup",
-			},
-			waitingForDebugger: false,
-		});
+		attachPopupTarget(client, false);
 		await waitForAsyncEvent();
 
 		expect(client.send).toHaveBeenCalledWith(
@@ -808,29 +807,10 @@ describe("CdpResponseLogger", () => {
 	});
 
 	it("records resume failures and still enables network capture", async () => {
-		const client = new FakeClient();
-		client.send.mockRejectedValueOnce(new Error("resume failed"));
-		const storage = createStorage();
-		const logger = new CdpResponseLogger(client as never, {
-			cdp: "http://127.0.0.1:9222",
-			storage,
-			verbose: false,
-		});
+		const { client, storage } = await setupLogger({ attach: false });
 
-		await logger.start();
-		client.emit("Target.attachedToTarget", {
-			sessionId: "session-1",
-			targetInfo: {
-				attached: true,
-				browserContextId: "context-1",
-				canAccessOpener: true,
-				targetId: "target-1",
-				title: "Popup",
-				type: "page",
-				url: "https://example.test/popup",
-			},
-			waitingForDebugger: true,
-		});
+		client.send.mockRejectedValueOnce(new Error("resume failed"));
+		attachPopupTarget(client, true);
 		await waitForAsyncEvent();
 
 		expect(storage.errors[0]).toMatchObject({
@@ -847,29 +827,7 @@ describe("CdpResponseLogger", () => {
 	});
 
 	it("saves inline request post data without request interception", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
-		const logger = new CdpResponseLogger(client as never, {
-			cdp: "http://127.0.0.1:9222",
-			storage,
-			verbose: false,
-		});
-
-		await logger.start();
-		client.emit("Target.attachedToTarget", {
-			sessionId: "session-1",
-			targetInfo: {
-				attached: true,
-				browserContextId: "context-1",
-				canAccessOpener: false,
-				targetId: "target-1",
-				title: "Example",
-				type: "page",
-				url: "https://example.test",
-			},
-			waitingForDebugger: false,
-		});
-		await waitForAsyncEvent();
+		const { client, storage } = await setupLogger();
 		client.emit(
 			"Network.requestWillBeSent",
 			{
@@ -936,29 +894,7 @@ describe("CdpResponseLogger", () => {
 	});
 
 	it("falls back to Network.getRequestPostData when post data is not inline", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
-		const logger = new CdpResponseLogger(client as never, {
-			cdp: "http://127.0.0.1:9222",
-			storage,
-			verbose: false,
-		});
-
-		await logger.start();
-		client.emit("Target.attachedToTarget", {
-			sessionId: "session-1",
-			targetInfo: {
-				attached: true,
-				browserContextId: "context-1",
-				canAccessOpener: false,
-				targetId: "target-1",
-				title: "Example",
-				type: "page",
-				url: "https://example.test",
-			},
-			waitingForDebugger: false,
-		});
-		await waitForAsyncEvent();
+		const { client, storage } = await setupLogger();
 		client.emit(
 			"Network.requestWillBeSent",
 			{
@@ -1024,35 +960,14 @@ describe("CdpResponseLogger", () => {
 	});
 
 	it("labels inline request body save failures with the inline post data source", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
+		const { client, storage } = await setupLogger();
 		const recordRequestBody = storage.recordRequestBody as Mock<LoggerStorage["recordRequestBody"]>;
 		recordRequestBody.mockResolvedValueOnce({
 			bodySaved: false,
 			error: "disk full",
 			source: "requestWillBeSent",
 		});
-		const logger = new CdpResponseLogger(client as never, {
-			cdp: "http://127.0.0.1:9222",
-			storage,
-			verbose: false,
-		});
 
-		await logger.start();
-		client.emit("Target.attachedToTarget", {
-			sessionId: "session-1",
-			targetInfo: {
-				attached: true,
-				browserContextId: "context-1",
-				canAccessOpener: false,
-				targetId: "target-1",
-				title: "Example",
-				type: "page",
-				url: "https://example.test",
-			},
-			waitingForDebugger: false,
-		});
-		await waitForAsyncEvent();
 		client.emit(
 			"Network.requestWillBeSent",
 			{
@@ -1117,30 +1032,9 @@ describe("CdpResponseLogger", () => {
 	});
 
 	it("records missing getRequestPostData postData as a request body error", async () => {
-		const client = new FakeClient();
+		const { client, storage } = await setupLogger();
 		client.Network.getRequestPostData.mockResolvedValueOnce({} as never);
-		const storage = createStorage();
-		const logger = new CdpResponseLogger(client as never, {
-			cdp: "http://127.0.0.1:9222",
-			storage,
-			verbose: false,
-		});
 
-		await logger.start();
-		client.emit("Target.attachedToTarget", {
-			sessionId: "session-1",
-			targetInfo: {
-				attached: true,
-				browserContextId: "context-1",
-				canAccessOpener: false,
-				targetId: "target-1",
-				title: "Example",
-				type: "page",
-				url: "https://example.test",
-			},
-			waitingForDebugger: false,
-		});
-		await waitForAsyncEvent();
 		client.emit(
 			"Network.requestWillBeSent",
 			{
@@ -1205,30 +1099,9 @@ describe("CdpResponseLogger", () => {
 	});
 
 	it("records body retrieval failures without crashing", async () => {
-		const client = new FakeClient();
+		const { client, storage } = await setupLogger();
 		client.Network.getResponseBody.mockRejectedValueOnce(new Error("No resource with given id"));
-		const storage = createStorage();
-		const logger = new CdpResponseLogger(client as never, {
-			cdp: "http://127.0.0.1:9222",
-			storage,
-			verbose: false,
-		});
 
-		await logger.start();
-		client.emit("Target.attachedToTarget", {
-			sessionId: "session-1",
-			targetInfo: {
-				attached: true,
-				browserContextId: "context-1",
-				canAccessOpener: false,
-				targetId: "target-1",
-				title: "Example",
-				type: "page",
-				url: "https://example.test",
-			},
-			waitingForDebugger: false,
-		});
-		await waitForAsyncEvent();
 		client.emit(
 			"Network.responseReceived",
 			{
@@ -1268,30 +1141,8 @@ describe("CdpResponseLogger", () => {
 	});
 
 	it("marks bodies dropped by --max-body-bytes as skipped instead of failed", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
-		const logger = new CdpResponseLogger(client as never, {
-			cdp: "http://127.0.0.1:9222",
-			maxBodyBytes: 10,
-			storage,
-			verbose: false,
-		});
+		const { client, storage } = await setupLogger({ maxBodyBytes: 10 });
 
-		await logger.start();
-		client.emit("Target.attachedToTarget", {
-			sessionId: "session-1",
-			targetInfo: {
-				attached: true,
-				browserContextId: "context-1",
-				canAccessOpener: false,
-				targetId: "target-1",
-				title: "Example",
-				type: "page",
-				url: "https://example.test",
-			},
-			waitingForDebugger: false,
-		});
-		await waitForAsyncEvent();
 		client.emit(
 			"Network.responseReceived",
 			{
@@ -1327,19 +1178,7 @@ describe("CdpResponseLogger", () => {
 	});
 
 	it("records every redirect hop of a chain before the final response", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
-		const hooks = createHooks();
-		const logger = new CdpResponseLogger(client as never, {
-			cdp: "http://127.0.0.1:9222",
-			hooks,
-			storage,
-			verbose: false,
-		});
-
-		await logger.start();
-		attachPageTarget(client);
-		await waitForAsyncEvent();
+		const { client, hooks, storage } = await setupLogger();
 		emitRequestWillBeSent(client, { url: "https://sso.test/authorize" });
 		await waitForAsyncEvent();
 		emitRequestWillBeSent(client, { url: "https://idp.test/login" }, SSO_TO_IDP);
@@ -1392,18 +1231,8 @@ describe("CdpResponseLogger", () => {
 	});
 
 	it("applies url filters to redirect hops", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
-		const logger = new CdpResponseLogger(client as never, {
-			cdp: "http://127.0.0.1:9222",
-			exclude: /idp\.test/u,
-			storage,
-			verbose: false,
-		});
+		const { client, storage } = await setupLogger({ exclude: /idp\.test/u });
 
-		await logger.start();
-		attachPageTarget(client);
-		await waitForAsyncEvent();
 		emitRequestWillBeSent(client, { url: "https://sso.test/authorize" });
 		await waitForAsyncEvent();
 		emitRequestWillBeSent(client, { url: "https://idp.test/login" }, SSO_TO_IDP);
@@ -1422,17 +1251,7 @@ describe("CdpResponseLogger", () => {
 	});
 
 	it("saves inline post data with the redirect hop that carried it", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
-		const logger = new CdpResponseLogger(client as never, {
-			cdp: "http://127.0.0.1:9222",
-			storage,
-			verbose: false,
-		});
-
-		await logger.start();
-		attachPageTarget(client);
-		await waitForAsyncEvent();
+		const { client, storage } = await setupLogger();
 		emitRequestWillBeSent(client, {
 			method: "POST",
 			postData: '{"hello":"world"}',
@@ -1463,17 +1282,7 @@ describe("CdpResponseLogger", () => {
 	});
 
 	it("records hop post data the browser did not inline as a request body loss", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
-		const logger = new CdpResponseLogger(client as never, {
-			cdp: "http://127.0.0.1:9222",
-			storage,
-			verbose: false,
-		});
-
-		await logger.start();
-		attachPageTarget(client);
-		await waitForAsyncEvent();
+		const { client, storage } = await setupLogger();
 		emitRequestWillBeSent(client, {
 			hasPostData: true,
 			method: "POST",
@@ -1502,8 +1311,7 @@ describe("CdpResponseLogger", () => {
 	});
 
 	it("keeps chain records in order when a hop request body write is slow", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
+		const { client, storage } = await setupLogger();
 		const recordRequestBody = storage.recordRequestBody as Mock<LoggerStorage["recordRequestBody"]>;
 		recordRequestBody.mockImplementationOnce(async (_, postData) => {
 			await Bun.sleep(20);
@@ -1516,15 +1324,7 @@ describe("CdpResponseLogger", () => {
 				source: "requestWillBeSent",
 			};
 		});
-		const logger = new CdpResponseLogger(client as never, {
-			cdp: "http://127.0.0.1:9222",
-			storage,
-			verbose: false,
-		});
 
-		await logger.start();
-		attachPageTarget(client);
-		await waitForAsyncEvent();
 		// The whole chain arrives in one burst, as it does on a real connection.
 		emitRequestWillBeSent(client, {
 			method: "POST",
@@ -1541,21 +1341,12 @@ describe("CdpResponseLogger", () => {
 	});
 
 	it("keeps capturing when a hop metadata write fails", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
+		const { client, storage } = await setupLogger();
 		const recordCompletedResponse = storage.recordCompletedResponse as Mock<
 			LoggerStorage["recordCompletedResponse"]
 		>;
 		recordCompletedResponse.mockRejectedValueOnce(new Error("metadata write failed"));
-		const logger = new CdpResponseLogger(client as never, {
-			cdp: "http://127.0.0.1:9222",
-			storage,
-			verbose: false,
-		});
 
-		await logger.start();
-		attachPageTarget(client);
-		await waitForAsyncEvent();
 		emitRequestWillBeSent(client, { url: "https://sso.test/authorize" });
 		await waitForAsyncEvent();
 		emitRequestWillBeSent(client, { url: "https://idp.test/login" }, SSO_TO_IDP);
@@ -1569,17 +1360,7 @@ describe("CdpResponseLogger", () => {
 	});
 
 	it("skips a hop whose request state a target detach already dropped", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
-		const logger = new CdpResponseLogger(client as never, {
-			cdp: "http://127.0.0.1:9222",
-			storage,
-			verbose: false,
-		});
-
-		await logger.start();
-		attachPageTarget(client);
-		await waitForAsyncEvent();
+		const { client, storage } = await setupLogger();
 		emitRequestWillBeSent(client, { url: "https://sso.test/authorize" });
 		await waitForAsyncEvent();
 		// The detach lands while the first hop is still being written.
@@ -1601,19 +1382,7 @@ describe("CdpResponseLogger", () => {
 	});
 
 	it("records both frame directions with the url of the socket that carried them", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
-		const hooks = createHooks();
-		const logger = new CdpResponseLogger(client as never, {
-			cdp: "http://127.0.0.1:9222",
-			hooks,
-			storage,
-			verbose: false,
-		});
-
-		await logger.start();
-		attachPageTarget(client);
-		await waitForAsyncEvent();
+		const { client, hooks, storage } = await setupLogger();
 		emitWebSocketCreated(client, "wss://chat.test/socket");
 		emitWebSocketFrame(client, "sent", { payloadData: '{"type":"subscribe"}' });
 		emitWebSocketFrame(client, "received", { payloadData: '{"type":"ack"}' });
@@ -1648,17 +1417,7 @@ describe("CdpResponseLogger", () => {
 	});
 
 	it("records a frame without a url once the socket closed", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
-		const logger = new CdpResponseLogger(client as never, {
-			cdp: "http://127.0.0.1:9222",
-			storage,
-			verbose: false,
-		});
-
-		await logger.start();
-		attachPageTarget(client);
-		await waitForAsyncEvent();
+		const { client, storage } = await setupLogger();
 		emitWebSocketCreated(client, "wss://chat.test/socket");
 		emitWebSocketFrame(client, "received", { payloadData: '{"type":"ack"}' });
 		emitWebSocketClosed(client);
@@ -1672,17 +1431,7 @@ describe("CdpResponseLogger", () => {
 	});
 
 	it("keeps concurrent sockets of one session apart", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
-		const logger = new CdpResponseLogger(client as never, {
-			cdp: "http://127.0.0.1:9222",
-			storage,
-			verbose: false,
-		});
-
-		await logger.start();
-		attachPageTarget(client);
-		await waitForAsyncEvent();
+		const { client, storage } = await setupLogger();
 		emitWebSocketCreated(client, "wss://chat.test/rooms", { requestId: "socket-1" });
 		emitWebSocketCreated(client, "wss://metrics.test/stream", { requestId: "socket-2" });
 		emitWebSocketFrame(client, "received", {
@@ -1699,16 +1448,8 @@ describe("CdpResponseLogger", () => {
 	});
 
 	it("keeps sockets of other sessions when one target detaches", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
-		const logger = new CdpResponseLogger(client as never, {
-			cdp: "http://127.0.0.1:9222",
-			storage,
-			verbose: false,
-		});
+		const { client, storage } = await setupLogger();
 
-		await logger.start();
-		attachPageTarget(client);
 		attachPageTarget(client, "session-2", "target-2");
 		await waitForAsyncEvent();
 		// Request ids are only unique per session, so both sockets share one.
@@ -1730,17 +1471,7 @@ describe("CdpResponseLogger", () => {
 	});
 
 	it("records a frame error against the socket url", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
-		const logger = new CdpResponseLogger(client as never, {
-			cdp: "http://127.0.0.1:9222",
-			storage,
-			verbose: false,
-		});
-
-		await logger.start();
-		attachPageTarget(client);
-		await waitForAsyncEvent();
+		const { client, storage } = await setupLogger();
 		emitWebSocketCreated(client, "wss://chat.test/socket");
 		emitWebSocketFrameError(client, "Could not decode a text frame as UTF-8.");
 		await waitForAsyncEvent();
@@ -1758,17 +1489,7 @@ describe("CdpResponseLogger", () => {
 	});
 
 	it("drops socket urls when the target detaches", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
-		const logger = new CdpResponseLogger(client as never, {
-			cdp: "http://127.0.0.1:9222",
-			storage,
-			verbose: false,
-		});
-
-		await logger.start();
-		attachPageTarget(client);
-		await waitForAsyncEvent();
+		const { client, storage } = await setupLogger();
 		emitWebSocketCreated(client, "wss://chat.test/socket");
 		client.emit("Target.detachedFromTarget", { sessionId: "session-1", targetId: "target-1" });
 		await waitForAsyncEvent();
@@ -1786,19 +1507,7 @@ describe("CdpResponseLogger", () => {
 	// An SSE stream never reaches loadingFinished, so its request state stays alive.
 	// Every message on the open stream is therefore attributed to the stream URL.
 	it("records eventsource messages with the url of the open stream request", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
-		const hooks = createHooks();
-		const logger = new CdpResponseLogger(client as never, {
-			cdp: "http://127.0.0.1:9222",
-			hooks,
-			storage,
-			verbose: false,
-		});
-
-		await logger.start();
-		attachPageTarget(client);
-		await waitForAsyncEvent();
+		const { client, hooks, storage } = await setupLogger();
 		emitRequestWillBeSent(client, { url: "https://stream.test/prices" });
 		await waitForAsyncEvent();
 		emitEventSourceMessage(client, { data: '{"btc":1}', eventId: "1", eventName: "price" });
@@ -1834,17 +1543,7 @@ describe("CdpResponseLogger", () => {
 	});
 
 	it("records an eventsource message without a url when no request state is known", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
-		const logger = new CdpResponseLogger(client as never, {
-			cdp: "http://127.0.0.1:9222",
-			storage,
-			verbose: false,
-		});
-
-		await logger.start();
-		attachPageTarget(client);
-		await waitForAsyncEvent();
+		const { client, storage } = await setupLogger();
 		// A stream the logger joined mid-flight never produced Network.requestWillBeSent for it.
 		emitEventSourceMessage(client, { data: '{"btc":3}' });
 		await waitForAsyncEvent();
@@ -1860,16 +1559,8 @@ describe("CdpResponseLogger", () => {
 	// The lookup is keyed by session and request id.
 	// No stream URL leaks onto a message of another request or another session.
 	it("attributes an eventsource message only to its own request", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
-		const logger = new CdpResponseLogger(client as never, {
-			cdp: "http://127.0.0.1:9222",
-			storage,
-			verbose: false,
-		});
+		const { client, storage } = await setupLogger();
 
-		await logger.start();
-		attachPageTarget(client);
 		attachPageTarget(client, "session-2", "target-2");
 		await waitForAsyncEvent();
 		emitRequestWillBeSent(client, { url: "https://stream.test/prices" });
@@ -1888,17 +1579,7 @@ describe("CdpResponseLogger", () => {
 
 	// Detaching drops the request state, so later messages lose the URL but are still recorded.
 	it("records eventsource messages without a url after the target detached", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
-		const logger = new CdpResponseLogger(client as never, {
-			cdp: "http://127.0.0.1:9222",
-			storage,
-			verbose: false,
-		});
-
-		await logger.start();
-		attachPageTarget(client);
-		await waitForAsyncEvent();
+		const { client, storage } = await setupLogger();
 		emitRequestWillBeSent(client, { url: "https://stream.test/prices" });
 		await waitForAsyncEvent();
 		emitEventSourceMessage(client, { data: '{"btc":1}' });
@@ -1914,18 +1595,7 @@ describe("CdpResponseLogger", () => {
 	});
 
 	it("joins raw headers that arrive before the base event", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
-		const logger = new CdpResponseLogger(client as never, {
-			captureCookies: true,
-			cdp: "http://127.0.0.1:9222",
-			storage,
-			verbose: false,
-		});
-
-		await logger.start();
-		attachPageTarget(client);
-		await waitForAsyncEvent();
+		const { client, storage } = await setupLogger({ captureCookies: true });
 		emitRequestExtraInfo(client, { cookie: "session=abc" });
 		emitRequestWillBeSent(client, { url: "https://example.test/api" });
 		await waitForAsyncEvent();
@@ -1943,18 +1613,7 @@ describe("CdpResponseLogger", () => {
 	});
 
 	it("joins raw headers that arrive after the base event", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
-		const logger = new CdpResponseLogger(client as never, {
-			captureCookies: true,
-			cdp: "http://127.0.0.1:9222",
-			storage,
-			verbose: false,
-		});
-
-		await logger.start();
-		attachPageTarget(client);
-		await waitForAsyncEvent();
+		const { client, storage } = await setupLogger({ captureCookies: true });
 		emitRequestWillBeSent(client, { url: "https://example.test/api" });
 		await waitForAsyncEvent();
 		emitRequestExtraInfo(client, { cookie: "session=abc" });
@@ -1970,18 +1629,7 @@ describe("CdpResponseLogger", () => {
 	});
 
 	it("records the cookies a response could not store", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
-		const logger = new CdpResponseLogger(client as never, {
-			captureCookies: true,
-			cdp: "http://127.0.0.1:9222",
-			storage,
-			verbose: false,
-		});
-
-		await logger.start();
-		attachPageTarget(client);
-		await waitForAsyncEvent();
+		const { client, storage } = await setupLogger({ captureCookies: true });
 		emitRequestWillBeSent(client, { url: "https://example.test/api" });
 		await waitForAsyncEvent();
 		emitResponseExtraInfo(client, {
@@ -2003,15 +1651,8 @@ describe("CdpResponseLogger", () => {
 	});
 
 	it("leaves the ExtraInfo events unsubscribed without --capture-cookies", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
-		const logger = new CdpResponseLogger(client as never, {
-			cdp: "http://127.0.0.1:9222",
-			storage,
-			verbose: false,
-		});
+		const { client, storage } = await setupLogger({ attach: false });
 
-		await logger.start();
 		expect(client.listenerCount("Network.requestWillBeSentExtraInfo")).toBe(0);
 		expect(client.listenerCount("Network.responseReceivedExtraInfo")).toBe(0);
 
@@ -2029,18 +1670,7 @@ describe("CdpResponseLogger", () => {
 	});
 
 	it("gives every redirect hop the raw headers of its own hop", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
-		const logger = new CdpResponseLogger(client as never, {
-			captureCookies: true,
-			cdp: "http://127.0.0.1:9222",
-			storage,
-			verbose: false,
-		});
-
-		await logger.start();
-		attachPageTarget(client);
-		await waitForAsyncEvent();
+		const { client, storage } = await setupLogger({ captureCookies: true });
 		emitRequestWillBeSent(client, { url: "https://sso.test/authorize" });
 		await waitForAsyncEvent();
 		emitRequestExtraInfo(client, { cookie: "hop=0" });
@@ -2070,18 +1700,7 @@ describe("CdpResponseLogger", () => {
 
 	// The hop is recorded without them rather than crediting them to the next hop.
 	it("drops raw response headers that arrive after their hop was recorded", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
-		const logger = new CdpResponseLogger(client as never, {
-			captureCookies: true,
-			cdp: "http://127.0.0.1:9222",
-			storage,
-			verbose: false,
-		});
-
-		await logger.start();
-		attachPageTarget(client);
-		await waitForAsyncEvent();
+		const { client, storage } = await setupLogger({ captureCookies: true });
 		emitRequestWillBeSent(client, { url: "https://sso.test/authorize" });
 		await waitForAsyncEvent();
 		emitRequestWillBeSent(client, { url: "https://idp.test/login" }, SSO_TO_IDP);
@@ -2100,18 +1719,7 @@ describe("CdpResponseLogger", () => {
 	// The redirectHasExtraInfo flag covers a hop's request ExtraInfo too.
 	// A late one under the shared requestId must not land on the next hop's raw headers.
 	it("drops raw request headers that arrive after their hop was recorded", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
-		const logger = new CdpResponseLogger(client as never, {
-			captureCookies: true,
-			cdp: "http://127.0.0.1:9222",
-			storage,
-			verbose: false,
-		});
-
-		await logger.start();
-		attachPageTarget(client);
-		await waitForAsyncEvent();
+		const { client, storage } = await setupLogger({ captureCookies: true });
 		emitRequestWillBeSent(client, { url: "https://sso.test/authorize" });
 		await waitForAsyncEvent();
 		// The sso hop is recorded here, before its own request ExtraInfo arrives.
@@ -2133,18 +1741,7 @@ describe("CdpResponseLogger", () => {
 	// Attaching mid-chain buffers a previous hop's response ExtraInfo.
 	// It belongs to a hop never recorded, so it must not attach to the next hop.
 	it("does not attach a buffered response to the next hop after attaching mid-chain", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
-		const logger = new CdpResponseLogger(client as never, {
-			captureCookies: true,
-			cdp: "http://127.0.0.1:9222",
-			storage,
-			verbose: false,
-		});
-
-		await logger.start();
-		attachPageTarget(client);
-		await waitForAsyncEvent();
+		const { client, storage } = await setupLogger({ captureCookies: true });
 		// The sso hop's response arrives first; the logger never saw its requestWillBeSent.
 		emitResponseExtraInfo(client, { headers: { "set-cookie": "stale=1" } });
 		// This idp hop has no previous state, so it is not recorded.
@@ -2163,18 +1760,7 @@ describe("CdpResponseLogger", () => {
 	});
 
 	it("drops buffered raw headers when the target detaches", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
-		const logger = new CdpResponseLogger(client as never, {
-			captureCookies: true,
-			cdp: "http://127.0.0.1:9222",
-			storage,
-			verbose: false,
-		});
-
-		await logger.start();
-		attachPageTarget(client);
-		await waitForAsyncEvent();
+		const { client, storage } = await setupLogger({ captureCookies: true });
 		// No base event ever claims this one.
 		emitRequestExtraInfo(client, { cookie: "stale=1" });
 		client.emit("Target.detachedFromTarget", { sessionId: "session-1", targetId: "target-1" });
@@ -2190,20 +1776,10 @@ describe("CdpResponseLogger", () => {
 	});
 
 	it("assembles a streamed body from the buffered prefix and later chunks in order", async () => {
-		const client = new FakeClient();
+		const { client, storage } = await setupLogger({ streamBodies: true });
 		// The prefix is released only after loadingFinished was already handled.
 		const stream = deferStreamResourceContent(client);
-		const storage = createStorage();
-		const logger = new CdpResponseLogger(client as never, {
-			cdp: "http://127.0.0.1:9222",
-			storage,
-			streamBodies: true,
-			verbose: false,
-		});
 
-		await logger.start();
-		attachPageTarget(client);
-		await waitForAsyncEvent();
 		emitRequestWillBeSent(client, { url: "https://example.test/api" });
 		await waitForAsyncEvent();
 		// The responseReceived event enables streaming; the chunks then carry the bytes.
@@ -2236,19 +1812,9 @@ describe("CdpResponseLogger", () => {
 	});
 
 	it("ignores a dataReceived chunk that has no data, since the prefix already covers it", async () => {
-		const client = new FakeClient();
+		const { client, storage } = await setupLogger({ streamBodies: true });
 		client.Network.streamResourceContent.mockResolvedValueOnce({ bufferedData: toBase64("PRE") });
-		const storage = createStorage();
-		const logger = new CdpResponseLogger(client as never, {
-			cdp: "http://127.0.0.1:9222",
-			storage,
-			streamBodies: true,
-			verbose: false,
-		});
 
-		await logger.start();
-		attachPageTarget(client);
-		await waitForAsyncEvent();
 		emitRequestWillBeSent(client, { url: "https://example.test/api" });
 		await waitForAsyncEvent();
 		emitResponseReceived(client, "https://example.test/api");
@@ -2262,20 +1828,9 @@ describe("CdpResponseLogger", () => {
 	});
 
 	it("falls back to getResponseBody when streamResourceContent is not supported", async () => {
-		const client = new FakeClient();
+		const { client, storage } = await setupLogger({ streamBodies: true });
 		// A Chrome without the method fails every request, not only the first.
 		client.Network.streamResourceContent.mockRejectedValue(new Error("not supported"));
-		const storage = createStorage();
-		const logger = new CdpResponseLogger(client as never, {
-			cdp: "http://127.0.0.1:9222",
-			storage,
-			streamBodies: true,
-			verbose: false,
-		});
-
-		await logger.start();
-		attachPageTarget(client);
-		await waitForAsyncEvent();
 		const captureOneRequest = async (): Promise<void> => {
 			emitRequestWillBeSent(client, { url: "https://example.test/api" });
 			await waitForAsyncEvent();
@@ -2309,20 +1864,9 @@ describe("CdpResponseLogger", () => {
 	});
 
 	it("aborts a streamed body over --max-body-bytes and records it as a skip", async () => {
-		const client = new FakeClient();
+		const { client, storage } = await setupLogger({ maxBodyBytes: 5, streamBodies: true });
 		client.Network.streamResourceContent.mockResolvedValueOnce({ bufferedData: toBase64("PRE") });
-		const storage = createStorage();
-		const logger = new CdpResponseLogger(client as never, {
-			cdp: "http://127.0.0.1:9222",
-			maxBodyBytes: 5,
-			storage,
-			streamBodies: true,
-			verbose: false,
-		});
 
-		await logger.start();
-		attachPageTarget(client);
-		await waitForAsyncEvent();
 		emitRequestWillBeSent(client, { url: "https://example.test/large" });
 		await waitForAsyncEvent();
 		emitResponseReceived(client, "https://example.test/large");
@@ -2350,20 +1894,9 @@ describe("CdpResponseLogger", () => {
 	// The buffer path guards on loadingFinished.encodedDataLength.
 	// A body small on the wire and large decoded is saved by both paths alike.
 	it("guards a streamed body on wire bytes, like the buffer path", async () => {
-		const client = new FakeClient();
+		const { client, storage } = await setupLogger({ maxBodyBytes: 5, streamBodies: true });
 		client.Network.streamResourceContent.mockResolvedValueOnce({ bufferedData: "" });
-		const storage = createStorage();
-		const logger = new CdpResponseLogger(client as never, {
-			cdp: "http://127.0.0.1:9222",
-			maxBodyBytes: 5,
-			storage,
-			streamBodies: true,
-			verbose: false,
-		});
 
-		await logger.start();
-		attachPageTarget(client);
-		await waitForAsyncEvent();
 		emitRequestWillBeSent(client, { url: "https://example.test/compressed" });
 		await waitForAsyncEvent();
 		emitResponseReceived(client, "https://example.test/compressed");
@@ -2381,20 +1914,10 @@ describe("CdpResponseLogger", () => {
 
 	// An unfinished stream would otherwise accumulate for as long as its target lives.
 	it("aborts a stream past the default limit when --max-body-bytes is unset", async () => {
-		const client = new FakeClient();
+		const { client, storage } = await setupLogger({ streamBodies: true });
 		client.Network.streamResourceContent.mockResolvedValueOnce({ bufferedData: toBase64("PRE") });
-		const storage = createStorage();
-		const logger = new CdpResponseLogger(client as never, {
-			cdp: "http://127.0.0.1:9222",
-			storage,
-			streamBodies: true,
-			verbose: false,
-		});
 		const limit = NETWORK_BUFFER_OPTIONS.maxResourceBufferSize;
 
-		await logger.start();
-		attachPageTarget(client);
-		await waitForAsyncEvent();
 		emitRequestWillBeSent(client, { url: "https://example.test/media" });
 		await waitForAsyncEvent();
 		emitResponseReceived(client, "https://example.test/media");
@@ -2414,18 +1937,7 @@ describe("CdpResponseLogger", () => {
 	// The messages are already captured in eventsource.ndjson.
 	// The connection normally never finishes, so it would grow for the page's life.
 	it("never streams an event stream", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
-		const logger = new CdpResponseLogger(client as never, {
-			cdp: "http://127.0.0.1:9222",
-			storage,
-			streamBodies: true,
-			verbose: false,
-		});
-
-		await logger.start();
-		attachPageTarget(client);
-		await waitForAsyncEvent();
+		const { client } = await setupLogger({ streamBodies: true });
 		emitRequestWillBeSent(client, { url: "https://stream.test/prices" });
 		await waitForAsyncEvent();
 		// Either the resource type or the MIME type is enough to recognize one.
@@ -2440,19 +1952,11 @@ describe("CdpResponseLogger", () => {
 
 	// Enabling the stream moves the filter decision to the response event.
 	it("never streams a url the filters reject", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
-		const logger = new CdpResponseLogger(client as never, {
-			cdp: "http://127.0.0.1:9222",
+		const { client, storage } = await setupLogger({
 			exclude: /\/tracker\//u,
-			storage,
 			streamBodies: true,
-			verbose: false,
 		});
 
-		await logger.start();
-		attachPageTarget(client);
-		await waitForAsyncEvent();
 		emitRequestWillBeSent(client, { url: "https://example.test/tracker/pixel" });
 		await waitForAsyncEvent();
 		emitResponseReceived(client, "https://example.test/tracker/pixel");
@@ -2467,19 +1971,9 @@ describe("CdpResponseLogger", () => {
 
 	// A hop is reported through redirectResponse, which never enables a stream.
 	it("streams only the terminal response of a redirect chain", async () => {
-		const client = new FakeClient();
+		const { client, storage } = await setupLogger({ streamBodies: true });
 		client.Network.streamResourceContent.mockResolvedValueOnce({ bufferedData: "" });
-		const storage = createStorage();
-		const logger = new CdpResponseLogger(client as never, {
-			cdp: "http://127.0.0.1:9222",
-			storage,
-			streamBodies: true,
-			verbose: false,
-		});
 
-		await logger.start();
-		attachPageTarget(client);
-		await waitForAsyncEvent();
 		emitRequestWillBeSent(client, { url: "https://sso.test/authorize" });
 		await waitForAsyncEvent();
 		emitRequestWillBeSent(client, { url: "https://idp.test/login" }, SSO_TO_IDP);
@@ -2498,19 +1992,9 @@ describe("CdpResponseLogger", () => {
 	});
 
 	it("frees the stream buffer and records no body when the request fails mid-stream", async () => {
-		const client = new FakeClient();
+		const { client, storage } = await setupLogger({ streamBodies: true });
 		client.Network.streamResourceContent.mockResolvedValueOnce({ bufferedData: toBase64("PRE") });
-		const storage = createStorage();
-		const logger = new CdpResponseLogger(client as never, {
-			cdp: "http://127.0.0.1:9222",
-			storage,
-			streamBodies: true,
-			verbose: false,
-		});
 
-		await logger.start();
-		attachPageTarget(client);
-		await waitForAsyncEvent();
 		emitRequestWillBeSent(client, { url: "https://example.test/api" });
 		await waitForAsyncEvent();
 		emitResponseReceived(client, "https://example.test/api");
@@ -2536,19 +2020,9 @@ describe("CdpResponseLogger", () => {
 	// Chrome does not populate `data` on every path, such as a synthesized body.
 	// An empty assembly would be saved as a successful zero-byte body.
 	it("falls back to getResponseBody when the stream assembled nothing", async () => {
-		const client = new FakeClient();
+		const { client, storage } = await setupLogger({ streamBodies: true });
 		client.Network.streamResourceContent.mockResolvedValueOnce({ bufferedData: "" });
-		const storage = createStorage();
-		const logger = new CdpResponseLogger(client as never, {
-			cdp: "http://127.0.0.1:9222",
-			storage,
-			streamBodies: true,
-			verbose: false,
-		});
 
-		await logger.start();
-		attachPageTarget(client);
-		await waitForAsyncEvent();
 		emitRequestWillBeSent(client, { url: "https://example.test/api" });
 		await waitForAsyncEvent();
 		emitResponseReceived(client, "https://example.test/api");
@@ -2570,15 +2044,8 @@ describe("CdpResponseLogger", () => {
 	});
 
 	it("never streams and ignores dataReceived without --stream-bodies", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
-		const logger = new CdpResponseLogger(client as never, {
-			cdp: "http://127.0.0.1:9222",
-			storage,
-			verbose: false,
-		});
+		const { client, storage } = await setupLogger({ attach: false });
 
-		await logger.start();
 		expect(client.listenerCount("Network.dataReceived")).toBe(0);
 
 		attachPageTarget(client);
@@ -2599,19 +2066,9 @@ describe("CdpResponseLogger", () => {
 	});
 
 	it("drops a partial stream buffer when the target detaches mid-stream", async () => {
-		const client = new FakeClient();
+		const { client, storage } = await setupLogger({ streamBodies: true });
 		client.Network.streamResourceContent.mockResolvedValueOnce({ bufferedData: toBase64("PRE") });
-		const storage = createStorage();
-		const logger = new CdpResponseLogger(client as never, {
-			cdp: "http://127.0.0.1:9222",
-			storage,
-			streamBodies: true,
-			verbose: false,
-		});
 
-		await logger.start();
-		attachPageTarget(client);
-		await waitForAsyncEvent();
 		emitRequestWillBeSent(client, { url: "https://example.test/api" });
 		await waitForAsyncEvent();
 		emitResponseReceived(client, "https://example.test/api");
@@ -2634,17 +2091,7 @@ describe("CdpResponseLogger", () => {
 	});
 
 	it("leaves browser download behavior alone without --capture-downloads", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
-		const logger = new CdpResponseLogger(client as never, {
-			cdp: "http://127.0.0.1:9222",
-			storage,
-			verbose: false,
-		});
-
-		await logger.start();
-		attachPageTarget(client);
-		await waitForAsyncEvent();
+		const { client, logger, storage } = await setupLogger();
 		// Nothing is subscribed, so an event from another CDP client changes nothing either.
 		emitDownloadWillBegin(client, { url: "https://example.test/statement.pdf" });
 		emitDownloadProgress(client, { state: "completed" });
@@ -2659,14 +2106,7 @@ describe("CdpResponseLogger", () => {
 	});
 
 	it("records a completed download with the name and url of the download that began", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
-		const hooks = createHooks();
-		const logger = createDownloadLogger(client, storage, hooks);
-
-		await logger.start();
-		attachPageTarget(client);
-		await waitForAsyncEvent();
+		const { client, hooks, storage } = await setupLogger({ captureDownloads: true });
 		emitDownloadWillBegin(client, {
 			suggestedFilename: "statement-2026-07.pdf",
 			url: "https://bank.test/statements/2026-07.pdf",
@@ -2704,14 +2144,7 @@ describe("CdpResponseLogger", () => {
 	});
 
 	it("records a canceled download without a file so the loss stays visible", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
-		const hooks = createHooks();
-		const logger = createDownloadLogger(client, storage, hooks);
-
-		await logger.start();
-		attachPageTarget(client);
-		await waitForAsyncEvent();
+		const { client, hooks, storage } = await setupLogger({ captureDownloads: true });
 		emitDownloadWillBegin(client, { url: "https://bank.test/statements/2026-07.pdf" });
 		emitDownloadProgress(client, { receivedBytes: 64, state: "canceled", totalBytes: 1024 });
 		await waitForAsyncEvent();
@@ -2730,13 +2163,7 @@ describe("CdpResponseLogger", () => {
 
 	// The Browser events are browser-wide, so a closing tab no longer loses the download.
 	it("records a download whose target detached before it finished", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
-		const logger = createDownloadLogger(client, storage);
-
-		await logger.start();
-		attachPageTarget(client);
-		await waitForAsyncEvent();
+		const { client, storage } = await setupLogger({ captureDownloads: true });
 		emitDownloadWillBegin(client, { url: "https://bank.test/statements/2026-07.pdf" });
 		client.emit("Target.detachedFromTarget", { sessionId: "session-1", targetId: "target-1" });
 		await waitForAsyncEvent();
@@ -2755,14 +2182,7 @@ describe("CdpResponseLogger", () => {
 
 	// Chrome dispatches on every update of a finished download, terminal ones included.
 	it("records a repeated terminal download progress event only once", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
-		const hooks = createHooks();
-		const logger = createDownloadLogger(client, storage, hooks);
-
-		await logger.start();
-		attachPageTarget(client);
-		await waitForAsyncEvent();
+		const { client, hooks, storage } = await setupLogger({ captureDownloads: true });
 		emitDownloadWillBegin(client, { url: "https://bank.test/statements/2026-07.pdf" });
 		emitDownloadProgress(client, { state: "completed" });
 		await waitForAsyncEvent();
@@ -2777,13 +2197,7 @@ describe("CdpResponseLogger", () => {
 
 	// An interrupted download is reported as canceled and may still complete afterwards.
 	it("supersedes a canceled download with the completion that follows it", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
-		const logger = createDownloadLogger(client, storage);
-
-		await logger.start();
-		attachPageTarget(client);
-		await waitForAsyncEvent();
+		const { client, storage } = await setupLogger({ captureDownloads: true });
 		emitDownloadWillBegin(client, { url: "https://bank.test/statements/2026-07.pdf" });
 		emitDownloadProgress(client, { receivedBytes: 64, state: "canceled" });
 		await waitForAsyncEvent();
@@ -2800,13 +2214,7 @@ describe("CdpResponseLogger", () => {
 	});
 
 	it("keeps concurrent downloads apart by guid", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
-		const logger = createDownloadLogger(client, storage);
-
-		await logger.start();
-		attachPageTarget(client);
-		await waitForAsyncEvent();
+		const { client, storage } = await setupLogger({ captureDownloads: true });
 		emitDownloadWillBegin(client, {
 			guid: "download-1",
 			suggestedFilename: "statement.pdf",
@@ -2839,11 +2247,11 @@ describe("CdpResponseLogger", () => {
 
 	// In attach mode the browser keeps running, so the override must not outlive the run.
 	it("restores the default download behavior when the run ends", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
-		const logger = createDownloadLogger(client, storage);
+		const { client, logger, storage } = await setupLogger({
+			attach: false,
+			captureDownloads: true,
+		});
 
-		await logger.start();
 		await logger.close();
 
 		expect(client.Browser.setDownloadBehavior).toHaveBeenLastCalledWith({
@@ -2856,15 +2264,16 @@ describe("CdpResponseLogger", () => {
 	// A failed override leaves whatever the user's Chrome or another CDP client set.
 	// Resetting that to default is the very harm the restore exists to avoid.
 	it("sends no reset when the download override never took", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
+		const { client, logger, storage } = await setupLogger({
+			captureDownloads: true,
+			start: false,
+		});
 		const setDownloadBehavior = client.Browser.setDownloadBehavior as Mock<
 			(params?: object) => Promise<void>
 		>;
 		setDownloadBehavior.mockImplementationOnce(() =>
 			Promise.reject(new Error("Browser.setDownloadBehavior failed")),
 		);
-		const logger = createDownloadLogger(client, storage);
 
 		await logger.start();
 		await logger.close();
@@ -2884,21 +2293,16 @@ describe("CdpResponseLogger", () => {
 	// A browser too busy to answer was abandoned in silence.
 	// It kept saving downloads into a finished run with nothing in errors.ndjson to say so.
 	it("records an unanswered download behavior reset before the connection closes", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
+		const { client, logger, storage } = await setupLogger({
+			attach: false,
+			captureDownloads: true,
+			resetTimeoutMs: 5,
+		});
 		const unanswered = Promise.withResolvers<void>();
 		const setDownloadBehavior = client.Browser.setDownloadBehavior as Mock<
 			(params?: object) => Promise<void>
 		>;
-		const logger = new CdpResponseLogger(client as never, {
-			captureDownloads: true,
-			cdp: "http://127.0.0.1:9222",
-			resetTimeoutMs: 5,
-			storage,
-			verbose: false,
-		});
 
-		await logger.start();
 		setDownloadBehavior.mockImplementation(() => unanswered.promise);
 		await logger.close();
 		unanswered.resolve();
@@ -2912,18 +2316,12 @@ describe("CdpResponseLogger", () => {
 	});
 
 	it("records a completed download whose file storage could not read", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
-		const hooks = createHooks();
+		const { client, hooks, storage } = await setupLogger({ captureDownloads: true });
 		const recordDownload = storage.recordDownload as Mock<LoggerStorage["recordDownload"]>;
 		recordDownload.mockImplementationOnce((download) =>
 			Promise.resolve({ ...download, error: "ENOENT: no such file or directory" }),
 		);
-		const logger = createDownloadLogger(client, storage, hooks);
 
-		await logger.start();
-		attachPageTarget(client);
-		await waitForAsyncEvent();
 		emitDownloadWillBegin(client, { url: "https://bank.test/statements/2026-07.pdf" });
 		emitDownloadProgress(client, { state: "completed" });
 		await waitForAsyncEvent();
@@ -2941,8 +2339,10 @@ describe("CdpResponseLogger", () => {
 	// A slow body write is the same race a slow download hash is, and it used to lose.
 	// Only downloads extended the drain, so any other handler was abandoned at 1s.
 	it("waits past the first drain budget for any handler still recording", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
+		const { client, logger, storage } = await setupLogger({
+			drainTimeoutMs: 1,
+			extendedDrainTimeoutMs: 1_000,
+		});
 		const slowWrite = Promise.withResolvers<void>();
 		const recordCompletedResponse = storage.recordCompletedResponse as Mock<
 			LoggerStorage["recordCompletedResponse"]
@@ -2951,17 +2351,7 @@ describe("CdpResponseLogger", () => {
 			await slowWrite.promise;
 			storage.metadata.push(record);
 		});
-		const logger = new CdpResponseLogger(client as never, {
-			cdp: "http://127.0.0.1:9222",
-			drainTimeoutMs: 1,
-			extendedDrainTimeoutMs: 1_000,
-			storage,
-			verbose: false,
-		});
 
-		await logger.start();
-		attachPageTarget(client);
-		await waitForAsyncEvent();
 		emitRequestWillBeSent(client, { url: "https://example.test/api" });
 		await waitForAsyncEvent();
 		emitFinalResponse(client, "https://example.test/api");
@@ -2978,24 +2368,16 @@ describe("CdpResponseLogger", () => {
 
 	// The writers close right after this, so an abandoned handler's record is lost.
 	it("records the handlers shutdown abandoned before the writers close", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
+		const { client, logger, storage } = await setupLogger({
+			drainTimeoutMs: 1,
+			extendedDrainTimeoutMs: 5,
+		});
 		const neverWritten = Promise.withResolvers<void>();
 		const recordCompletedResponse = storage.recordCompletedResponse as Mock<
 			LoggerStorage["recordCompletedResponse"]
 		>;
 		recordCompletedResponse.mockImplementationOnce(async () => await neverWritten.promise);
-		const logger = new CdpResponseLogger(client as never, {
-			cdp: "http://127.0.0.1:9222",
-			drainTimeoutMs: 1,
-			extendedDrainTimeoutMs: 5,
-			storage,
-			verbose: false,
-		});
 
-		await logger.start();
-		attachPageTarget(client);
-		await waitForAsyncEvent();
 		emitRequestWillBeSent(client, { url: "https://example.test/api" });
 		await waitForAsyncEvent();
 		emitFinalResponse(client, "https://example.test/api");
@@ -3016,17 +2398,7 @@ describe("CdpResponseLogger", () => {
 	// An event after it belongs to a target Chrome destroyed, so nothing can complete it.
 	// Recording one used to leave a request entry no event will ever remove.
 	it("ignores network events for a session that already detached", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
-		const logger = new CdpResponseLogger(client as never, {
-			cdp: "http://127.0.0.1:9222",
-			storage,
-			verbose: false,
-		});
-
-		await logger.start();
-		attachPageTarget(client);
-		await waitForAsyncEvent();
+		const { client, storage } = await setupLogger();
 		client.emit("Target.detachedFromTarget", { sessionId: "session-1", targetId: "target-1" });
 		await waitForAsyncEvent();
 		emitRequestWillBeSent(client, { url: "https://sso.test/authorize" });
@@ -3048,20 +2420,11 @@ describe("CdpResponseLogger", () => {
 	// The one record the run keeps for a stream failure would then describe that refusal.
 	// The first real failure would be the one lost.
 	it("never streams a response for a session that already detached", async () => {
-		const client = new FakeClient();
+		const { client, storage } = await setupLogger({ streamBodies: true });
 		client.Network.streamResourceContent.mockImplementation(() =>
 			Promise.reject(new Error("Network.streamResourceContent is not supported")),
 		);
-		const storage = createStorage();
-		const logger = new CdpResponseLogger(client as never, {
-			cdp: "http://127.0.0.1:9222",
-			storage,
-			streamBodies: true,
-			verbose: false,
-		});
 
-		await logger.start();
-		attachPageTarget(client);
 		attachPageTarget(client, "session-2", "target-2");
 		await waitForAsyncEvent();
 		client.emit("Target.detachedFromTarget", { sessionId: "session-1", targetId: "target-1" });
@@ -3088,23 +2451,13 @@ describe("CdpResponseLogger", () => {
 	// The completion awaits the enabling promise.
 	// A rejected one aborted the handler and dropped the metadata of a response saved fine.
 	it("records the response even when the stream failure record cannot be written", async () => {
-		const client = new FakeClient();
+		const { client, logger, storage } = await setupLogger({ streamBodies: true });
 		client.Network.streamResourceContent.mockImplementationOnce(() =>
 			Promise.reject(new Error("Network.streamResourceContent is not supported")),
 		);
-		const storage = createStorage();
 		const recordError = storage.recordError as Mock<LoggerStorage["recordError"]>;
 		recordError.mockImplementationOnce(() => Promise.reject(new Error("write after end")));
-		const logger = new CdpResponseLogger(client as never, {
-			cdp: "http://127.0.0.1:9222",
-			storage,
-			streamBodies: true,
-			verbose: false,
-		});
 
-		await logger.start();
-		attachPageTarget(client);
-		await waitForAsyncEvent();
 		emitRequestWillBeSent(client, { url: "https://example.test/api" });
 		await waitForAsyncEvent();
 		emitFinalResponse(client, "https://example.test/api");
@@ -3118,21 +2471,13 @@ describe("CdpResponseLogger", () => {
 
 	// Enabling a stream was started without being tracked, so shutdown never drained it.
 	it("drains an enabling stream at shutdown", async () => {
-		const client = new FakeClient();
-		const enabling = deferStreamResourceContent(client);
-		const storage = createStorage();
-		const logger = new CdpResponseLogger(client as never, {
-			cdp: "http://127.0.0.1:9222",
+		const { client, logger, storage } = await setupLogger({
 			drainTimeoutMs: 1,
 			extendedDrainTimeoutMs: 5,
-			storage,
 			streamBodies: true,
-			verbose: false,
 		});
+		const enabling = deferStreamResourceContent(client);
 
-		await logger.start();
-		attachPageTarget(client);
-		await waitForAsyncEvent();
 		emitRequestWillBeSent(client, { url: "https://example.test/api" });
 		await waitForAsyncEvent();
 		emitResponseReceived(client, "https://example.test/api");
@@ -3146,16 +2491,8 @@ describe("CdpResponseLogger", () => {
 	// A tab closing with nothing in flight is ordinary.
 	// An error record for it inflates the error total and crowds out the real failures.
 	it("records a detach only when it dropped capture state", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
-		const logger = new CdpResponseLogger(client as never, {
-			cdp: "http://127.0.0.1:9222",
-			storage,
-			verbose: false,
-		});
+		const { client, storage } = await setupLogger();
 
-		await logger.start();
-		attachPageTarget(client);
 		attachPageTarget(client, "session-2", "target-2");
 		await waitForAsyncEvent();
 		client.emit("Target.detachedFromTarget", { sessionId: "session-2", targetId: "target-2" });
@@ -3214,20 +2551,6 @@ const APP_DATABASE = {
 	},
 };
 
-const createSnapshotLogger = (
-	client: FakeClient,
-	storage: ReturnType<typeof createStorage>,
-	extra: { hooks?: HookPublisher | undefined; snapshotTimeoutMs?: number | undefined } = {},
-): CdpResponseLogger =>
-	new CdpResponseLogger(client as never, {
-		cdp: "http://127.0.0.1:9222",
-		hooks: extra.hooks,
-		snapshotStorage: true,
-		snapshotTimeoutMs: extra.snapshotTimeoutMs,
-		storage,
-		verbose: false,
-	});
-
 const primeStorageReplies = (client: FakeClient): void => {
 	client.sendReplies.set("Storage.getCookies", { cookies: [SNAPSHOT_COOKIE] });
 	client.sendReplies.set("DOMStorage.getDOMStorageItems", (params: unknown) => ({
@@ -3247,6 +2570,14 @@ const primeStorageReplies = (client: FakeClient): void => {
 };
 
 const sentMethods = (client: FakeClient): string[] => client.sent.map((call) => call.method);
+
+// The one page target every snapshot test reads storage from.
+const APP_TARGET = {
+	session: "session-1",
+	targetId: "target-1",
+	type: "page",
+	url: "https://example.test/app",
+};
 
 const attachTarget = (
 	client: FakeClient,
@@ -3339,23 +2670,9 @@ describe("collectSnapshotOrigins", () => {
 
 describe("CdpResponseLogger storage snapshot", () => {
 	it("sends no storage command and writes nothing without the flag", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
-		const hooks = createHooks();
-		const logger = new CdpResponseLogger(client as never, {
-			cdp: "http://127.0.0.1:9222",
-			hooks,
-			storage,
-			verbose: false,
-		});
+		const { client, hooks, logger, storage } = await setupLogger({ attach: false });
 
-		await logger.start();
-		attachTarget(client, {
-			session: "session-1",
-			targetId: "target-1",
-			type: "page",
-			url: "https://example.test/app",
-		});
+		attachTarget(client, APP_TARGET);
 		await waitForAsyncEvent();
 		await logger.snapshotStorage();
 
@@ -3369,18 +2686,13 @@ describe("CdpResponseLogger storage snapshot", () => {
 	});
 
 	it("snapshots the origin a page navigated to after it attached", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
-		primeStorageReplies(client);
-		const logger = createSnapshotLogger(client, storage);
-
-		await logger.start();
-		attachTarget(client, {
-			session: "session-1",
-			targetId: "target-1",
-			type: "page",
-			url: "about:blank",
+		const { client, logger, storage } = await setupLogger({
+			attach: false,
+			snapshotStorage: true,
 		});
+		primeStorageReplies(client);
+
+		attachTarget(client, { ...APP_TARGET, url: "about:blank" });
 		// The next Target.getTargets is the one the snapshot itself sends.
 		client.Target.getTargets.mockResolvedValueOnce({
 			targetInfos: [{ targetId: "target-1", type: "page", url: "https://example.test/app" }],
@@ -3394,19 +2706,13 @@ describe("CdpResponseLogger storage snapshot", () => {
 	});
 
 	it("snapshots cookies, both DOM storage areas, and IndexedDB per attached origin", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
-		const hooks = createHooks();
-		primeStorageReplies(client);
-		const logger = createSnapshotLogger(client, storage, { hooks });
-
-		await logger.start();
-		attachTarget(client, {
-			session: "session-1",
-			targetId: "target-1",
-			type: "page",
-			url: "https://example.test/app",
+		const { client, logger, storage } = await setupLogger({
+			attach: false,
+			snapshotStorage: true,
 		});
+		primeStorageReplies(client);
+
+		attachTarget(client, APP_TARGET);
 		await waitForAsyncEvent();
 		await logger.snapshotStorage();
 
@@ -3442,18 +2748,13 @@ describe("CdpResponseLogger storage snapshot", () => {
 	});
 
 	it("never sends a Runtime method other than the target resume", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
-		primeStorageReplies(client);
-		const logger = createSnapshotLogger(client, storage);
-
-		await logger.start();
-		attachTarget(client, {
-			session: "session-1",
-			targetId: "target-1",
-			type: "page",
-			url: "https://example.test/app",
+		const { client, logger } = await setupLogger({
+			attach: false,
+			snapshotStorage: true,
 		});
+		primeStorageReplies(client);
+
+		attachTarget(client, APP_TARGET);
 		await waitForAsyncEvent();
 		await logger.snapshotStorage();
 
@@ -3476,19 +2777,13 @@ describe("CdpResponseLogger storage snapshot", () => {
 	});
 
 	it("publishes a path-based hook event with counts and no contents", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
-		const hooks = createHooks();
-		primeStorageReplies(client);
-		const logger = createSnapshotLogger(client, storage, { hooks });
-
-		await logger.start();
-		attachTarget(client, {
-			session: "session-1",
-			targetId: "target-1",
-			type: "page",
-			url: "https://example.test/app",
+		const { client, hooks, logger } = await setupLogger({
+			attach: false,
+			snapshotStorage: true,
 		});
+		primeStorageReplies(client);
+
+		attachTarget(client, APP_TARGET);
 		await waitForAsyncEvent();
 		await logger.snapshotStorage();
 
@@ -3508,21 +2803,15 @@ describe("CdpResponseLogger storage snapshot", () => {
 
 	// A snapshot is best-effort: a domain the browser refuses must not lose the rest.
 	it("records a failing storage call and still writes the snapshot", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
-		const hooks = createHooks();
+		const { client, hooks, logger, storage } = await setupLogger({
+			attach: false,
+			snapshotStorage: true,
+		});
 		primeStorageReplies(client);
 		client.sendReplies.set("Storage.getCookies", new Error("Storage domain unavailable"));
 		client.sendReplies.set("IndexedDB.requestDatabaseNames", new Error("no storage key"));
-		const logger = createSnapshotLogger(client, storage, { hooks });
 
-		await logger.start();
-		attachTarget(client, {
-			session: "session-1",
-			targetId: "target-1",
-			type: "page",
-			url: "https://example.test/app",
-		});
+		attachTarget(client, APP_TARGET);
 		await waitForAsyncEvent();
 		await logger.snapshotStorage();
 
@@ -3544,8 +2833,10 @@ describe("CdpResponseLogger storage snapshot", () => {
 	});
 
 	it("marks the snapshot truncated when an origin holds more databases than the cap", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
+		const { client, logger, storage } = await setupLogger({
+			attach: false,
+			snapshotStorage: true,
+		});
 		primeStorageReplies(client);
 		client.sendReplies.set("IndexedDB.requestDatabaseNames", {
 			databaseNames: Array.from(
@@ -3553,15 +2844,8 @@ describe("CdpResponseLogger storage snapshot", () => {
 				(_, index) => `db-${index}`,
 			),
 		});
-		const logger = createSnapshotLogger(client, storage);
 
-		await logger.start();
-		attachTarget(client, {
-			session: "session-1",
-			targetId: "target-1",
-			type: "page",
-			url: "https://example.test/app",
-		});
+		attachTarget(client, APP_TARGET);
 		await waitForAsyncEvent();
 		await logger.snapshotStorage();
 
@@ -3573,22 +2857,17 @@ describe("CdpResponseLogger storage snapshot", () => {
 
 	// A store bigger than the page size is read once and reported as incomplete.
 	it("reads one page per object store and keeps the CDP hasMore flag", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
+		const { client, logger, storage } = await setupLogger({
+			attach: false,
+			snapshotStorage: true,
+		});
 		primeStorageReplies(client);
 		client.sendReplies.set("IndexedDB.requestData", {
 			hasMore: true,
 			objectStoreDataEntries: [REMOTE_OBJECT_ENTRY],
 		});
-		const logger = createSnapshotLogger(client, storage);
 
-		await logger.start();
-		attachTarget(client, {
-			session: "session-1",
-			targetId: "target-1",
-			type: "page",
-			url: "https://example.test/app",
-		});
+		attachTarget(client, APP_TARGET);
 		await waitForAsyncEvent();
 		await logger.snapshotStorage();
 
@@ -3610,21 +2889,16 @@ describe("CdpResponseLogger storage snapshot", () => {
 	});
 
 	it("stops at the deadline and still writes the partial snapshot", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
-		const hooks = createHooks();
+		const { client, hooks, logger, storage } = await setupLogger({
+			attach: false,
+			snapshotStorage: true,
+			snapshotTimeoutMs: 5,
+		});
 		primeStorageReplies(client);
 		// A call the browser never answers is exactly what the deadline exists for.
 		client.sendReplies.set("Storage.getCookies", () => Promise.withResolvers<never>().promise);
-		const logger = createSnapshotLogger(client, storage, { hooks, snapshotTimeoutMs: 5 });
 
-		await logger.start();
-		attachTarget(client, {
-			session: "session-1",
-			targetId: "target-1",
-			type: "page",
-			url: "https://example.test/app",
-		});
+		attachTarget(client, APP_TARGET);
 		await waitForAsyncEvent();
 		await logger.snapshotStorage();
 
@@ -3641,19 +2915,14 @@ describe("CdpResponseLogger storage snapshot", () => {
 	// That call runs before the reader, so without a bound of its own it would hold
 	// Up plugin shutdown, the browser close, and the run summary forever.
 	it("stops waiting for the live target list at the deadline", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
-		const hooks = createHooks();
-		primeStorageReplies(client);
-		const logger = createSnapshotLogger(client, storage, { hooks, snapshotTimeoutMs: 5 });
-
-		await logger.start();
-		attachTarget(client, {
-			session: "session-1",
-			targetId: "target-1",
-			type: "page",
-			url: "https://example.test/app",
+		const { client, hooks, logger, storage } = await setupLogger({
+			attach: false,
+			snapshotStorage: true,
+			snapshotTimeoutMs: 5,
 		});
+		primeStorageReplies(client);
+
+		attachTarget(client, APP_TARGET);
 		// The next Target.getTargets is the one the snapshot itself sends.
 		client.Target.getTargets.mockReturnValueOnce(Promise.withResolvers<never>().promise);
 		await waitForAsyncEvent();
@@ -3669,8 +2938,11 @@ describe("CdpResponseLogger storage snapshot", () => {
 	// The race only abandons the read, so the reader has to stop itself.
 	// A record written after the deadline would reach a storage writer already closed.
 	it("sends and records nothing more once the deadline abandoned the read", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
+		const { client, logger, storage } = await setupLogger({
+			attach: false,
+			snapshotStorage: true,
+			snapshotTimeoutMs: 5,
+		});
 		primeStorageReplies(client);
 		// An origin checks the deadline only where it starts, so a DOM storage read that
 		// Answers after it used to leave the whole IndexedDB half of that origin running.
@@ -3678,15 +2950,8 @@ describe("CdpResponseLogger storage snapshot", () => {
 			await Bun.sleep(50);
 			throw new Error("answered after the deadline");
 		});
-		const logger = createSnapshotLogger(client, storage, { snapshotTimeoutMs: 5 });
 
-		await logger.start();
-		attachTarget(client, {
-			session: "session-1",
-			targetId: "target-1",
-			type: "page",
-			url: "https://example.test/app",
-		});
+		attachTarget(client, APP_TARGET);
 		await waitForAsyncEvent();
 		await logger.snapshotStorage();
 		const sentAtDeadline = sentMethods(client);
@@ -3704,11 +2969,11 @@ describe("CdpResponseLogger storage snapshot", () => {
 
 	// The browser being gone is the normal launch-mode race, not a reason to crash.
 	it("records why no snapshot exists when the browser already disconnected", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
-		const logger = createSnapshotLogger(client, storage);
+		const { client, logger, storage } = await setupLogger({
+			attach: false,
+			snapshotStorage: true,
+		});
 
-		await logger.start();
 		client.emit("disconnect");
 		await logger.snapshotStorage();
 
@@ -3727,12 +2992,10 @@ describe("startLogger", () => {
 	// A throw after that left the run with no logger to close.
 	// Chrome kept naming every later download after a GUID and writing it into a dead run.
 	it("restores the download behavior when starting fails", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
+		const { client, logger } = await setupLogger({ captureDownloads: true, start: false });
 		client.Target.setAutoAttach.mockImplementationOnce(() =>
 			Promise.reject(new Error("Target.setAutoAttach failed")),
 		);
-		const logger = createDownloadLogger(client, storage);
 
 		await expect(startLogger(logger)).rejects.toThrow("Target.setAutoAttach failed");
 
@@ -3747,12 +3010,10 @@ describe("startLogger", () => {
 	// A throw before the override went in leaves nothing of this run's to undo.
 	// The default sent anyway would clear the behavior the browser already had.
 	it("sends no reset when starting fails before the override goes in", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
+		const { client, logger } = await setupLogger({ captureDownloads: true, start: false });
 		client.Target.setDiscoverTargets.mockImplementationOnce(() =>
 			Promise.reject(new Error("Target.setDiscoverTargets failed")),
 		);
-		const logger = createDownloadLogger(client, storage);
 
 		await expect(startLogger(logger)).rejects.toThrow("Target.setDiscoverTargets failed");
 
@@ -3762,12 +3023,10 @@ describe("startLogger", () => {
 
 	// The unguarded Target.getTargets is the other call that can end start().
 	it("closes the client when attaching to existing targets fails", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
+		const { client, logger } = await setupLogger({ captureDownloads: true, start: false });
 		client.Target.getTargets.mockImplementationOnce(() =>
 			Promise.reject(new Error("Target.getTargets failed")),
 		);
-		const logger = createDownloadLogger(client, storage);
 
 		await expect(startLogger(logger)).rejects.toThrow("Target.getTargets failed");
 
@@ -3775,9 +3034,7 @@ describe("startLogger", () => {
 	});
 
 	it("leaves a successful start untouched", async () => {
-		const client = new FakeClient();
-		const storage = createStorage();
-		const logger = createDownloadLogger(client, storage);
+		const { client, logger } = await setupLogger({ captureDownloads: true, start: false });
 
 		await expect(startLogger(logger)).resolves.toBeUndefined();
 
