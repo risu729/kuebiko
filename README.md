@@ -171,8 +171,9 @@ before it attached or had already closed, is still recorded but has no `url`.
 
 `errors.ndjson` contains per-request capture failures. Individual CDP failures
 do not stop the logger. WebSocket failures land here too: a frame the browser
-could not decode or send is recorded as a `Network.webSocketFrameError` event
-with the socket URL, since no frame line is written for it.
+could not decode or send is recorded as a `Network.webSocketFrameError` event,
+since no frame line is written for it. As with frame records, it carries the
+socket URL only while the logger has a mapping for that socket.
 
 `netlog.json` is Chromium NetLog for network-stack debugging.
 
