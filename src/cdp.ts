@@ -1163,11 +1163,13 @@ class CdpResponseLogger {
 	async #handleDetached(event: TargetDetachedEvent): Promise<void> {
 		const session = this.#sessions.get(event.sessionId);
 		this.#sessions.delete(event.sessionId);
+		let dropped = 0;
 
 		for (const [key, state] of this.#requests) {
 			if (state.session.sessionId === event.sessionId) {
 				this.#requests.delete(key);
 				this.#hopWrites.delete(key);
+				dropped += 1;
 			}
 		}
 
@@ -1179,6 +1181,7 @@ class CdpResponseLogger {
 			for (const key of keyed.keys()) {
 				if (key.startsWith(sessionPrefix)) {
 					keyed.delete(key);
+					dropped += 1;
 				}
 			}
 		}
@@ -1186,9 +1189,15 @@ class CdpResponseLogger {
 		// Downloads are tracked browser-wide and outlive the target that started them.
 		// Nothing about them is swept here.
 		this.#verbose(`detached session=${event.sessionId}`);
-		if (session) {
+		// A tab closing with nothing in flight is ordinary, and so are OOPIF and worker exits.
+		// Recording those would bury the detaches that did drop capture state.
+		// It would bury them in errors.ndjson and in the per-host breakdown alike.
+		if (session && dropped > 0) {
+			// Several of the swept maps can hold an entry for the very same request.
+			// A websocket holds an entry here without ever having had request state.
+			// The total therefore counts dropped state entries, not active requests.
 			await this.#recordCaptureError({
-				error: "Target detached before all active requests completed.",
+				error: `Target detached with ${dropped} dropped capture state ${dropped === 1 ? "entry" : "entries"}.`,
 				event: "Target.detachedFromTarget",
 				sessionId: event.sessionId,
 				targetId: session.targetId,
@@ -1202,7 +1211,13 @@ class CdpResponseLogger {
 		if (!sessionId) {
 			return;
 		}
-		const session = this.#sessions.get(sessionId) ?? { sessionId };
+		// Messages arrive in wire order, and a detach sweeps its maps before its first await.
+		// An event for a session no longer here therefore belongs to a destroyed target.
+		// Recording it would resurrect request state nothing can ever complete or remove.
+		const session = this.#sessions.get(sessionId);
+		if (session === undefined) {
+			return;
+		}
 		const key = requestKey(sessionId, event.requestId);
 		const previous = this.#requests.get(key);
 		const { redirectResponse } = event;
@@ -1327,8 +1342,13 @@ class CdpResponseLogger {
 		if (!sessionId) {
 			return;
 		}
+		// A response for a detached session is ignored for the same reason as its request.
+		// Streaming one would also send a command on a session the browser already destroyed.
+		const session = this.#sessions.get(sessionId);
+		if (session === undefined) {
+			return;
+		}
 		const key = requestKey(sessionId, event.requestId);
-		const session = this.#sessions.get(sessionId) ?? { sessionId };
 		const existing = this.#requests.get(key);
 
 		this.#requests.set(key, {
@@ -1515,7 +1535,8 @@ class CdpResponseLogger {
 	// A filled slot means the event ran ahead of the next hop's base event.
 	// It then waits in the buffer for that hop instead.
 	#handleRequestExtraInfo(event: RequestWillBeSentExtraInfoEvent, sessionId?: string): void {
-		if (!sessionId) {
+		// Headers of a detached session have no base event left to join, here or later.
+		if (!sessionId || !this.#sessions.has(sessionId)) {
 			return;
 		}
 		const key = requestKey(sessionId, event.requestId);
@@ -1540,7 +1561,8 @@ class CdpResponseLogger {
 	}
 
 	#handleResponseExtraInfo(event: ResponseReceivedExtraInfoEvent, sessionId?: string): void {
-		if (!sessionId) {
+		// Same as the request headers above: nothing detached can claim them any more.
+		if (!sessionId || !this.#sessions.has(sessionId)) {
 			return;
 		}
 		const key = requestKey(sessionId, event.requestId);
@@ -1806,7 +1828,8 @@ class CdpResponseLogger {
 	// Network.webSocketCreated carries the socket URL, and it is the only event that does.
 	// Handshake requests never reach #requests, so the URL is kept until the socket closes.
 	#handleWebSocketCreated(event: WebSocketCreatedEvent, sessionId?: string): void {
-		if (!sessionId) {
+		// A socket of a session already detached would never be swept again.
+		if (!sessionId || !this.#sessions.has(sessionId)) {
 			return;
 		}
 		this.#webSockets.set(requestKey(sessionId, event.requestId), event.url);
