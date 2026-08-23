@@ -1,4 +1,5 @@
 import { expect } from "bun:test";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 
 type CapturedApiRecord = {
@@ -21,6 +22,16 @@ type CapturedEventSourceMessage = {
 type CapturedWebSocketFrame = {
 	direction?: string | undefined;
 	payloadData?: string | undefined;
+	url?: string | undefined;
+};
+
+type CapturedDownload = {
+	error?: string | undefined;
+	file?: string | undefined;
+	guid?: string | undefined;
+	sha256?: string | undefined;
+	state?: string | undefined;
+	suggestedFilename?: string | undefined;
 	url?: string | undefined;
 };
 
@@ -85,10 +96,31 @@ const assertCapturedEventSourceMessages = (
 	expect(attributed.map((message) => message.eventId)).toEqual(["1", "2"]);
 };
 
+// The browser names the saved file after the download GUID.
+// The record is the only thing tying it back to a filename and the URL it came from.
+const assertCapturedDownload = async (
+	downloads: CapturedDownload[],
+	options: { captureDirectory: string; contents: string; url: string },
+): Promise<void> => {
+	const download = downloads.find((record) => record.url === options.url);
+	expect(download?.state).toBe("completed");
+	expect(download?.suggestedFilename).toBe("statement.csv");
+	expect(download?.error).toBeUndefined();
+	expect(download?.file).toBe(join("downloads", download?.guid ?? ""));
+	const saved = Bun.file(join(options.captureDirectory, download?.file ?? ""));
+	await expect(saved.text()).resolves.toBe(options.contents);
+	expect(download?.sha256).toBe(
+		createHash("sha256")
+			.update(new Uint8Array(await saved.arrayBuffer()))
+			.digest("hex"),
+	);
+};
+
 const assertRunSummary = (output: string): void => {
 	expect(output).toContain("summary responses=");
 	expect(output).toContain("summary websocket_frames=");
 	expect(output).toContain("eventsource_messages=");
+	expect(output).toContain("downloads=");
 };
 
 const readNetLog = async (path: string): Promise<NetLogRecord> => {
@@ -118,6 +150,7 @@ const assertNetLog = (netLog: NetLogRecord): void => {
 
 export {
 	assertCapturedApi,
+	assertCapturedDownload,
 	assertCapturedEventSourceMessages,
 	assertCapturedRawHeaders,
 	assertCapturedWebSocketFrames,
@@ -126,4 +159,9 @@ export {
 	readCapturedBodies,
 	readNetLog,
 };
-export type { CapturedApiRecord, CapturedEventSourceMessage, CapturedWebSocketFrame };
+export type {
+	CapturedApiRecord,
+	CapturedDownload,
+	CapturedEventSourceMessage,
+	CapturedWebSocketFrame,
+};

@@ -16,10 +16,11 @@ import {
 import { defineConfig } from "./config";
 import type { LoggerConfig, LoggerPluginConfig } from "./config";
 import { createPluginHost } from "./plugins";
+import type { LoggerPlugin, PluginContext } from "./plugins";
 import { getDefaultBaseDirectory, getDefaultCaptureDirectory } from "./sanitize";
 import { createStorage } from "./storage";
 import type { RunAnnotations } from "./storage";
-import type { CliOptions, HookEvent, HookEventName, LoggerPlugin, PluginContext } from "./types";
+import type { CliOptions, HookEvent, HookEventName } from "./types";
 
 const waitForShutdown = (): Promise<void> =>
 	new Promise((resolve) => {
@@ -73,6 +74,7 @@ const startConfiguredBrowser = async (
 // How the run was started, recorded in run.json next to the capture files.
 const getRunAnnotations = (options: CliOptions): RunAnnotations => ({
 	captureCookies: options.captureCookies,
+	captureDownloads: options.captureDownloads,
 	labels: options.labels,
 	note: options.note,
 	streamBodies: options.streamBodies,
@@ -98,6 +100,7 @@ const runLogger = async (options: CliOptions): Promise<void> => {
 		});
 		logger = await startCdpLogger({
 			captureCookies: options.captureCookies,
+			captureDownloads: options.captureDownloads,
 			cdp,
 			exclude: options.exclude,
 			hooks: plugins,

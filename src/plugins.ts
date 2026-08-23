@@ -6,17 +6,41 @@ import { parseLoggerConfig } from "./config";
 import type { LoggerConfig } from "./config";
 import type {
 	CompletedResponseMetadata,
+	DownloadRecord,
 	ErrorRecord,
 	EventSourceMessageRecord,
 	HookEvent,
 	HookEventName,
 	HookPublisher,
-	LoggerPlugin,
 	LoggerStorage,
-	PluginContext,
 	RunRef,
 	WebSocketFrameRecord,
 } from "./types";
+
+// The plugin-authoring surface lives with the runtime that loads and calls it.
+type MaybePromise<T> = T | Promise<T>;
+
+type PluginContext = {
+	configDirectory: string;
+	error: (error: unknown) => void;
+	log: (message: string) => void;
+	options: unknown;
+	pluginDirectory: string;
+	resolvePluginPath: (relativePath: string) => string;
+	resolveRunPath: (relativePath: string) => string;
+	runDirectory: string;
+	warn: (message: string) => void;
+};
+
+type LoggerPlugin = {
+	close?: (context: PluginContext) => MaybePromise<void>;
+	events: HookEventName[];
+	id: string;
+	name?: string | undefined;
+	onEvent: (event: HookEvent, context: PluginContext) => MaybePromise<void>;
+	setup?: (context: PluginContext) => MaybePromise<void>;
+	version: string;
+};
 
 const HOOK_EVENT_NAMES = new Set<HookEventName>([
 	"run.started",
@@ -26,6 +50,7 @@ const HOOK_EVENT_NAMES = new Set<HookEventName>([
 	"websocket.frame.received",
 	"websocket.frame.sent",
 	"eventsource.message",
+	"download.completed",
 	"capture.error",
 ]);
 
@@ -409,6 +434,21 @@ const createEventSourceMessageHookEvent = (
 	version: 1,
 });
 
+// Path-based like every other hook event: the record names the saved file, never its bytes.
+const createDownloadCompletedHookEvent = (
+	download: DownloadRecord,
+	storage: LoggerStorage,
+): HookEvent => ({
+	download,
+	event: "download.completed",
+	run: {
+		runDirectory: storage.runDirectory,
+		runTimestamp: storage.runTimestamp,
+	},
+	timestamp: nowIso(),
+	version: 1,
+});
+
 const createCaptureErrorHookEvent = (error: ErrorRecord, storage: LoggerStorage): HookEvent => ({
 	error,
 	event: "capture.error",
@@ -443,6 +483,7 @@ export {
 	DEFAULT_QUEUE_SIZE,
 	DEFAULT_TIMEOUT_MS,
 	createCaptureErrorHookEvent,
+	createDownloadCompletedHookEvent,
 	createEventSourceMessageHookEvent,
 	createPluginHost,
 	createResponseCompletedHookEvent,
@@ -450,3 +491,4 @@ export {
 	loadConfig,
 	loadPlugins,
 };
+export type { LoggerPlugin, MaybePromise, PluginContext };

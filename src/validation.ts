@@ -19,6 +19,14 @@ const optionalStringArray = z.preprocess(
 	z.array(z.string().min(1)),
 );
 
+const parseRegex = (value: string, flag: string): RegExp => {
+	try {
+		return new RegExp(value, "u");
+	} catch (error) {
+		throw new Error(`${flag} must be a valid JavaScript regular expression.`, { cause: error });
+	}
+};
+
 const parseNonEmptyText = (value: string | undefined, flag: string): string | undefined => {
 	if (value !== undefined && !value.trim()) {
 		throw new Error(`${flag} must not be empty.`);
@@ -44,4 +52,10 @@ const parseSafeInteger = (
 	return parsed;
 };
 
-export { optionalNonEmptyString, optionalStringArray, parseNonEmptyText, parseSafeInteger };
+export {
+	optionalNonEmptyString,
+	optionalStringArray,
+	parseNonEmptyText,
+	parseRegex,
+	parseSafeInteger,
+};

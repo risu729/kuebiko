@@ -7,6 +7,7 @@ describe("parseArgs", () => {
 		expect(parseArgs([])).toEqual({
 			browserArgs: [],
 			captureCookies: false,
+			captureDownloads: false,
 			cdp: DEFAULT_CDP_ENDPOINT,
 			cdpPort: 9222,
 			help: false,
@@ -90,6 +91,10 @@ describe("parseArgs", () => {
 
 	it("parses the raw header opt-in", () => {
 		expect(parseArgs(["--capture-cookies"]).captureCookies).toBe(true);
+	});
+
+	it("parses the download opt-in", () => {
+		expect(parseArgs(["--capture-downloads"]).captureDownloads).toBe(true);
 	});
 
 	it("rejects unknown flags", () => {

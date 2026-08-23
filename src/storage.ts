@@ -5,13 +5,14 @@ import { join } from "node:path";
 
 import type { Protocol } from "devtools-protocol";
 
-import { TOOL_NAME, TOOL_VERSION } from "./constants";
+import { DOWNLOADS_DIRECTORY, TOOL_NAME, TOOL_VERSION } from "./constants";
 import { createBodyFilename, relativeBodyPath, timestampForFile } from "./sanitize";
 import { createCaptureSummary } from "./summary";
 import type { CaptureSummary } from "./summary";
 import type {
 	BodySaveResult,
 	CompletedResponseMetadata,
+	DownloadRecord,
 	ErrorRecord,
 	EventSourceMessageRecord,
 	LoggerStorage,
@@ -29,6 +30,8 @@ type NdjsonWriter = {
 type RunInfo = {
 	// Records whether the run may hold plaintext session cookies from --capture-cookies.
 	captureCookies: boolean;
+	// Records whether the browser was told to save downloads into this run directory.
+	captureDownloads: boolean;
 	cdpEndpoint: string;
 	createdAt: string;
 	labels?: string[] | undefined;
@@ -46,6 +49,7 @@ type RunInfo = {
 // How the run was started: the owner's free-form description plus capture settings.
 type RunAnnotations = Pick<RunInfo, "labels" | "note"> & {
 	captureCookies?: boolean | undefined;
+	captureDownloads?: boolean | undefined;
 	streamBodies?: boolean | undefined;
 };
 
@@ -55,6 +59,20 @@ type RunStorage = LoggerStorage & {
 };
 
 const sha256 = (bytes: Uint8Array): string => createHash("sha256").update(bytes).digest("hex");
+
+// A download can be far larger than a response body, so it is hashed in chunks.
+// Reading it whole the way a saved body is read would not bound the memory it takes.
+const sha256File = async (path: string): Promise<string> => {
+	const hash = createHash("sha256");
+	for await (const chunk of Bun.file(path).stream()) {
+		hash.update(chunk);
+	}
+
+	return hash.digest("hex");
+};
+
+// Chromium identifies a download by a UUID, which is all this path segment may be.
+const DOWNLOAD_GUID_PATTERN = /^[0-9A-Fa-f-]{36}$/u;
 
 const errorMessage = (error: unknown): string =>
 	error instanceof Error ? error.message : String(error);
@@ -116,6 +134,8 @@ const createRunInfo = (
 ): RunInfo => ({
 	// Always present, so a capture directory self-describes its cookie sensitivity.
 	captureCookies: annotations.captureCookies ?? false,
+	// Always present too, so the directory says whether browser behavior was changed.
+	captureDownloads: annotations.captureDownloads ?? false,
 	cdpEndpoint,
 	createdAt: runTimestamp,
 	// JSON.stringify drops undefined, so unlabelled runs keep the original run.json shape.
@@ -140,6 +160,10 @@ const createStorage = async (
 	const requestsDirectory = join(runDirectory, "requests");
 	await mkdir(bodiesDirectory, { recursive: true });
 	await mkdir(requestsDirectory, { recursive: true });
+	// Only the browser writes here, so the directory exists only when downloads are captured.
+	if (annotations.captureDownloads) {
+		await mkdir(join(runDirectory, DOWNLOADS_DIRECTORY), { recursive: true });
+	}
 	await Bun.write(
 		join(runDirectory, "run.json"),
 		`${JSON.stringify(createRunInfo(runDirectory, cdpEndpoint, runTimestamp, annotations), null, "\t")}\n`,
@@ -149,6 +173,7 @@ const createStorage = async (
 	const errors = createNdjsonWriter(join(runDirectory, "errors.ndjson"));
 	const websocket = createNdjsonWriter(join(runDirectory, "websocket.ndjson"));
 	const eventSource = createNdjsonWriter(join(runDirectory, "eventsource.ndjson"));
+	const downloads = createNdjsonWriter(join(runDirectory, "downloads.ndjson"));
 	const summary = createCaptureSummary();
 	let bodyCounter = 0;
 	let requestCounter = 0;
@@ -232,6 +257,27 @@ const createStorage = async (
 		}
 	};
 
+	// Under Browser.setDownloadBehavior "allowAndName" the browser names the file by GUID.
+	// The file keeps that name: renaming it would race the browser's own writes.
+	// This record is what maps the GUID back to the suggested filename instead.
+	// The GUID is browser-supplied and ends up in a path that plugins resolve.
+	// Anything that is not the UUID Chromium sends is rejected before it is joined.
+	const hashDownload = async (
+		guid: string,
+	): Promise<Pick<DownloadRecord, "error" | "file" | "sha256">> => {
+		if (!DOWNLOAD_GUID_PATTERN.test(guid)) {
+			return { error: `Download guid ${guid} is not a download identifier.` };
+		}
+
+		const relativePath = join(DOWNLOADS_DIRECTORY, guid);
+		try {
+			return { file: relativePath, sha256: await sha256File(join(runDirectory, relativePath)) };
+		} catch (error) {
+			// A completed download whose file is gone is a loss, not a reason to stop capturing.
+			return { error: errorMessage(error) };
+		}
+	};
+
 	// How CDP delivered the body is recorded verbatim, saved or not.
 	const recordBody = async (
 		state: RequestState,
@@ -250,6 +296,7 @@ const createStorage = async (
 				errors.close(),
 				websocket.close(),
 				eventSource.close(),
+				downloads.close(),
 			]);
 		},
 		recordRequestBody,
@@ -260,6 +307,17 @@ const createStorage = async (
 				summary.recordRedirectHop();
 			}
 			await metadata.append(record);
+		},
+		// A canceled download is appended as it stands, so the loss stays in the record file.
+		recordDownload: async (download: DownloadRecord) => {
+			const record: DownloadRecord =
+				download.state === "completed"
+					? { ...download, ...(await hashDownload(download.guid)) }
+					: download;
+			summary.recordDownload();
+			await downloads.append(record);
+
+			return record;
 		},
 		recordError: async (record: ErrorRecord) => {
 			// Count before the write so a failing errors.ndjson still shows up in the summary.

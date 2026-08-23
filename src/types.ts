@@ -1,13 +1,12 @@
 import type { Protocol } from "devtools-protocol";
 
-type MaybePromise<T> = T | Promise<T>;
-
 type CliOptions = {
 	browserArgs: string[];
 	browserCommand?: string | undefined;
 	browserPath?: string | undefined;
 	browserProfile?: string | undefined;
 	captureCookies: boolean;
+	captureDownloads: boolean;
 	config?: string | undefined;
 	cdp: string;
 	cdpPort: number;
@@ -144,6 +143,26 @@ type WebSocketFrameRecord = StreamRecord & {
 	payloadData: string;
 };
 
+// One record per browser download, written only with --capture-downloads.
+// A canceled download is recorded too, without a file, so the loss stays visible.
+// The Browser download events are browser-wide and name only the frame behind one.
+// A record is therefore tied to its origin by frameId, not by CDP session.
+type DownloadRecord = {
+	error?: string | undefined;
+	// Saved file relative to the run directory, absent unless the file was hashed.
+	file?: string | undefined;
+	frameId?: string | undefined;
+	guid: string;
+	receivedBytes?: number | undefined;
+	sha256?: string | undefined;
+	startedAt?: string | undefined;
+	state: "canceled" | "completed";
+	suggestedFilename?: string | undefined;
+	timestamp: string;
+	totalBytes?: number | undefined;
+	url?: string | undefined;
+};
+
 type RunRef = {
 	runDirectory: string;
 	runTimestamp: string;
@@ -206,36 +225,21 @@ type EventSourceMessageHookEvent = HookEventBase & {
 	message: EventSourceMessageRecord;
 };
 
+// Published for a saved download only: a canceled one has no file to hand a plugin.
+type DownloadCompletedHookEvent = HookEventBase & {
+	download: DownloadRecord;
+	event: "download.completed";
+};
+
 type CaptureErrorHookEvent = HookEventBase & { error: ErrorRecord; event: "capture.error" };
 
 type HookEvent =
 	| CaptureErrorHookEvent
+	| DownloadCompletedHookEvent
 	| EventSourceMessageHookEvent
 	| ResponseCompletedHookEvent
 	| RunHookEvent
 	| WebSocketFrameHookEvent;
-
-type PluginContext = {
-	configDirectory: string;
-	error: (error: unknown) => void;
-	log: (message: string) => void;
-	options: unknown;
-	pluginDirectory: string;
-	resolvePluginPath: (relativePath: string) => string;
-	resolveRunPath: (relativePath: string) => string;
-	runDirectory: string;
-	warn: (message: string) => void;
-};
-
-type LoggerPlugin = {
-	close?: (context: PluginContext) => MaybePromise<void>;
-	events: HookEventName[];
-	id: string;
-	name?: string | undefined;
-	onEvent: (event: HookEvent, context: PluginContext) => MaybePromise<void>;
-	setup?: (context: PluginContext) => MaybePromise<void>;
-	version: string;
-};
 
 type HookPublisher = {
 	close: () => Promise<void>;
@@ -253,22 +257,11 @@ type LoggerStorage = RunRef & {
 	// Bytes already assembled, saved without the base64 round-trip recordBody needs.
 	recordBodyBytes: (state: RequestState, bytes: Uint8Array) => Promise<BodySaveResult>;
 	recordCompletedResponse: (metadata: CompletedResponseMetadata) => Promise<void>;
+	// Hashes the saved file for a completed download, then appends the record it wrote.
+	recordDownload: (download: DownloadRecord) => Promise<DownloadRecord>;
 	recordError: (error: ErrorRecord) => Promise<void>;
 	recordEventSourceMessage: (message: EventSourceMessageRecord) => Promise<void>;
 	recordWebSocketFrame: (frame: WebSocketFrameRecord) => Promise<void>;
-};
-
-type StartLoggerOptions = {
-	// Subscribes the ExtraInfo events, which is the only way raw cookies are recorded.
-	captureCookies?: boolean | undefined;
-	cdp: string;
-	exclude?: RegExp | undefined;
-	hooks?: HookPublisher | undefined;
-	include?: RegExp | undefined;
-	maxBodyBytes?: number | undefined;
-	streamBodies?: boolean | undefined;
-	storage: LoggerStorage;
-	verbose: boolean;
 };
 
 export type {
@@ -276,6 +269,8 @@ export type {
 	CaptureErrorHookEvent,
 	CliOptions,
 	CompletedResponseMetadata,
+	DownloadCompletedHookEvent,
+	DownloadRecord,
 	ErrorRecord,
 	EventSourceMessageHookEvent,
 	EventSourceMessageRecord,
@@ -283,10 +278,7 @@ export type {
 	HookEvent,
 	HookEventName,
 	HookPublisher,
-	LoggerPlugin,
 	LoggerStorage,
-	MaybePromise,
-	PluginContext,
 	RequestState,
 	RequestBodySaveResult,
 	RequestBodySource,
@@ -294,7 +286,6 @@ export type {
 	RunRef,
 	RunHookEvent,
 	SessionInfo,
-	StartLoggerOptions,
 	WebSocketFrameHookEvent,
 	WebSocketFrameRecord,
 };

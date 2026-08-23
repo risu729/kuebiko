@@ -6,6 +6,7 @@ import { READY_MESSAGE } from "kuebiko";
 
 import type {
 	CapturedApiRecord,
+	CapturedDownload,
 	CapturedEventSourceMessage,
 	CapturedWebSocketFrame,
 } from "./assertions";
@@ -181,6 +182,7 @@ const startLogger = (options: {
 		"--browser-arg=--no-first-run",
 		"--browser-arg=--no-default-browser-check",
 		"--capture-cookies",
+		"--capture-downloads",
 		"--out",
 		options.captureDirectory,
 	]);
@@ -227,6 +229,15 @@ const findEventSourceMessages = async (
 		return messages.length >= 2 ? messages : undefined;
 	});
 
+// The page clicks one download link, so exactly one terminal record must land.
+const findDownloads = async (captureDirectory: string): Promise<CapturedDownload[]> =>
+	await waitFor("captured downloads", async () => {
+		const downloads = await readNdjson<CapturedDownload>(
+			join(captureDirectory, "downloads.ndjson"),
+		);
+		return downloads.length >= 1 ? downloads : undefined;
+	});
+
 const startContext = async (path = requireBrowserPath()): Promise<TestContext> => {
 	const directories = await createRunDirectories();
 	const fixtureServer = startFixtureServer();
@@ -263,6 +274,7 @@ export {
 	closeContext,
 	createRunDirectories,
 	findCapturedApiRecord,
+	findDownloads,
 	findEventSourceMessages,
 	findWebSocketFrames,
 	loadPageAndWaitForCapture,

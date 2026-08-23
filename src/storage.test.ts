@@ -7,6 +7,10 @@ import { bodyToBytes, createStorage, sha256 } from "./storage";
 import type { RunInfo } from "./storage";
 import type { RequestState } from "./types";
 
+// Chromium identifies a download by a UUID, which is the only name storage will join.
+const DOWNLOAD_GUID = "9f1c8d7e-4b2a-4c3d-9e5f-6a7b8c9d0e1f";
+const OTHER_DOWNLOAD_GUID = "0a1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d";
+
 describe("bodyToBytes", () => {
 	it("decodes base64 responses and UTF-8 text responses", () => {
 		expect(Buffer.from(bodyToBytes({ base64Encoded: true, body: "aGVsbG8=" })).toString()).toBe(
@@ -116,6 +120,94 @@ describe("createStorage", () => {
 		await expect(readdir(join(dir, "requests"))).resolves.toHaveLength(1);
 	});
 
+	// The browser names a download after its GUID, so only the record maps it back.
+	it("hashes a completed download and records where it was saved", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "kuebiko-"));
+		const storage = await createStorage(
+			dir,
+			"http://127.0.0.1:9222",
+			{ captureDownloads: true },
+			"2026-07-06T12:34:56Z",
+		);
+		const bytes = Buffer.from("%PDF-1.7 statement");
+		await Bun.write(join(dir, "downloads", DOWNLOAD_GUID), bytes);
+
+		const record = await storage.recordDownload({
+			guid: DOWNLOAD_GUID,
+			receivedBytes: bytes.byteLength,
+			state: "completed",
+			suggestedFilename: "statement.pdf",
+			timestamp: "2026-07-06T12:34:57Z",
+			totalBytes: bytes.byteLength,
+			url: "https://bank.test/statements/2026-07.pdf",
+		});
+		await storage.close();
+
+		expect(record).toMatchObject({
+			file: join("downloads", DOWNLOAD_GUID),
+			sha256: sha256(bytes),
+			state: "completed",
+			suggestedFilename: "statement.pdf",
+		});
+		const downloads = await Bun.file(join(dir, "downloads.ndjson")).text();
+		expect(downloads.trim()).toContain(sha256(bytes));
+		expect(storage.summary.render()).toContain("downloads=1");
+	});
+
+	it("records a canceled download and a download whose file is gone as losses", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "kuebiko-"));
+		const storage = await createStorage(
+			dir,
+			"http://127.0.0.1:9222",
+			{ captureDownloads: true },
+			"2026-07-06T12:34:56Z",
+		);
+
+		const canceled = await storage.recordDownload({
+			guid: DOWNLOAD_GUID,
+			state: "canceled",
+			timestamp: "2026-07-06T12:34:57Z",
+		});
+		// Nothing was ever written under this GUID, which must not take the capture down.
+		const missing = await storage.recordDownload({
+			guid: OTHER_DOWNLOAD_GUID,
+			state: "completed",
+			timestamp: "2026-07-06T12:34:58Z",
+		});
+		// The GUID names a path under the run directory, so a made-up one is refused.
+		const madeUp = await storage.recordDownload({
+			guid: "../../etc/passwd",
+			state: "completed",
+			timestamp: "2026-07-06T12:34:59Z",
+		});
+		await storage.close();
+
+		expect(canceled.error).toBeUndefined();
+		expect(canceled.file).toBeUndefined();
+		expect(missing.file).toBeUndefined();
+		expect(missing.sha256).toBeUndefined();
+		expect(missing.error).toBeDefined();
+		expect(madeUp.file).toBeUndefined();
+		expect(madeUp.error).toContain("../../etc/passwd");
+		// All three are still recorded, so none of the losses is silent.
+		expect(storage.summary.render()).toContain("downloads=3");
+	});
+
+	it("creates the download directory only when downloads are captured", async () => {
+		const withFlag = await mkdtemp(join(tmpdir(), "kuebiko-"));
+		const withoutFlag = await mkdtemp(join(tmpdir(), "kuebiko-"));
+		await createStorage(
+			withFlag,
+			"http://127.0.0.1:9222",
+			{ captureDownloads: true },
+			"2026-07-06T12:34:56Z",
+		);
+		await createStorage(withoutFlag, "http://127.0.0.1:9222", {}, "2026-07-06T12:34:56Z");
+
+		await expect(readdir(join(withFlag, "downloads"))).resolves.toEqual([]);
+		await expect(readdir(join(withoutFlag, "downloads"))).rejects.toThrow();
+	});
+
 	it("tracks saved bodies and errors in the run summary", async () => {
 		const dir = await mkdtemp(join(tmpdir(), "kuebiko-"));
 		const storage = await createStorage(dir, "http://127.0.0.1:9222", {}, "2026-07-06T12:34:56Z");
@@ -153,7 +245,8 @@ describe("createStorage", () => {
 
 		expect(storage.summary.render().split("\n")).toEqual([
 			"summary responses=1 response_bytes=11 requests=1 request_bytes=5",
-			"summary websocket_frames=1 eventsource_messages=1 redirects=0 errors=1",
+			"summary websocket_frames=1 eventsource_messages=1 downloads=0 redirects=0",
+			"summary errors=1",
 			"summary_errors host=example.test total=1 Network.getResponseBody=1",
 		]);
 	});
@@ -183,7 +276,8 @@ describe("createStorage", () => {
 
 		expect(storage.summary.render().split("\n")).toEqual([
 			"summary responses=0 response_bytes=0 requests=0 request_bytes=0",
-			"summary websocket_frames=0 eventsource_messages=0 redirects=1 errors=0",
+			"summary websocket_frames=0 eventsource_messages=0 downloads=0 redirects=1",
+			"summary errors=0",
 		]);
 	});
 
@@ -250,6 +344,7 @@ describe("createStorage", () => {
 			"http://127.0.0.1:9222",
 			{
 				captureCookies: true,
+				captureDownloads: true,
 				labels: ["account-a", "billing"],
 				note: "manual sweep",
 				streamBodies: true,
@@ -264,6 +359,7 @@ describe("createStorage", () => {
 		expect(runInfo.note).toBe("manual sweep");
 		expect(runInfo.captureCookies).toBe(true);
 		expect(runInfo.streamBodies).toBe(true);
+		expect(runInfo.captureDownloads).toBe(true);
 		expect(runInfo.createdAt).toBe("2026-07-06T12:34:56Z");
 	});
 
@@ -284,6 +380,7 @@ describe("createStorage", () => {
 			expect(Object.hasOwn(runInfo, "note")).toBe(false);
 			// Plain booleans, so they stay in run.json even when the flags are off.
 			expect(runInfo["captureCookies"]).toBe(false);
+			expect(runInfo["captureDownloads"]).toBe(false);
 			expect(runInfo["streamBodies"]).toBe(false);
 		}
 	});

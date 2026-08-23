@@ -8,6 +8,7 @@ import {
 	optionalNonEmptyString,
 	optionalStringArray,
 	parseNonEmptyText,
+	parseRegex,
 	parseSafeInteger,
 } from "./validation";
 
@@ -50,6 +51,10 @@ const cliArgs = {
 	},
 	"capture-cookies": {
 		description: "Also record raw wire headers, including live cookies.",
+		type: "boolean",
+	},
+	"capture-downloads": {
+		description: "Save browser downloads into the run directory.",
 		type: "boolean",
 	},
 	config: {
@@ -141,14 +146,6 @@ const validFlags = new Set([
 	),
 ]);
 
-const parseRegex = (value: string, flag: string): RegExp => {
-	try {
-		return new RegExp(value, "u");
-	} catch (error) {
-		throw new Error(`${flag} must be a valid JavaScript regular expression.`, { cause: error });
-	}
-};
-
 const CliOptionsSchema: z.ZodType<CliOptions> = z
 	.object({
 		browserArgs: optionalStringArray,
@@ -156,6 +153,7 @@ const CliOptionsSchema: z.ZodType<CliOptions> = z
 		browserPath: optionalNonEmptyString,
 		browserProfile: optionalNonEmptyString,
 		captureCookies: z.boolean(),
+		captureDownloads: z.boolean(),
 		config: optionalNonEmptyString,
 		cdp: z.url(),
 		cdpPort: optionalNonEmptyString.transform((value) => {
@@ -229,6 +227,7 @@ const normalizeArgs = (args: LoggerArgs): CliOptions =>
 		browserPath: args["browser-path"],
 		browserProfile: args["browser-profile"],
 		captureCookies: args["capture-cookies"] ?? false,
+		captureDownloads: args["capture-downloads"] ?? false,
 		config: args.config,
 		cdp: args.cdp,
 		cdpPort: args["cdp-port"],

@@ -1,10 +1,10 @@
 # Kuebiko
 
-Kuebiko is a passive, extensible network capture tool for browsers that expose
-the Chrome DevTools Protocol (CDP). It can launch a dedicated browser profile or
-attach to an existing local CDP endpoint, then saves request/response bodies
-plus metadata while you browse manually. Trusted local plugins can react to
-completed captures without changing browser traffic.
+Kuebiko is a passive-by-default, extensible network capture tool for browsers
+that expose the Chrome DevTools Protocol (CDP). It can launch a dedicated
+browser profile or attach to an existing local CDP endpoint, then saves
+request/response bodies plus metadata while you browse manually. Trusted local
+plugins can react to completed captures without changing browser traffic.
 
 This tool is intentionally narrow. It does not use mitmproxy, `SSLKEYLOGFILE`,
 packet capture, request interception, browser automation, login automation,
@@ -18,6 +18,7 @@ throwaway browser profile:
 - response bodies from CDP `Network.getResponseBody`, or
   `Network.streamResourceContent` with `--stream-bodies`
 - request payloads that the browser exposes through CDP
+- files the browser downloads, with `--capture-downloads`
 - request/response metadata in append-only NDJSON
 - Chromium NetLog in the same run directory when using browser launch mode
 
@@ -31,7 +32,7 @@ The logger observes the browser locally. The website does not receive a header,
 cookie, JavaScript variable, or protocol message saying that CDP logging is
 enabled.
 
-Launch mode and the logger are deliberately passive:
+Launch mode and the logger are passive by default:
 
 - CDP is bound to `127.0.0.1`.
 - The logger uses the CDP `Network` domain to observe completed browser network
@@ -48,6 +49,27 @@ Launch mode and the logger are deliberately passive:
 - After enabling Network on an attached popup, iframe, or worker target, the
   logger sends `Runtime.runIfWaitingForDebugger` for that target session; it
   does not otherwise use the Runtime domain.
+
+`--capture-downloads` is the one exception, and it is opt-in. That flag does
+change browser behavior rather than only observing it:
+
+- It calls `Browser.setDownloadBehavior` with `allowAndName`, so downloads are
+  written into the run directory and named after their download GUID instead of
+  going to your normal download folder under their suggested names.
+- `allowAndName` also allows every download request. Downloads Chrome would
+  normally block, hold behind the multiple-downloads prompt, route through "Ask
+  where to save each file", or gate behind the dangerous-file confirmation are
+  saved silently instead: the download is not marked dangerous and nothing is
+  asked.
+- The same call turns on the browser-wide `Browser` download events. No CDP
+  domain is enabled per target for this, and the `Network` domain never reports
+  downloads at all.
+
+Where a download is written and what it is named on disk is not observable from
+page script. Allowing a download Chrome would otherwise have blocked or
+prompted about is: a page that starts one can see it go through. The flag is off
+by default, and without it the logger makes no such call and keeps downloads
+exactly where the browser would put them.
 
 That means a destination site should see ordinary browser requests from the
 dedicated profile, not an explicit "logger enabled" signal.
@@ -129,8 +151,10 @@ metadata.ndjson
 errors.ndjson
 websocket.ndjson
 eventsource.ndjson
+downloads.ndjson
 bodies/
 requests/
+downloads/
 plugins/
 netlog.json
 ```
@@ -139,6 +163,9 @@ netlog.json
 that the browser exposes through CDP. Filenames are generated from timestamp,
 SHA-256, counter, and MIME-derived extension; URLs are not placed into
 filenames.
+
+`downloads/` is created only with `--capture-downloads`, because only the
+browser writes into it.
 
 `plugins/` is created when configured plugins write per-plugin output. The core
 logger still only writes raw capture files; plugins are trusted local extension
@@ -150,7 +177,8 @@ was made. Both fields are omitted when the flags are not used. A
 `captureCookies` boolean is always present so a capture directory says whether
 `--capture-cookies` was on and it may therefore hold plaintext session cookies.
 A `streamBodies` boolean is always present too, so the directory also says how
-its bodies were retrieved.
+its bodies were retrieved, and a `captureDownloads` boolean says whether browser
+download behavior was changed for the run.
 
 `metadata.ndjson` contains one JSON object per completed response that passed
 the filters. When available, the same metadata line links to both a saved
@@ -249,11 +277,48 @@ unlike a WebSocket handshake. A message recorded after the logger lost that
 request state, because the target detached or the stream started before it
 attached, is still written but has no `url`.
 
+`--capture-downloads` records files the browser downloads, which CDP never
+returns a response body for. With the flag the logger calls
+`Browser.setDownloadBehavior` once, on the browser connection rather than per
+target, so it covers every target of the default browser context including ones
+that attach later. The behavior is `allowAndName` with `downloads/` inside the
+run directory as the download path, and `eventsEnabled` turns on the
+browser-wide `Browser.downloadWillBegin` and `Browser.downloadProgress` events
+the logger subscribes to. The deprecated `Page` equivalents are not used, so
+nothing is enabled per target and a download whose tab closes before it finishes
+is still recorded. Both are off without the flag: no download behavior change,
+no download tracking. When the run ends the logger sets the behavior back to
+`default`, which matters in attach mode where the browser outlives the logger.
+
+Under `allowAndName` the browser names each saved file after the download GUID
+and nothing else. The file keeps that name: renaming it would race the browser's
+own writes, so `downloads.ndjson` is what maps the GUID back to a human-readable
+name. It contains one JSON object per finished download with the `guid`, the
+`url` and `suggestedFilename` the browser reported when the download began, the
+`state`, `totalBytes` and `receivedBytes`, the `frameId` that started it, the
+`startedAt` and `timestamp` times, and, for a completed download, the saved
+`file` path relative to the run directory plus its `sha256`. Downloads are
+content-addressed the same way response bodies are: the hash is over the file
+the browser wrote, computed in chunks so a large download does not have to be
+held in memory. The record is written after that hash, and shutdown waits for a
+hash still in flight so no finished download is lost to it.
+
+A canceled download is recorded too, with its `state` and no file, so the loss
+is visible rather than silent. A completed download whose file the logger cannot
+read is recorded with an `error` instead of a hash, and also lands in
+`errors.ndjson` as a `Browser.downloadProgress` event. Chrome reports an
+interrupted download as canceled, and a resumed one completes afterwards: that
+appends a second line for the same `guid`, the completion superseding the
+earlier loss. Repeats of a state already recorded are ignored, so a `guid` never
+gets the same outcome twice.
+
 `--include` and `--exclude` apply to response URLs only. They never gate
 `websocket.ndjson`, because a frame without a URL could not be matched anyway,
 and they never gate `eventsource.ndjson` either, even though its messages do
 carry a URL: that is a deliberate choice, because filtering part of a live
-stream would be more confusing than not filtering it at all.
+stream would be more confusing than not filtering it at all. They do not gate
+`downloads.ndjson` either: the browser has already written the file by then, so
+filtering the record would only hide it.
 
 `errors.ndjson` contains per-request capture failures. Individual CDP failures
 do not stop the logger. WebSocket failures land here too: a frame the browser
@@ -270,7 +335,8 @@ visible without opening `errors.ndjson`:
 
 ```text
 summary responses=482 response_bytes=19203112 requests=37 request_bytes=8241
-summary websocket_frames=126 eventsource_messages=18 redirects=54 errors=4
+summary websocket_frames=126 eventsource_messages=18 downloads=2 redirects=54
+summary errors=4
 summary_errors host=example.test total=2 Network.getResponseBody=2
 summary_errors host=cdn.example.test total=1 Network.loadingFailed=1
 summary_errors host=plugin:json-api-mirror total=1 Plugin.onEvent=1
@@ -279,6 +345,9 @@ summary_errors host=plugin:json-api-mirror total=1 Plugin.onEvent=1
 `responses` and `requests` count saved body files, and the byte totals are the
 bytes written for them. `websocket_frames` counts every frame recorded, sent and
 received together, and `eventsource_messages` counts every recorded SSE message.
+`downloads` counts every download record written with `--capture-downloads`,
+canceled ones included, because a lost download is exactly what the summary
+should surface; the record's `state` says which it was.
 `redirects` counts recorded redirect hops, which have no body
 of their own and would otherwise be invisible in the totals. One
 `summary_errors` line is printed per host with the `errors.ndjson` `event`
@@ -418,6 +487,7 @@ Supported plugin events are:
 - `websocket.frame.received`
 - `websocket.frame.sent`
 - `eventsource.message`
+- `download.completed`
 - `capture.error`
 
 Hook events do not contain inline request or response bodies. Read saved files
@@ -426,6 +496,13 @@ present. WebSocket frames and SSE messages have no saved body file of their own:
 `websocket.frame.*` carries the frame in `event.frame` and `eventsource.message`
 carries the message in `event.message`, exactly as written to the matching
 NDJSON file.
+
+`download.completed` is published for a saved download only, with the record in
+`event.download` exactly as written to `downloads.ndjson`. Like every other hook
+event it is path-based: read the file with
+`ctx.resolveRunPath(event.download.file)`. A canceled download, or a completed
+one whose file could not be read, publishes nothing, because there is no file to
+hand a plugin; both are still written to `downloads.ndjson`.
 
 Redirect hops publish `response.completed` like any other recorded response, so
 plugins see the whole chain. Such an event has `response.redirect` set to `true`
@@ -600,6 +677,7 @@ Options:
   --exclude <regex>        Do not persist matching response URLs
   --max-body-bytes <num>   Skip body retrieval above encoded byte length
   --capture-cookies        Also record raw wire headers, including live cookies
+  --capture-downloads      Save browser downloads into the run directory
   --stream-bodies          Assemble bodies from Network.streamResourceContent
                            (experimental)
   --label <label>          Label recorded in run.json
@@ -670,6 +748,16 @@ mise run compile
   `Network.streamResourceContent` instead, and falls back to the buffer path
   when a stream cannot be enabled, fails, or assembles nothing. It never streams
   a Server-Sent Events response, which `eventsource.ndjson` already covers.
+- Downloads are never recovered as response bodies. `--capture-downloads` saves
+  the file the browser wrote instead, which is a different path with different
+  costs: it changes where downloads go and what they are named on disk, and it
+  allows downloads Chrome would otherwise have blocked or prompted about.
+- `--capture-downloads` covers the default browser context only.
+  `Browser.setDownloadBehavior` is sent without a `browserContextId`, which
+  means the default context, so downloads started in an incognito window or in
+  any context created through `Target.createBrowserContext` keep the browser's
+  normal behavior: they are not redirected into the run directory, emit no
+  download events, and get no record.
 - Redirect hops are recorded as metadata only. Their status, `location`, and
   `set-cookie` headers are saved, but no response body exists to save, and a
   hop the logger did not observe from its start is skipped. `redirectIndex`
