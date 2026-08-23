@@ -2494,6 +2494,44 @@ describe("CdpResponseLogger storage snapshot", () => {
 			sentMethods(client).filter((method) => /^(?:DOMStorage|IndexedDB|Storage)\./u.test(method)),
 		).toEqual([]);
 		expect(sentMethods(client)).not.toContain("Runtime.evaluate");
+		// Attaching and resuming a target is the whole of the logger's Runtime use.
+		// That one call is the sanctioned exception, so the domain is asserted as a whole list.
+		// Debugger is not sanctioned at all, on this path or any other.
+		expect(sentMethods(client).filter((method) => method.startsWith("Runtime."))).toEqual([
+			"Runtime.runIfWaitingForDebugger",
+		]);
+		expect(sentMethods(client).filter((method) => method.startsWith("Debugger."))).toEqual([]);
+	});
+
+	// The flag-off and disconnected tests both return before the snapshot module is reached.
+	// This is the one test that runs that seam, so it pins what the logger hands it.
+	it("snapshots the attached origin and records a failed read against it", async () => {
+		const { client, hooks, logger, storage } = await setupLogger({ snapshotStorage: true });
+		client.sendReplies.set("Storage.getCookies", { cookies: [] });
+		client.sendReplies.set("DOMStorage.getDOMStorageItems", { entries: [["theme", "dark"]] });
+		// The failing read names itself in the record, which is what pins the argument order.
+		client.sendReplies.set("IndexedDB.enable", new Error("IndexedDB.enable failed"));
+
+		await logger.snapshotStorage();
+
+		expect(storage.snapshots).toHaveLength(1);
+		expect(storage.snapshots[0]?.origins).toEqual([
+			expect.objectContaining({
+				localStorage: { theme: "dark" },
+				securityOrigin: "https://example.test",
+				targetId: "target-1",
+			}),
+		]);
+		expect(hooks.events.map((event) => event.event)).toContain("storage.snapshot");
+		expect(storage.errors).toEqual([
+			expect.objectContaining({
+				error: "IndexedDB.enable failed",
+				event: "IndexedDB.enable",
+				url: "https://example.test",
+			}),
+		]);
+		// A snapshot error names the origin it happened on and never a session.
+		expect(storage.errors[0]?.sessionId).toBeUndefined();
 	});
 
 	// The browser being gone is the normal launch-mode race, not a reason to crash.
