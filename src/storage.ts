@@ -253,19 +253,16 @@ const createStorage = async (
 		`${JSON.stringify(createRunInfo(runDirectory, cdpEndpoint, runTimestamp, annotations), null, "\t")}\n`,
 	);
 
-	const metadata = createNdjsonWriter(join(runDirectory, "metadata.ndjson"));
-	const errors = createNdjsonWriter(join(runDirectory, "errors.ndjson"));
-	const websocket = createNdjsonWriter(join(runDirectory, "websocket.ndjson"));
-	const eventSource = createNdjsonWriter(join(runDirectory, "eventsource.ndjson"));
-	const downloads = createNdjsonWriter(join(runDirectory, "downloads.ndjson"));
-	// Named so a writer that failed can be reported by the file it was recording into.
-	const writers: [string, NdjsonWriter][] = [
-		["metadata", metadata],
-		["errors", errors],
-		["websocket", websocket],
-		["eventsource", eventSource],
-		["downloads", downloads],
-	];
+	// One entry per record file, named after the file it writes and reported under that name.
+	// A new record file is added here alone: closing them iterates this map rather than a list.
+	// The order is the order a failing run reports them in.
+	const writers = {
+		metadata: createNdjsonWriter(join(runDirectory, "metadata.ndjson")),
+		errors: createNdjsonWriter(join(runDirectory, "errors.ndjson")),
+		websocket: createNdjsonWriter(join(runDirectory, "websocket.ndjson")),
+		eventsource: createNdjsonWriter(join(runDirectory, "eventsource.ndjson")),
+		downloads: createNdjsonWriter(join(runDirectory, "downloads.ndjson")),
+	};
 	const summary = createCaptureSummary();
 	let bodyCounter = 0;
 	let requestCounter = 0;
@@ -383,11 +380,12 @@ const createStorage = async (
 		close: async () => {
 			// Shutdown runs from a finally block, where a rejection becomes an unhandled one.
 			// Settle them all so a writer that already failed cannot stop the others closing.
-			const results = await Promise.allSettled(writers.map(([, writer]) => writer.close()));
+			const opened = Object.entries(writers);
+			const results = await Promise.allSettled(opened.map(([, writer]) => writer.close()));
 			// A settled rejection is discarded unless it is read.
 			// A writer that lost a record mid-run never rejects here at all.
 			// Both are reported, so the run itself says what a file is missing.
-			for (const [index, [name, writer]] of writers.entries()) {
+			for (const [index, [name, writer]] of opened.entries()) {
 				const result = results[index];
 				const failure = writer.failure();
 				const error =
@@ -408,7 +406,7 @@ const createStorage = async (
 			if (record.redirect === true) {
 				summary.recordRedirectHop();
 			}
-			await metadata.append(record);
+			await writers.metadata.append(record);
 		},
 		// A canceled download is appended as it stands, so the loss stays in the record file.
 		recordDownload: async (download: DownloadRecord) => {
@@ -417,18 +415,18 @@ const createStorage = async (
 					? { ...download, ...(await hashDownload(download.guid)) }
 					: download;
 			summary.recordDownload();
-			await downloads.append(record);
+			await writers.downloads.append(record);
 
 			return record;
 		},
 		recordError: async (record: ErrorRecord) => {
 			// Count before the write so a failing errors.ndjson still shows up in the summary.
 			summary.recordError(record);
-			await errors.append(record);
+			await writers.errors.append(record);
 		},
 		recordEventSourceMessage: async (message: EventSourceMessageRecord) => {
 			summary.recordEventSourceMessage();
-			await eventSource.append(message);
+			await writers.eventsource.append(message);
 		},
 		// A point-in-time document, not a stream of events.
 		// It is therefore written whole once instead of appended to line by line.
@@ -445,7 +443,7 @@ const createStorage = async (
 		},
 		recordWebSocketFrame: async (frame: WebSocketFrameRecord) => {
 			summary.recordWebSocketFrame();
-			await websocket.append(frame);
+			await writers.websocket.append(frame);
 		},
 		runDirectory,
 		runTimestamp,
