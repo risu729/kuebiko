@@ -181,15 +181,19 @@ const terminateBrowser = async (
 // The stderr pipe exists for the startup failure path, and nothing reads it once the
 // Browser is up. Bun keeps the unread bytes in this process, so a capture running for
 // Hours would accumulate every diagnostic Chrome writes. They are discarded instead.
-const discardBrowserStderr = async (browser: BrowserProcess): Promise<void> => {
+const discardBrowserStderr = async (
+	browser: BrowserProcess,
+	signal?: AbortSignal,
+): Promise<void> => {
 	if (!(browser.stderr instanceof ReadableStream)) {
 		return;
 	}
 
 	try {
-		await browser.stderr.pipeTo(new WritableStream());
+		await browser.stderr.pipeTo(new WritableStream(), signal === undefined ? {} : { signal });
 	} catch {
 		// The stream ends with the browser process, which is not a capture failure.
+		// Aborting the pipe at teardown ends it the same way and is not one either.
 	}
 };
 
@@ -240,14 +244,19 @@ const startBrowser = async (options: BrowserLaunchOptions): Promise<StartedBrows
 	await assertCdpEndpointFree(cdpEndpoint);
 	const browser = spawnBrowser(options);
 	await waitForStartedBrowser(browser, cdpEndpoint);
-	const discarding = discardBrowserStderr(browser);
+	const stderrPipe = new AbortController();
+	const discarding = discardBrowserStderr(browser, stderrPipe.signal);
 
 	return {
 		cdpEndpoint,
 		close: async (requestClose) => {
 			await closeBrowser(browser, requestClose);
 			// The stream ends with the process; the bound is for a pipe that somehow does not.
-			await finishesWithin(discarding, BROWSER_STOP_TIMEOUT_MS);
+			// Bounding only the wait left that pipe reading, so a surviving child kept the fd
+			// Active after teardown had returned. Aborting is what actually ends it.
+			if (!(await finishesWithin(discarding, BROWSER_STOP_TIMEOUT_MS))) {
+				stderrPipe.abort();
+			}
 		},
 	};
 };

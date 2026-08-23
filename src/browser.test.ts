@@ -154,6 +154,15 @@ describe("terminateBrowser", () => {
 	});
 });
 
+const browserStderr = (browser: ReturnType<typeof Bun.spawn>): ReadableStream => {
+	const { stderr } = browser;
+	if (!(stderr instanceof ReadableStream)) {
+		throw new Error("The helper process was spawned without a stderr pipe.");
+	}
+
+	return stderr;
+};
+
 describe("discardBrowserStderr", () => {
 	// Nothing reads the pipe once the browser is up, so the unread bytes used to pile up
 	// In this process for the whole capture.
@@ -161,9 +170,36 @@ describe("discardBrowserStderr", () => {
 		const browser = spawnHelper(
 			"for (let index = 0; index < 2_000; index += 1) { process.stderr.write('noise'.repeat(100) + '\\n'); }",
 		);
+		const stderr = browserStderr(browser);
 
 		await expect(discardBrowserStderr(browser)).resolves.toBeUndefined();
 		await browser.exited;
+
+		// A pipe nobody read would have blocked the child long before its last line.
+		expect(browser.exitCode).toBe(0);
+		// The whole stream was consumed, and the reader released with it.
+		expect(stderr.locked).toBe(false);
+		await expect(stderr.getReader().read()).resolves.toEqual({ done: true, value: undefined });
+	});
+
+	// The wait for this pipe is bounded, but bounding a wait ends no pipe. A browser that
+	// Outlived the run kept the stream, and the fd behind it, open past teardown.
+	it("stops reading the pipe when the wait for it is abandoned", async () => {
+		const browser = spawnHelper("process.stderr.write('noise'); setInterval(() => {}, 1_000);");
+		const stderr = browserStderr(browser);
+		const pipe = new AbortController();
+		const discarding = discardBrowserStderr(browser, pipe.signal);
+
+		try {
+			pipe.abort();
+
+			await expect(discarding).resolves.toBeUndefined();
+			expect(stderr.locked).toBe(false);
+			await expect(stderr.getReader().read()).resolves.toEqual({ done: true, value: undefined });
+		} finally {
+			browser.kill("SIGKILL");
+			await browser.exited;
+		}
 	});
 });
 
