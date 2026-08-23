@@ -1,4 +1,5 @@
 import { describe, expect, it, mock } from "bun:test";
+import type { Mock } from "bun:test";
 import { mkdir, mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -189,6 +190,111 @@ export default defineConfig({
 				verbose: false,
 			}),
 		).rejects.toThrow();
+	});
+
+	// The drain promise is stored un-awaited until shutdown.
+	// A rejection from the error record it writes used to take the process down first.
+	// Whatever is still queued has to be delivered even when that happens while closing.
+	it("keeps draining when the error record for a plugin failure cannot be written", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "kuebiko-plugin-"));
+		const runDirectory = join(dir, "run");
+		await Bun.write(
+			join(dir, "config.ts"),
+			`import { defineConfig } from ${JSON.stringify(packageEntryUrl)};
+
+export default defineConfig({
+      plugins: [{ module: "./failing.ts" }]
+    });`,
+		);
+		await Bun.write(
+			join(dir, "failing.ts"),
+			`import { appendFile } from "node:fs/promises";
+
+      export default {
+        id: "failing-plugin",
+        version: "0.1.0",
+        events: ["response.completed"],
+        async onEvent(event, ctx) {
+          await appendFile(ctx.resolvePluginPath("calls.log"), "call\\n");
+          throw new Error("plugin failed");
+        },
+      };`,
+		);
+		const storage = createStorage(runDirectory);
+		const recordError = storage.recordError as Mock<LoggerStorage["recordError"]>;
+		// An errors.ndjson that is no longer writable is what rejects here.
+		recordError.mockImplementation(() => Promise.reject(new Error("write after end")));
+		const host = await createPluginHost({
+			configPath: join(dir, "config.ts"),
+			disabled: false,
+			storage,
+			verbose: false,
+		});
+		const event = createResponseEvent(runDirectory);
+
+		await host.publish(event);
+		await host.publish(event);
+		await expect(host.close()).resolves.toBeUndefined();
+
+		// Both events reached the plugin: the second was still queued when the first failed.
+		await expect(
+			Bun.file(join(runDirectory, "plugins", "failing-plugin", "calls.log")).text(),
+		).resolves.toBe("call\ncall\n");
+	});
+
+	// One call is bounded by callWithTimeout, and nothing bounded the backlog behind it.
+	// A full queue of slow calls held close() for queueSize times timeoutMs.
+	// That is over an hour at the defaults, with the writers open and the summary unprinted.
+	it("bounds the shutdown drain and records what its budget dropped", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "kuebiko-plugin-"));
+		const runDirectory = join(dir, "run");
+		await Bun.write(
+			join(dir, "config.ts"),
+			`import { defineConfig } from ${JSON.stringify(packageEntryUrl)};
+
+export default defineConfig({
+      plugins: [{ module: "./hanging.ts", queueSize: 20, timeoutMs: 100 }]
+    });`,
+		);
+		await Bun.write(
+			join(dir, "hanging.ts"),
+			`export default {
+      id: "hanging-plugin",
+      version: "0.1.0",
+      events: ["response.completed"],
+      onEvent() {
+        return new Promise(() => {});
+      },
+    };`,
+		);
+		const storage = createStorage(runDirectory);
+		const host = await createPluginHost({
+			configPath: join(dir, "config.ts"),
+			disabled: false,
+			storage,
+			verbose: false,
+		});
+		const event = createResponseEvent(runDirectory);
+
+		for (let index = 0; index < 20; index += 1) {
+			await host.publish(event);
+		}
+		const started = Date.now();
+		await host.close();
+
+		// One budget for the whole backlog, not the 20 times timeoutMs it used to take.
+		expect(Date.now() - started).toBeLessThan(1_000);
+		const dropped = storage.errors.find((error) => error.event === "Plugin.shutdownTimeout");
+		expect(dropped?.pluginId).toBe("hanging-plugin");
+		// Every call to this plugin runs the full 100ms before callWithTimeout ends it.
+		// The 100ms budget fits two of them at the very most, and a slower machine fits one.
+		// The drain shifts its first event before close() sets the budget, so one is taken.
+		// That leaves 18 or 19 dropped, whatever the scheduling.
+		const count = Number(
+			/dropped (?<count>\d+) queued/u.exec(dropped?.error ?? "")?.groups?.["count"],
+		);
+		expect(count).toBeGreaterThan(17);
+		expect(count).toBeLessThan(20);
 	});
 
 	it("records plugin queue overflow and timeout errors without throwing", async () => {

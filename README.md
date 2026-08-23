@@ -427,12 +427,13 @@ could not decode or send is recorded as a `Network.webSocketFrameError` event,
 since no frame line is written for it. As with frame records, it carries the
 socket URL only while the logger has a mapping for that socket.
 
-One of its events is about shutdown rather than about a request.
+Two of its events are about shutdown rather than about a request.
 `Cdp.drainTimeout` says how many event handlers were still running when the
 shutdown drain gave up on them. Such a handler still records if it finishes
 before the writers close, and is refused if it finishes after, so what it was
-holding may or may not be in the files. It is written while the writers are
-still open.
+holding may or may not be in the files. `Plugin.shutdownTimeout` says how many
+queued events a plugin never received because the plugin shutdown budget ran out
+first. Both are written while the writers are still open.
 
 `netlog.json` is Chromium NetLog for network-stack debugging.
 
