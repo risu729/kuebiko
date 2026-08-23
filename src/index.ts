@@ -22,17 +22,54 @@ import { createStorage } from "./storage";
 import type { RunAnnotations } from "./storage";
 import type { CliOptions } from "./types";
 
-const waitForShutdown = (): Promise<void> =>
-	new Promise((resolve) => {
-		process.once("SIGINT", () => resolve());
-		process.once("SIGTERM", () => resolve());
-		process.once("message", (message) => {
-			if (message === "shutdown") {
-				process.stdout.write("shutdown requested via IPC\n");
-				resolve();
-			}
-		});
-	});
+// The browser closing can win this race with both signal listeners still armed.
+// Left installed they keep overriding the default signal handling.
+// The first Ctrl-C during teardown would then only re-resolve a settled promise.
+// They are removed as soon as the race is decided.
+// That is what lets the force-quit handler below answer the next one.
+const awaitShutdown = async (closed: Promise<void>): Promise<void> => {
+	const { promise, resolve } = Promise.withResolvers<void>();
+	const onSignal = (): void => {
+		resolve();
+	};
+	const onMessage = (message: unknown): void => {
+		if (message === "shutdown") {
+			process.stdout.write("shutdown requested via IPC\n");
+			resolve();
+		}
+	};
+
+	process.on("SIGINT", onSignal);
+	process.on("SIGTERM", onSignal);
+	process.on("message", onMessage);
+	try {
+		await Promise.race([promise, closed]);
+	} finally {
+		process.removeListener("SIGINT", onSignal);
+		process.removeListener("SIGTERM", onSignal);
+		process.removeListener("message", onMessage);
+	}
+};
+
+// Teardown drains capture work, which takes as long as it takes.
+// A second signal is the user saying they are done waiting, so it leaves at once.
+// Leaving aborts the writes still in flight, and the summary is never printed.
+// The last line of an NDJSON file can therefore be a partial one.
+// Writes are serialized per writer, so that is at most one trailing line per file.
+const forceQuitOnSignal = (): (() => void) => {
+	const onSignal = (): void => {
+		process.stderr.write("shutdown interrupted; exiting now\n");
+		process.exit(130);
+	};
+
+	process.on("SIGINT", onSignal);
+	process.on("SIGTERM", onSignal);
+
+	return () => {
+		process.removeListener("SIGINT", onSignal);
+		process.removeListener("SIGTERM", onSignal);
+	};
+};
 
 const reportTeardownError = (error: unknown): void => {
 	process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
@@ -137,9 +174,14 @@ const runLogger = async (options: CliOptions): Promise<void> => {
 			verbose: options.verbose,
 		});
 		process.stdout.write(`${READY_MESSAGE}\n`);
-		await Promise.race([waitForShutdown(), logger.closed]);
+		await awaitShutdown(logger.closed);
 	} finally {
-		await stopRun({ browser, logger, plugins, storage });
+		const stopForceQuit = forceQuitOnSignal();
+		try {
+			await stopRun({ browser, logger, plugins, storage });
+		} finally {
+			stopForceQuit();
+		}
 	}
 };
 
@@ -164,8 +206,11 @@ if (import.meta.main) {
 export {
 	DEFAULT_CDP_ENDPOINT,
 	READY_MESSAGE,
+	awaitShutdown,
 	cliArgs,
 	defineConfig,
+	forceQuitOnSignal,
+	getRunAnnotations,
 	main,
 	normalizeArgs,
 	parseArgs,

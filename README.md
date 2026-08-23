@@ -437,6 +437,23 @@ first. Both are written while the writers are still open.
 
 `netlog.json` is Chromium NetLog for network-stack debugging.
 
+## Shutdown
+
+The run ends on Ctrl-C, on `SIGTERM`, on a `shutdown` IPC message, or when the
+browser closes. Shutdown then takes the storage snapshot, stops the plugins,
+closes the browser, closes the CDP connection, closes the writers, and prints
+the run summary, in that order. Every step has a deadline of its own, but the
+whole sequence still takes as long as the browser and the plugins make it take.
+
+A second Ctrl-C or `SIGTERM` during that sequence exits immediately with status
+130 instead of waiting. Nothing after it runs: no summary is printed, a
+`--capture-downloads` browser keeps saving downloads into the run directory, a
+browser started by launch mode is left running, and the writes still in flight
+are aborted, so the last line of an NDJSON file can be a partial one. Writes are
+serialized per file, so at most one trailing line per file is truncated and
+every line before it is intact. The second signal is there for a browser that
+will not close; prefer letting the first shutdown finish.
+
 ## Run Summary
 
 When a run ends, the logger prints a summary to stdout so silent losses are
