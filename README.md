@@ -433,7 +433,32 @@ could not decode or send is recorded as a `Network.webSocketFrameError` event,
 since no frame line is written for it. As with frame records, it carries the
 socket URL only while the logger has a mapping for that socket.
 
+Two of its events are about shutdown rather than about a request.
+`Cdp.drainTimeout` says how many event handlers were still running when the
+shutdown drain gave up on them. Such a handler still records if it finishes
+before the writers close, and is refused if it finishes after, so what it was
+holding may or may not be in the files. `Plugin.shutdownTimeout` says how many
+queued events a plugin never received because the plugin shutdown budget ran out
+first. Both are written while the writers are still open.
+
 `netlog.json` is Chromium NetLog for network-stack debugging.
+
+## Shutdown
+
+The run ends on Ctrl-C, on `SIGTERM`, on a `shutdown` IPC message, or when the
+browser closes. Shutdown then takes the storage snapshot, stops the plugins,
+closes the browser, closes the CDP connection, closes the writers, and prints
+the run summary, in that order. Every step has a deadline of its own, but the
+whole sequence still takes as long as the browser and the plugins make it take.
+
+A second Ctrl-C or `SIGTERM` during that sequence exits immediately with status
+130 instead of waiting. Nothing after it runs: no summary is printed, a
+`--capture-downloads` browser keeps saving downloads into the run directory, a
+browser started by launch mode is left running, and the writes still in flight
+are aborted, so the last line of an NDJSON file can be a partial one. Writes are
+serialized per file, so at most one trailing line per file is truncated and
+every line before it is intact. The second signal is there for a browser that
+will not close; prefer letting the first shutdown finish.
 
 ## Run Summary
 
@@ -461,8 +486,20 @@ of their own and would otherwise be invisible in the totals. The
 `summary snapshot_` line is printed only when `--snapshot-storage` wrote a
 snapshot, and counts what landed in it: origins, cookies, `localStorage` and
 `sessionStorage` items together, IndexedDB databases, and object store entries.
-A run without the flag keeps the three-line summary it had before. One
-`summary_errors` line is printed per host with the `errors.ndjson` `event`
+A run without the flag prints no `summary snapshot_` line at all.
+
+`summary_writers` is printed only when a record file lost something, so a
+healthy run does not have the line. Each name is one of the NDJSON files without
+its extension, and says which of two things happened to it. `metadata=lost`
+means at least one record never reached the file and the file kept recording
+afterwards. `metadata=stopped` means its last write failed, so the file recorded
+nothing after that point and the counts above cover records it never received.
+Each one also writes a line to stderr naming the file and the first error behind
+it. A record appended after the writers close is refused rather than written
+behind the summary that already reported the run; `Cdp.drainTimeout` in
+`errors.ndjson` is what says handlers were still running at that point.
+
+One `summary_errors` line is printed per host with the `errors.ndjson` `event`
 counts behind it, ordered by failure count. Only the top 20 hosts get a line;
 the rest are collapsed into a final remainder line.
 
