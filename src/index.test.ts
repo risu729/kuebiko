@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 
-import { DEFAULT_CDP_ENDPOINT, parseArgs, renderHelp, stopRun } from "./index";
+import { DEFAULT_CDP_ENDPOINT, awaitShutdown, parseArgs, renderHelp, stopRun } from "./index";
 
 describe("parseArgs", () => {
 	it("uses defaults", () => {
@@ -120,6 +120,35 @@ describe("parseArgs", () => {
 	it("renders local help output", () => {
 		expect(renderHelp()).toContain("kuebiko [options]");
 		expect(renderHelp()).toContain("--no-plugins");
+	});
+});
+
+describe("awaitShutdown", () => {
+	// The listeners used to stay installed after the race, overriding the default signal
+	// Disposition, so the first Ctrl-C during teardown did nothing at all.
+	it("removes its listeners when the logger closes first", async () => {
+		const before = {
+			message: process.listenerCount("message"),
+			sigint: process.listenerCount("SIGINT"),
+			sigterm: process.listenerCount("SIGTERM"),
+		};
+
+		await awaitShutdown(Promise.resolve());
+
+		expect(process.listenerCount("SIGINT")).toBe(before.sigint);
+		expect(process.listenerCount("SIGTERM")).toBe(before.sigterm);
+		expect(process.listenerCount("message")).toBe(before.message);
+	});
+
+	it("removes its listeners when the shutdown request wins", async () => {
+		const before = process.listenerCount("SIGINT");
+		const never = Promise.withResolvers<void>();
+		const shutdown = awaitShutdown(never.promise);
+
+		process.emit("message", "shutdown");
+		await shutdown;
+
+		expect(process.listenerCount("SIGINT")).toBe(before);
 	});
 });
 
