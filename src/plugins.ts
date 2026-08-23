@@ -364,15 +364,25 @@ class PluginRuntime {
 		}
 
 		this.#queue.push(cloneEvent(event));
-		this.#drainPromise ??= this.#drain();
+		this.#drainPromise ??= this.#startDrain();
 	}
 
 	async close(): Promise<void> {
 		this.#closed = true;
-		await this.#drainPromise;
+		// A drain that restarted for the events still queued has to finish here too.
+		while (this.#drainPromise !== undefined) {
+			await this.#drainPromise;
+		}
 		if (this.#plugin.close) {
 			await this.#callPlugin("Plugin.close", () => this.#plugin.close?.(this.#context));
 		}
+	}
+
+	// Nothing awaits the stored promise until close(), so a rejection would be unhandled
+	// And take the whole process down, skipping the run's own shutdown and summary.
+	// The only way #drain rejects is a failed errors.ndjson write, which must not do that.
+	#startDrain(): Promise<void> {
+		return this.#drain().catch(() => undefined);
 	}
 
 	async #drain(): Promise<void> {
@@ -387,8 +397,10 @@ class PluginRuntime {
 			}
 		} finally {
 			this.#drainPromise = undefined;
-			if (this.#queue.length > 0 && !this.#closed) {
-				this.#drainPromise = this.#drain();
+			// Restarted even while closing: a drain that stopped on a failed error record
+			// Would otherwise drop everything still queued without recording that either.
+			if (this.#queue.length > 0) {
+				this.#drainPromise = this.#startDrain();
 			}
 		}
 	}
