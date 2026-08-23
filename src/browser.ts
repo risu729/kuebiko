@@ -113,8 +113,8 @@ const exited = async (browser: BrowserProcess): Promise<boolean> => {
 	return true;
 };
 
-// Bounded on a timer rather than a sleep: a sleep left pending once the browser has
-// Exited keeps this process alive for the rest of its deadline, long after the run.
+// Bounded on a timer rather than a sleep.
+// A sleep left pending after the browser exited kept this process alive to its deadline.
 const waitForExit = async (browser: BrowserProcess, timeout: number): Promise<boolean> =>
 	await resolvesWithin(exited(browser), timeout, false);
 
@@ -163,8 +163,8 @@ const readBrowserStderr = async (browser: BrowserProcess): Promise<string> => {
 	return await new Response(browser.stderr).text();
 };
 
-// Every wait on a browser this process owns is bounded, and SIGTERM is a request a
-// Browser may ignore, so the escalation to SIGKILL belongs to each path that sends it.
+// Every wait on a browser this process owns is bounded.
+// SIGTERM is a request a browser may ignore, so each path that sends it escalates itself.
 const terminateBrowser = async (
 	browser: BrowserProcess,
 	timeout = BROWSER_STOP_TIMEOUT_MS,
@@ -178,9 +178,10 @@ const terminateBrowser = async (
 	browser.unref();
 };
 
-// The stderr pipe exists for the startup failure path, and nothing reads it once the
-// Browser is up. Bun keeps the unread bytes in this process, so a capture running for
-// Hours would accumulate every diagnostic Chrome writes. They are discarded instead.
+// The stderr pipe exists for the startup failure path, and nothing reads it later on.
+// Bun keeps the unread bytes in this process for the whole capture.
+// A run of a few hours would accumulate every diagnostic Chrome writes.
+// They are discarded instead.
 const discardBrowserStderr = async (
 	browser: BrowserProcess,
 	signal?: AbortSignal,
@@ -229,8 +230,8 @@ const waitForStartedBrowser = async (
 	try {
 		await waitForCdp(cdpEndpoint);
 	} catch (error) {
-		// A browser that never exposed CDP may also ignore SIGTERM, and an unbounded wait
-		// Here would hang the run with no error, no summary, and a live browser process.
+		// A browser that never exposed CDP may also ignore SIGTERM.
+		// An unbounded wait here would hang the run with no error and a live browser.
 		await terminateBrowser(browser);
 		const stderr = await readBrowserStderr(browser);
 		throw new Error(`Browser failed to expose CDP at ${cdpEndpoint}. Stderr: ${stderr}`, {
@@ -252,8 +253,8 @@ const startBrowser = async (options: BrowserLaunchOptions): Promise<StartedBrows
 		close: async (requestClose) => {
 			await closeBrowser(browser, requestClose);
 			// The stream ends with the process; the bound is for a pipe that somehow does not.
-			// Bounding only the wait left that pipe reading, so a surviving child kept the fd
-			// Active after teardown had returned. Aborting is what actually ends it.
+			// Bounding only the wait left that pipe reading past teardown.
+			// Aborting it is what actually ends it, and releases the fd behind it.
 			if (!(await finishesWithin(discarding, BROWSER_STOP_TIMEOUT_MS))) {
 				stderrPipe.abort();
 			}

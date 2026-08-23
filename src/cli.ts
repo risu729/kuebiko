@@ -63,8 +63,8 @@ const CliOptionsSchema: z.ZodType<CliOptions> = z
 		noPlugins: z.boolean(),
 		// Blank would drop a mistyped note without a word.
 		note: nonEmptyString("--note"),
-		// Blank would fall back to the default capture root, writing the run somewhere the
-		// Caller never named.
+		// Blank would fall back to the default capture root.
+		// The run would then be written somewhere the caller never named.
 		out: nonEmptyString("--out"),
 		snapshotStorage: z.boolean(),
 		streamBodies: z.boolean(),
@@ -99,9 +99,9 @@ const valueFlags = new Set(
 );
 
 // The token after a value-taking flag is that flag's argument, whatever it looks like.
-// Every browser arg starts with a dash, so treating those as flags here answered
-// `--browser-arg --no-sandbox` with "Unknown argument: --no-sandbox" and hid node:util's
-// Advice about the `--browser-arg=-XYZ` spelling, which is what the user actually needs.
+// Every browser arg starts with a dash, so treating those as flags here was wrong.
+// `--browser-arg --no-sandbox` answered "Unknown argument: --no-sandbox" instead.
+// That hid node:util's advice about the `--browser-arg=-XYZ` spelling, which is the fix.
 const flagOf = (arg: string): string => (arg.includes("=") ? (arg.split("=", 1)[0] ?? arg) : arg);
 
 const assertKnownFlags = (argv: string[]): void => {
@@ -121,11 +121,11 @@ const assertKnownFlags = (argv: string[]): void => {
 	}
 };
 
-// Launch mode connects to the port it started the browser on, so an endpoint given here
-// Was discarded: the run and run.json both used --cdp-port instead.
+// Launch mode connects to the port it started the browser on.
+// An endpoint given here was discarded: the run and run.json both used --cdp-port.
 // Passing the flag is what conflicts, not the endpoint it names.
-// Comparing against the default accepted --cdp with the default spelled out and rejected
-// The one spelling that is internally consistent, --cdp matching --cdp-port.
+// Comparing values accepted --cdp with the default spelled out.
+// It rejected --cdp matching --cdp-port, the one spelling that is internally consistent.
 // Presence is only visible before the default is applied, so this runs on the raw args.
 const assertNoCdpEndpoint = (args: LoggerArgs): void => {
 	if (args["launch-browser"] === true && args.cdp !== undefined) {
@@ -193,16 +193,16 @@ const parseArgs = (argv: string[]): CliOptions => {
 	return normalizeArgs(parseRawArgs(argv));
 };
 
-// Wide enough for the longest flag, --browser-command <command>, so the descriptions
-// Of the value-taking flags stay in the same column as everything else.
+// Wide enough for the longest flag, --browser-command <command>.
+// The value-taking flags then keep their descriptions in the same column as the rest.
 const OPTION_COLUMN_WIDTH = 28;
 
 const formatOptionLine = (flag: string, description: string): string =>
 	`  ${flag.padEnd(OPTION_COLUMN_WIDTH)} ${description}`;
 
-// A flag that defaults to true is only ever spelled negated, so it is described by what
-// Turning it off does. Printing the affirmative description against --no-<flag> stated
-// The opposite of the truth, so a definition without one shows both spellings instead.
+// A flag defaulting to true is only spelled negated, so it says what turning it off does.
+// Printing the affirmative description against --no-<flag> stated the opposite.
+// A definition without a negated description shows both spellings instead.
 const formatOption = (name: string, definition: CliArgDefinition): string => {
 	if (definition.type !== "boolean") {
 		return formatOptionLine(

@@ -23,8 +23,8 @@ describe("bodyToBytes", () => {
 });
 
 describe("createNdjsonWriter", () => {
-	// One record the writer cannot serialize used to reject every later append with the
-	// Same error, without ever writing them, so a healthy file recorded nothing again.
+	// One record the writer cannot serialize used to reject every later append with it.
+	// None of them were ever written, so a healthy file recorded nothing again.
 	it("keeps recording after a record that cannot be serialized", async () => {
 		const dir = await mkdtemp(join(tmpdir(), "kuebiko-"));
 		const path = join(dir, "metadata.ndjson");
@@ -62,8 +62,8 @@ describe("createNdjsonWriter", () => {
 		expect(writer.failure()?.stopped).toBe(false);
 	});
 
-	// Reopening for a record appended after close() wrote it behind the summary that had
-	// Already reported the run, so a failure there reached no one at all.
+	// Reopening for a record appended after close() wrote it behind the printed summary.
+	// A failure there reached no one at all.
 	it("refuses a record appended after close instead of reopening the file", async () => {
 		const dir = await mkdtemp(join(tmpdir(), "kuebiko-"));
 		const path = join(dir, "metadata.ndjson");
@@ -79,8 +79,8 @@ describe("createNdjsonWriter", () => {
 		expect(writer.failure()?.stopped).toBe(false);
 	});
 
-	// An append racing close() failed with "write after end", which reported a healthy
-	// File as one that had stopped recording for the whole run.
+	// An append racing close() failed with "write after end".
+	// That reported a healthy file as one that had stopped recording for the whole run.
 	it("refuses an append that races close without calling the file dead", async () => {
 		const dir = await mkdtemp(join(tmpdir(), "kuebiko-"));
 		const path = join(dir, "metadata.ndjson");
@@ -111,8 +111,8 @@ describe("createNdjsonWriter", () => {
 		expect(second).toBeInstanceOf(Error);
 		expect(second).not.toBe(first);
 		expect(writer.failure()?.message).toContain("EISDIR");
-		// Nothing ever reached this file, so it is a file that stopped rather than one
-		// That lost a line.
+		// Nothing ever reached this file.
+		// It is a file that stopped rather than one that lost a line.
 		expect(writer.failure()?.stopped).toBe(true);
 	});
 });
@@ -449,8 +449,8 @@ describe("createStorage", () => {
 		expect(storage.summary.render()).not.toContain("websocket=");
 	});
 
-	// An abandoned event handler keeps recording while the writers close, and reopening
-	// The file for it wrote a line behind the summary that had already been printed.
+	// An abandoned event handler keeps recording while the writers close.
+	// Reopening the file for it wrote a line behind the summary that was already printed.
 	it("refuses a record written after the writers closed", async () => {
 		const dir = await mkdtemp(join(tmpdir(), "kuebiko-"));
 		const storage = await createStorage(dir, "http://127.0.0.1:9222", {}, "2026-07-06T12:34:56Z");
@@ -529,8 +529,8 @@ describe("createStorage", () => {
 		expect(runInfo.createdAt).toBe("2026-07-06T12:34:56Z");
 	});
 
-	// A capture directory has to say how complete it is: without the filters and the body
-	// Cap, nothing distinguishes a site that asked for nothing else from a filtered run.
+	// A capture directory has to say how complete it is.
+	// Without the filters and the cap, a filtered run looks like a site with nothing else.
 	it("writes the filters, the body cap, and the NetLog flag into run.json", async () => {
 		const dir = await mkdtemp(join(tmpdir(), "kuebiko-"));
 		const storage = await createStorage(

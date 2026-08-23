@@ -1,9 +1,8 @@
 // Deadlines shared by the CDP shutdown paths and the browser process handling.
 //
-// A pending `Bun.sleep` would keep the process alive past the work it bounded, so a
-// Run that had finished its teardown still sat idle until the longest abandoned sleep
-// Expired. Every deadline here therefore runs on a timer, cleared as soon as the race
-// Is decided.
+// A pending `Bun.sleep` would keep the process alive past the work it bounded.
+// A run that had finished its teardown still sat idle until the longest sleep expired.
+// Every deadline here therefore runs on a timer, cleared as soon as the race is decided.
 const resolvesWithin = async <Value>(
 	work: Promise<Value>,
 	timeout: number,

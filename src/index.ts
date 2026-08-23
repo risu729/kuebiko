@@ -23,10 +23,10 @@ import type { RunAnnotations } from "./storage";
 import type { CliOptions } from "./types";
 
 // The browser closing can win this race with both signal listeners still armed.
-// Left installed they keep overriding the default signal disposition, so the first
-// Ctrl-C during teardown only re-resolves a settled promise and does nothing at all.
-// They are removed as soon as the race is decided, which is what lets the force-quit
-// Handler below answer the next one.
+// Left installed they keep overriding the default signal handling.
+// The first Ctrl-C during teardown would then only re-resolve a settled promise.
+// They are removed as soon as the race is decided.
+// That is what lets the force-quit handler below answer the next one.
 const awaitShutdown = async (closed: Promise<void>): Promise<void> => {
 	const { promise, resolve } = Promise.withResolvers<void>();
 	const onSignal = (): void => {
@@ -52,10 +52,9 @@ const awaitShutdown = async (closed: Promise<void>): Promise<void> => {
 };
 
 // Teardown drains capture work, which takes as long as it takes.
-// A second signal is the user saying they are done waiting, so it leaves at once instead
-// Of being swallowed.
-// Leaving aborts the writes still in flight: the summary is never printed, and the last
-// Line of an NDJSON file can be a partial one.
+// A second signal is the user saying they are done waiting, so it leaves at once.
+// Leaving aborts the writes still in flight, and the summary is never printed.
+// The last line of an NDJSON file can therefore be a partial one.
 // Writes are serialized per writer, so that is at most one trailing line per file.
 const forceQuitOnSignal = (): (() => void) => {
 	const onSignal = (): void => {
@@ -113,8 +112,8 @@ const startConfiguredBrowser = async (
 const getRunAnnotations = (options: CliOptions): RunAnnotations => ({
 	captureCookies: options.captureCookies,
 	captureDownloads: options.captureDownloads,
-	// The filters and the body cap decide what the capture leaves out, so they belong in
-	// The directory that has to explain itself months later.
+	// The filters and the body cap decide what the capture leaves out.
+	// They belong in the directory that has to explain itself months later.
 	exclude: options.exclude?.source,
 	include: options.include?.source,
 	labels: options.labels,

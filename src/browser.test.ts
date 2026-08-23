@@ -104,9 +104,8 @@ describe("waitForExit", () => {
 		}
 	});
 
-	// A pending Bun.sleep from the losing side of the race kept the whole process alive
-	// For the rest of its deadline, so every launch-mode Ctrl-C printed the summary and
-	// Then sat idle for seconds before returning to the shell.
+	// A pending Bun.sleep from the losing side of the race kept the whole process alive.
+	// Every launch-mode Ctrl-C printed the summary and then sat idle for seconds.
 	it("does not hold the process open after the browser exits", async () => {
 		const moduleUrl = pathToFileURL(join(import.meta.dir, "browser.ts")).href;
 		const script = `
@@ -124,8 +123,8 @@ describe("waitForExit", () => {
 });
 
 describe("terminateBrowser", () => {
-	// SIGTERM is a request a browser may ignore, and the startup failure path used to
-	// Wait for it with no deadline at all, hanging the run with a live browser.
+	// SIGTERM is a request a browser may ignore.
+	// The startup failure path waited for it with no deadline, hanging the run.
 	it("escalates to SIGKILL when the browser ignores SIGTERM", async () => {
 		const browser = Bun.spawn(
 			[
@@ -164,8 +163,8 @@ const browserStderr = (browser: ReturnType<typeof Bun.spawn>): ReadableStream =>
 };
 
 describe("discardBrowserStderr", () => {
-	// Nothing reads the pipe once the browser is up, so the unread bytes used to pile up
-	// In this process for the whole capture.
+	// Nothing reads the pipe once the browser is up.
+	// The unread bytes used to pile up in this process for the whole capture.
 	it("consumes the stderr pipe until the browser exits", async () => {
 		const browser = spawnHelper(
 			"for (let index = 0; index < 2_000; index += 1) { process.stderr.write('noise'.repeat(100) + '\\n'); }",
@@ -182,8 +181,8 @@ describe("discardBrowserStderr", () => {
 		await expect(stderr.getReader().read()).resolves.toEqual({ done: true, value: undefined });
 	});
 
-	// The wait for this pipe is bounded, but bounding a wait ends no pipe. A browser that
-	// Outlived the run kept the stream, and the fd behind it, open past teardown.
+	// The wait for this pipe is bounded, but bounding a wait ends no pipe.
+	// A browser that outlived the run kept the stream, and its fd, open past teardown.
 	it("stops reading the pipe when the wait for it is abandoned", async () => {
 		const browser = spawnHelper("process.stderr.write('noise'); setInterval(() => {}, 1_000);");
 		const stderr = browserStderr(browser);

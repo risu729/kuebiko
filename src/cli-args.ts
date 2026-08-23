@@ -7,8 +7,8 @@ type CliArgDefinition = {
 	default?: boolean | string | undefined;
 	description: string;
 	multiple?: boolean | undefined;
-	// What --no-<flag> does, for a flag that is on by default and so only ever spelled
-	// Negated. Help printed the affirmative description there, stating the opposite.
+	// What --no-<flag> does, for a flag that is on by default and so only spelled negated.
+	// Help printed the affirmative description there, stating the opposite.
 	negatedDescription?: string | undefined;
 	type: "boolean" | "string";
 	valueHint?: string | undefined;
@@ -49,8 +49,8 @@ const cliArgs = {
 		type: "string",
 		valueHint: "path",
 	},
-	// No default here: normalizeArgs applies it, so the parsed args still say whether the
-	// Flag was passed at all. Launch mode has to reject the flag rather than its value.
+	// No default here: normalizeArgs applies it, so the parsed args say whether it was given.
+	// Launch mode has to reject the flag itself rather than the value it carries.
 	cdp: {
 		description: `CDP endpoint, ${DEFAULT_CDP_ENDPOINT} by default.`,
 		type: "string",

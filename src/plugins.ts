@@ -369,9 +369,9 @@ class PluginRuntime {
 		this.#drainPromise ??= this.#startDrain();
 	}
 
-	// One call is bounded by callWithTimeout, and nothing bounded the backlog behind it:
-	// A full queue of slow calls held shutdown for queueSize times timeoutMs, minutes at
-	// The defaults, with the writers still open and the summary unprinted behind it.
+	// One call is bounded by callWithTimeout, and nothing bounded the backlog behind it.
+	// A full queue of slow calls held shutdown for queueSize times timeoutMs.
+	// That is minutes at the defaults, with the writers open and the summary unprinted.
 	// The whole drain therefore gets one budget, the same one a single call gets.
 	async close(): Promise<void> {
 		this.#closed = true;
@@ -392,8 +392,8 @@ class PluginRuntime {
 		return this.#deadline !== undefined && Date.now() >= this.#deadline;
 	}
 
-	// What the budget left behind is dropped here, while errors.ndjson is still open,
-	// So the loss is visible rather than silent.
+	// What the budget left behind is dropped here, while errors.ndjson is still open.
+	// The loss is then visible rather than silent.
 	async #recordDroppedQueue(): Promise<void> {
 		const dropped = this.#queue.length;
 		if (dropped === 0) {
@@ -413,8 +413,8 @@ class PluginRuntime {
 		}
 	}
 
-	// Nothing awaits the stored promise until close(), so a rejection would be unhandled
-	// And take the whole process down, skipping the run's own shutdown and summary.
+	// Nothing awaits the stored promise until close(), so a rejection would be unhandled.
+	// It would take the whole process down, skipping the run's own shutdown and summary.
 	// The only way #drain rejects is a failed errors.ndjson write, which must not do that.
 	#startDrain(): Promise<void> {
 		return this.#drain().catch(() => undefined);
@@ -432,8 +432,8 @@ class PluginRuntime {
 			}
 		} finally {
 			this.#drainPromise = undefined;
-			// Restarted even while closing: a drain that stopped on a failed error record
-			// Would otherwise drop everything still queued without recording that either.
+			// The drain restarts even while closing.
+			// One that stopped on a failed error record would drop the rest without recording it.
 			// The shutdown budget is what ends the restarts, not the close() call itself.
 			if (this.#queue.length > 0 && !this.#expired()) {
 				this.#drainPromise = this.#startDrain();

@@ -46,8 +46,9 @@ type RunInfo = {
 	captureDownloads: boolean;
 	cdpEndpoint: string;
 	createdAt: string;
-	// The --exclude source, so a directory with nothing from a host says whether the
-	// Site never asked for it or the filter dropped it. Same for --include below.
+	// The --exclude source, so a directory with nothing from a host says which happened.
+	// It says whether the site never asked for it or the filter dropped it.
+	// Same for --include below.
 	exclude?: string | undefined;
 	include?: string | undefined;
 	labels?: string[] | undefined;
@@ -152,8 +153,8 @@ const createNdjsonWriter = (path: string): NdjsonWriter => {
 
 	return {
 		append: async (record) => {
-			// Serialized before the chain, so an unserializable record fails only its own
-			// Append instead of the write of every record that follows it.
+			// Serialized before the chain, so an unserializable record fails only its own append.
+			// The writes of every record that follows it are untouched.
 			const line = `${JSON.stringify(record)}\n`;
 			const result = pending.then(async () => await writeLine(line));
 			// The chain keeps the file's line order; the swallowed copy keeps it usable.
@@ -164,8 +165,8 @@ const createNdjsonWriter = (path: string): NdjsonWriter => {
 			await result;
 		},
 		close: async () => {
-			// Closed before the drain, so an append racing this close is refused rather than
-			// Reopening the stream being ended or failing with "write after end".
+			// Closed before the drain, so an append racing this close is refused outright.
+			// It can neither reopen the stream being ended nor fail with "write after end".
 			closed = true;
 			await pending;
 			// A destroyed stream is already closed, and ending it again only errors.
@@ -211,8 +212,9 @@ const createRunInfo = (
 	captureDownloads: annotations.captureDownloads ?? false,
 	cdpEndpoint,
 	createdAt: runTimestamp,
-	// How complete the capture is: an unfiltered run and a filtered one used to write
-	// The same run.json, so nothing said whether what is missing was ever requested.
+	// How complete the capture is.
+	// An unfiltered run and a filtered one used to write the same run.json.
+	// Nothing said whether what is missing was ever requested.
 	exclude: annotations.exclude,
 	include: annotations.include,
 	// JSON.stringify drops undefined, so unlabelled runs keep the original run.json shape.
@@ -382,10 +384,9 @@ const createStorage = async (
 			// Shutdown runs from a finally block, where a rejection becomes an unhandled one.
 			// Settle them all so a writer that already failed cannot stop the others closing.
 			const results = await Promise.allSettled(writers.map(([, writer]) => writer.close()));
-			// A settled rejection is discarded unless it is read, and a writer that lost a
-			// Record mid-run never rejects here at all.
-			// Both are reported, so the run says what a file is missing rather than leaving
-			// It to be noticed later.
+			// A settled rejection is discarded unless it is read.
+			// A writer that lost a record mid-run never rejects here at all.
+			// Both are reported, so the run itself says what a file is missing.
 			for (const [index, [name, writer]] of writers.entries()) {
 				const result = results[index];
 				const failure = writer.failure();

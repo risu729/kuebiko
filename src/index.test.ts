@@ -116,8 +116,8 @@ describe("parseArgs", () => {
 		expect(() => parseArgs(["--wat"])).toThrow("Unknown argument: --wat");
 	});
 
-	// Every browser arg starts with a dash, so treating the value as a flag of its own
-	// Replaced node:util's advice about the `--flag=-value` spelling with a wrong one.
+	// Every browser arg starts with a dash, so treating the value as a flag was wrong.
+	// It replaced node:util's advice about the `--flag=-value` spelling with a wrong one.
 	it("leaves a dashed flag value to node:util to diagnose", () => {
 		expect(() => parseArgs(["--browser-arg", "--no-sandbox"])).toThrow(/ambiguous/u);
 		expect(() => parseArgs(["--exclude", "-tracking"])).toThrow(/ambiguous/u);
@@ -127,15 +127,15 @@ describe("parseArgs", () => {
 		);
 	});
 
-	// Blank silently disabled every plugin, and --out silently fell back to the default
-	// Capture root, so a wrapper passing an unset variable lost either without a word.
+	// Blank disabled every plugin, and --out fell back to the default capture root.
+	// A wrapper passing an unset variable lost either one without a word.
 	it("rejects a blank config path and capture directory", () => {
 		expect(() => parseArgs(["--config", ""])).toThrow("--config must not be empty.");
 		expect(() => parseArgs(["--out", ""])).toThrow("--out must not be empty.");
 	});
 
-	// The same unset variable in a wrapper script captured exactly the traffic --exclude
-	// Named, lifted the body cap, and launched into the default browser profile.
+	// The same unset variable in a wrapper captured exactly the traffic --exclude named.
+	// It also lifted the body cap and launched into the default browser profile.
 	it("rejects a blank value for every flag that takes one", () => {
 		for (const flag of [
 			"--browser-command",
@@ -150,10 +150,10 @@ describe("parseArgs", () => {
 		}
 	});
 
-	// Launch mode connects to --cdp-port, so an endpoint given here was discarded and
-	// Run.json recorded a port the invocation never named.
-	// The flag is what conflicts, not the endpoint: comparing values accepted the default
-	// Spelled out and rejected the one spelling that agrees with --cdp-port.
+	// Launch mode connects to --cdp-port, so an endpoint given here was discarded.
+	// Run.json then recorded a port the invocation never named.
+	// The flag is what conflicts, not the endpoint it carries.
+	// Comparing values accepted the default spelled out and rejected --cdp matching the port.
 	it("rejects an endpoint given together with launch mode", () => {
 		const launch = ["--launch-browser", "--browser-command", "chrome"];
 		for (const endpoint of ["http://127.0.0.1:9999", "http://127.0.0.1:9222"]) {
@@ -198,8 +198,8 @@ describe("parseArgs", () => {
 		expect(renderHelp()).toContain("--no-plugins");
 	});
 
-	// The flag name was negated but its description was not, so help stated the opposite
-	// Of what the flag does, and the widest flags pushed their descriptions out of line.
+	// The flag name was negated but its description was not, so help stated the opposite.
+	// The widest flags also pushed their descriptions out of line.
 	it("describes negated flags by what turning them off does", () => {
 		const lines = renderHelp().split("\n");
 		const lineFor = (flag: string): string =>
@@ -221,7 +221,7 @@ describe("parseArgs", () => {
 });
 
 describe("getRunAnnotations", () => {
-	// A filtered run used to write a run.json byte-identical to an unfiltered one, so
+	// A filtered run used to write a run.json byte-identical to an unfiltered one.
 	// Nothing in the directory said whether what is missing was ever requested.
 	it("records the flags that decide how complete the capture is", () => {
 		const options = parseArgs([
@@ -252,8 +252,8 @@ describe("getRunAnnotations", () => {
 });
 
 describe("awaitShutdown", () => {
-	// The listeners used to stay installed after the race, overriding the default signal
-	// Disposition, so the first Ctrl-C during teardown did nothing at all.
+	// The listeners used to stay installed after the race, overriding the default handling.
+	// The first Ctrl-C during teardown therefore did nothing at all.
 	it("removes its listeners when the logger closes first", async () => {
 		const before = {
 			message: process.listenerCount("message"),
@@ -333,9 +333,9 @@ describe("stopRun", () => {
 });
 
 describe("forceQuitOnSignal", () => {
-	// Teardown can take as long as the browser makes it take, so a second signal leaves at
-	// Once. That drops the summary and aborts the writes in flight, which is a trade the
-	// User asked for, but it only holds if the handler really does exit.
+	// Teardown takes as long as the browser makes it take, so a second signal leaves at once.
+	// That drops the summary and aborts the writes in flight, which is the trade asked for.
+	// The trade only holds if the handler really does exit.
 	it("exits on the next signal instead of waiting for teardown", async () => {
 		const moduleUrl = pathToFileURL(join(import.meta.dir, "index.ts")).href;
 		const script = `
@@ -366,8 +366,8 @@ describe("forceQuitOnSignal", () => {
 		);
 	});
 
-	// The handler is removed once teardown is over, so a signal after the run behaves the
-	// Way it does in any other process.
+	// The handler is removed once teardown is over.
+	// A signal after the run then behaves the way it does in any other process.
 	it("removes its listeners when teardown finishes", () => {
 		const before = process.listenerCount("SIGINT");
 

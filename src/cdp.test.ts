@@ -205,9 +205,10 @@ const waitForAsyncEvent = async (): Promise<void> => {
 	await Bun.sleep(0);
 };
 
-// A fixed wait for work that takes real time races the thing it waits for, and loses
-// It on a loaded machine. Polling ends as soon as the records are there instead, and
-// Only gives up at a deadline far enough out to mean the work never happened.
+// A fixed wait for work that takes real time races the thing it waits for.
+// On a loaded machine it loses that race.
+// Polling ends as soon as the records are there instead.
+// It only gives up at a deadline far enough out to mean the work never happened.
 const waitForRecords = async (ready: () => boolean, timeout = 5_000): Promise<void> => {
 	const deadline = Date.now() + timeout;
 	while (!ready() && Date.now() < deadline) {
@@ -2847,9 +2848,9 @@ describe("CdpResponseLogger", () => {
 		expect(storage.errors).toHaveLength(0);
 	});
 
-	// The reset used to share the one second drain budget and discard its result, so a
-	// Browser too busy to answer was abandoned in silence and kept saving downloads into
-	// A finished run directory with nothing in errors.ndjson to say so.
+	// The reset used to share the one second drain budget and discard its result.
+	// A browser too busy to answer was abandoned in silence.
+	// It kept saving downloads into a finished run with nothing in errors.ndjson to say so.
 	it("records an unanswered download behavior reset before the connection closes", async () => {
 		const client = new FakeClient();
 		const storage = createStorage();
@@ -3011,9 +3012,9 @@ describe("CdpResponseLogger", () => {
 		expect(storage.errors).toHaveLength(0);
 	});
 
-	// Streaming a detached session sends a command the browser refuses, and the one
-	// Record the run keeps for a stream failure would then describe that instead of
-	// The first real one.
+	// Streaming a detached session sends a command the browser refuses.
+	// The one record the run keeps for a stream failure would then describe that refusal.
+	// The first real failure would be the one lost.
 	it("never streams a response for a session that already detached", async () => {
 		const client = new FakeClient();
 		client.Network.streamResourceContent.mockImplementation(() =>
@@ -3052,8 +3053,8 @@ describe("CdpResponseLogger", () => {
 		]);
 	});
 
-	// The completion awaits the enabling promise, so a rejected one aborted the whole
-	// Handler and dropped the metadata record of a response that was saved fine.
+	// The completion awaits the enabling promise.
+	// A rejected one aborted the handler and dropped the metadata of a response saved fine.
 	it("records the response even when the stream failure record cannot be written", async () => {
 		const client = new FakeClient();
 		client.Network.streamResourceContent.mockImplementationOnce(() =>
@@ -3110,8 +3111,8 @@ describe("CdpResponseLogger", () => {
 		expect(storage.errors).toContainEqual(expect.objectContaining({ event: "Cdp.drainTimeout" }));
 	});
 
-	// A tab closing with nothing in flight is ordinary, and an error record for it
-	// Inflates the run's error total and crowds out the failures that matter.
+	// A tab closing with nothing in flight is ordinary.
+	// An error record for it inflates the error total and crowds out the real failures.
 	it("records a detach only when it dropped capture state", async () => {
 		const client = new FakeClient();
 		const storage = createStorage();
@@ -3690,8 +3691,8 @@ describe("CdpResponseLogger storage snapshot", () => {
 });
 
 describe("startLogger", () => {
-	// --capture-downloads points the user's own Chrome at this run directory before the
-	// Target calls run, and a throw there left the run with no logger to close.
+	// --capture-downloads points the user's own Chrome at this run directory early on.
+	// A throw after that left the run with no logger to close.
 	// Chrome kept naming every later download after a GUID and writing it into a dead run.
 	it("restores the download behavior when starting fails", async () => {
 		const client = new FakeClient();

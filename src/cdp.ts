@@ -146,14 +146,13 @@ const NETWORK_BUFFER_OPTIONS = {
 
 const CDP_CLOSE_TIMEOUT_MS = 5_000;
 const CDP_DRAIN_TIMEOUT_MS = 1_000;
-// Restoring the download behavior is one command sent to a browser that outlives the
-// Run, so it gets a round-trip budget instead of the drain budget it used to share.
+// Restoring the download behavior is one command sent to a browser that outlives the run.
+// It gets a round-trip budget instead of the drain budget it used to share.
 const CDP_RESET_TIMEOUT_MS = 5_000;
-// The writers close right after the drain, so an append from an abandoned handler
-// Is dropped: its record never reaches the file the summary already counted it in.
-// Hashing a saved download, assembling a large streamed body, or writing it all take
-// Far longer than the in-memory handlers need, so any handler still running gets the
-// Longer budget of its own rather than only the download path.
+// The writers close right after the drain, so a late append from a handler is refused.
+// Its record never reaches the file the summary already counted it in.
+// Hashing a download or assembling a large streamed body takes far longer than the rest.
+// Any handler still running therefore gets the longer budget, not only the download path.
 const CDP_EXTENDED_DRAIN_TIMEOUT_MS = 30_000;
 
 // A WebSocket handshake gets ExtraInfo events but never a requestWillBeSent.
@@ -888,9 +887,9 @@ class CdpResponseLogger {
 		await this.#recordAbandonedEvents();
 	}
 
-	// Restoring the default is a command round trip, not a drain, so it gets a budget of
-	// Its own. A browser too busy to answer within it used to be abandoned in silence,
-	// Leaving the user's own Chrome saving every later download into a finished run.
+	// Restoring the default is a command round trip, not a drain, so it gets its own budget.
+	// A browser too busy to answer within it used to be abandoned in silence.
+	// That left the user's own Chrome saving every later download into a finished run.
 	async #restoreDownloadBehavior(): Promise<void> {
 		const budget = this.#options.resetTimeoutMs ?? CDP_RESET_TIMEOUT_MS;
 		if (await settlesWithin(this.#resetDownloadBehavior(), budget)) {
@@ -1195,9 +1194,9 @@ class CdpResponseLogger {
 		// Downloads are tracked browser-wide and outlive the target that started them.
 		// Nothing about them is swept here.
 		this.#verbose(`detached session=${event.sessionId}`);
-		// A tab closing with nothing in flight is ordinary, and so are OOPIF and worker
-		// Teardowns. Recording those would bury the detaches that did drop capture state,
-		// Both in errors.ndjson and in the per-host breakdown of the summary.
+		// A tab closing with nothing in flight is ordinary, and so are OOPIF and worker exits.
+		// Recording those would bury the detaches that did drop capture state.
+		// It would bury them in errors.ndjson and in the per-host breakdown alike.
 		if (session && dropped > 0) {
 			await this.#recordCaptureError({
 				error: `Target detached before ${dropped} active request(s) completed.`,
@@ -1388,8 +1387,8 @@ class CdpResponseLogger {
 		};
 		this.#streams.set(key, accumulator);
 		accumulator.enabling = this.#enableStream(accumulator, event, sessionId);
-		// Enabling a stream is capture work like any handler: shutdown drains it, and its
-		// Rejection is handled here rather than left to take the process down.
+		// Enabling a stream is capture work like any handler, so shutdown drains it.
+		// Its rejection is handled here rather than left to take the process down.
 		this.#trackEvent(accumulator.enabling);
 	}
 
@@ -2035,11 +2034,10 @@ type StartedCdpLogger = {
 };
 
 // Starting changes browser behavior before it is finished.
-// With --capture-downloads the browser already saves into this run directory by the time
-// The target calls run, and either of those calls can still throw.
-// A throw there left the user's own Chrome naming every later download after a GUID and
-// Writing it into a dead run, with the CDP client still connected.
-// Nothing else undoes either, because the run never sees a logger it could close.
+// With --capture-downloads the browser saves into this run directory from early on.
+// Either call after that can still throw, and the run then never sees a logger at all.
+// Chrome was left naming every later download after a GUID and writing it into a dead run.
+// The CDP client was left connected with nothing to close it.
 const startLogger = async (logger: CdpResponseLogger): Promise<void> => {
 	try {
 		await logger.start();

@@ -192,8 +192,8 @@ export default defineConfig({
 		).rejects.toThrow();
 	});
 
-	// The drain promise is stored un-awaited until shutdown, so a rejection from the
-	// Error record it writes used to take the process down before the run could stop.
+	// The drain promise is stored un-awaited until shutdown.
+	// A rejection from the error record it writes used to take the process down first.
 	// Whatever is still queued has to be delivered even when that happens while closing.
 	it("keeps draining when the error record for a plugin failure cannot be written", async () => {
 		const dir = await mkdtemp(join(tmpdir(), "kuebiko-plugin-"));
@@ -242,9 +242,9 @@ export default defineConfig({
 		).resolves.toBe("call\ncall\n");
 	});
 
-	// One call is bounded by callWithTimeout and nothing bounded the backlog behind it, so
-	// A full queue of slow calls held close() for queueSize times timeoutMs: over an hour
-	// At the defaults, with the writers still open and the summary unprinted behind it.
+	// One call is bounded by callWithTimeout, and nothing bounded the backlog behind it.
+	// A full queue of slow calls held close() for queueSize times timeoutMs.
+	// That is over an hour at the defaults, with the writers open and the summary unprinted.
 	it("bounds the shutdown drain and records what its budget dropped", async () => {
 		const dir = await mkdtemp(join(tmpdir(), "kuebiko-plugin-"));
 		const runDirectory = join(dir, "run");
@@ -286,10 +286,10 @@ export default defineConfig({
 		expect(Date.now() - started).toBeLessThan(1_000);
 		const dropped = storage.errors.find((error) => error.event === "Plugin.shutdownTimeout");
 		expect(dropped?.pluginId).toBe("hanging-plugin");
-		// Every call to this plugin runs the full 100ms before callWithTimeout ends it, so
+		// Every call to this plugin runs the full 100ms before callWithTimeout ends it.
 		// The 100ms budget fits two of them at the very most, and a slower machine fits one.
-		// The drain shifts its first event before close() sets the budget, so one is always
-		// Taken. That leaves 18 or 19 dropped, whatever the scheduling.
+		// The drain shifts its first event before close() sets the budget, so one is taken.
+		// That leaves 18 or 19 dropped, whatever the scheduling.
 		const count = Number(
 			/dropped (?<count>\d+) queued/u.exec(dropped?.error ?? "")?.groups?.["count"],
 		);
