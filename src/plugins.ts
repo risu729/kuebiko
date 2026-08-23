@@ -165,6 +165,14 @@ type CreatePluginHostOptions = {
 
 const nowIso = (): string => new Date().toISOString();
 
+// Every hook event carries the same three fields, and one builder had already drifted.
+// Building them in one place is what keeps a version bump or a new field from missing one.
+const hookEventBase = (storage: RunRef): HookEventBase => ({
+	run: { runDirectory: storage.runDirectory, runTimestamp: storage.runTimestamp },
+	timestamp: nowIso(),
+	version: 1,
+});
+
 const errorMessage = (error: unknown): string =>
 	error instanceof Error ? error.message : String(error);
 
@@ -494,16 +502,15 @@ const createRunHookEvent = (
 	event: "run.started" | "run.stopping" | "run.stopped",
 	run: RunRef,
 ): HookEvent => ({
+	...hookEventBase(run),
 	event,
-	run,
-	timestamp: nowIso(),
-	version: 1,
 });
 
 const createResponseCompletedHookEvent = (
 	metadata: CompletedResponseMetadata,
-	runDirectory: string,
+	storage: LoggerStorage,
 ): HookEvent => ({
+	...hookEventBase(storage),
 	event: "response.completed",
 	request: {
 		bodyFile: metadata.requestBodyFile,
@@ -531,45 +538,29 @@ const createResponseCompletedHookEvent = (
 		status: metadata.status,
 		statusText: metadata.statusText,
 	},
-	run: {
-		runDirectory,
-		runTimestamp: metadata.runTimestamp,
-	},
 	target: {
 		targetId: metadata.tabTargetId,
 		targetType: metadata.targetType,
 		targetUrl: metadata.targetUrl,
 	},
-	timestamp: nowIso(),
-	version: 1,
 });
 
 const createWebSocketFrameHookEvent = (
 	frame: WebSocketFrameRecord,
 	storage: LoggerStorage,
 ): HookEvent => ({
+	...hookEventBase(storage),
 	event: frame.direction === "sent" ? "websocket.frame.sent" : "websocket.frame.received",
 	frame,
-	run: {
-		runDirectory: storage.runDirectory,
-		runTimestamp: storage.runTimestamp,
-	},
-	timestamp: nowIso(),
-	version: 1,
 });
 
 const createEventSourceMessageHookEvent = (
 	message: EventSourceMessageRecord,
 	storage: LoggerStorage,
 ): HookEvent => ({
+	...hookEventBase(storage),
 	event: "eventsource.message",
 	message,
-	run: {
-		runDirectory: storage.runDirectory,
-		runTimestamp: storage.runTimestamp,
-	},
-	timestamp: nowIso(),
-	version: 1,
 });
 
 // Path-based like every other hook event: the record names the saved file, never its bytes.
@@ -577,14 +568,9 @@ const createDownloadCompletedHookEvent = (
 	download: DownloadRecord,
 	storage: LoggerStorage,
 ): HookEvent => ({
+	...hookEventBase(storage),
 	download,
 	event: "download.completed",
-	run: {
-		runDirectory: storage.runDirectory,
-		runTimestamp: storage.runTimestamp,
-	},
-	timestamp: nowIso(),
-	version: 1,
 });
 
 // The snapshot holds live credentials, so only its path and its totals travel here.
@@ -594,27 +580,17 @@ const createStorageSnapshotHookEvent = (
 	truncated: boolean,
 	storage: LoggerStorage,
 ): HookEvent => ({
+	...hookEventBase(storage),
 	counts,
 	event: "storage.snapshot",
 	file,
-	run: {
-		runDirectory: storage.runDirectory,
-		runTimestamp: storage.runTimestamp,
-	},
-	timestamp: nowIso(),
 	truncated,
-	version: 1,
 });
 
 const createCaptureErrorHookEvent = (error: ErrorRecord, storage: LoggerStorage): HookEvent => ({
+	...hookEventBase(storage),
 	error,
 	event: "capture.error",
-	run: {
-		runDirectory: storage.runDirectory,
-		runTimestamp: storage.runTimestamp,
-	},
-	timestamp: nowIso(),
-	version: 1,
 });
 
 const createPluginHost = async (options: CreatePluginHostOptions): Promise<PluginHost> => {

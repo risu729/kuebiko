@@ -864,7 +864,7 @@ class CdpResponseLogger {
 		};
 		await this.#options.storage.recordCompletedResponse(metadata);
 		await this.#options.hooks?.publish(
-			createResponseCompletedHookEvent(metadata, this.#options.storage.runDirectory),
+			createResponseCompletedHookEvent(metadata, this.#options.storage),
 		);
 
 		if (!requestBodyResult.bodySaved && requestBodyResult.error) {
@@ -1182,7 +1182,7 @@ class CdpResponseLogger {
 		await hopWrites;
 		await this.#options.storage.recordCompletedResponse(metadata);
 		await this.#options.hooks?.publish(
-			createResponseCompletedHookEvent(metadata, this.#options.storage.runDirectory),
+			createResponseCompletedHookEvent(metadata, this.#options.storage),
 		);
 
 		if (!bodyResult.bodySaved && bodyResult.error) {
