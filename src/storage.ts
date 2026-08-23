@@ -46,7 +46,16 @@ type RunInfo = {
 	captureDownloads: boolean;
 	cdpEndpoint: string;
 	createdAt: string;
+	// The --exclude source, so a directory with nothing from a host says which happened.
+	// It says whether the site never asked for it or the filter dropped it.
+	// Same for --include below.
+	exclude?: string | undefined;
+	include?: string | undefined;
 	labels?: string[] | undefined;
+	// The cap above which a body was never retrieved, so a missing body is explained.
+	maxBodyBytes?: number | undefined;
+	// Records whether a NetLog was written next to the capture, which needs launch mode.
+	netlog: boolean;
 	nodePlatform: NodeJS.Platform;
 	note?: string | undefined;
 	pid: number;
@@ -61,9 +70,10 @@ type RunInfo = {
 };
 
 // How the run was started: the owner's free-form description plus capture settings.
-type RunAnnotations = Pick<RunInfo, "labels" | "note"> & {
+type RunAnnotations = Pick<RunInfo, "exclude" | "include" | "labels" | "maxBodyBytes" | "note"> & {
 	captureCookies?: boolean | undefined;
 	captureDownloads?: boolean | undefined;
+	netlog?: boolean | undefined;
 	snapshotStorage?: boolean | undefined;
 	streamBodies?: boolean | undefined;
 };
@@ -202,8 +212,16 @@ const createRunInfo = (
 	captureDownloads: annotations.captureDownloads ?? false,
 	cdpEndpoint,
 	createdAt: runTimestamp,
+	// How complete the capture is.
+	// An unfiltered run and a filtered one used to write the same run.json.
+	// Nothing said whether what is missing was ever requested.
+	exclude: annotations.exclude,
+	include: annotations.include,
 	// JSON.stringify drops undefined, so unlabelled runs keep the original run.json shape.
 	labels: annotations.labels?.length ? annotations.labels : undefined,
+	maxBodyBytes: annotations.maxBodyBytes,
+	// Always present too, so the directory says whether a NetLog belongs beside it.
+	netlog: annotations.netlog ?? false,
 	nodePlatform: process.platform,
 	note: annotations.note?.trim() ? annotations.note : undefined,
 	pid: process.pid,
