@@ -7,6 +7,9 @@ type CliArgDefinition = {
 	default?: boolean | string | undefined;
 	description: string;
 	multiple?: boolean | undefined;
+	// What --no-<flag> does, for a flag that is on by default and so only spelled negated.
+	// Help printed the affirmative description there, stating the opposite.
+	negatedDescription?: string | undefined;
 	type: "boolean" | "string";
 	valueHint?: string | undefined;
 };
@@ -46,9 +49,10 @@ const cliArgs = {
 		type: "string",
 		valueHint: "path",
 	},
+	// No default here: normalizeArgs applies it, so the parsed args say whether it was given.
+	// Launch mode has to reject the flag itself rather than the value it carries.
 	cdp: {
-		default: DEFAULT_CDP_ENDPOINT,
-		description: "CDP endpoint.",
+		description: `CDP endpoint, ${DEFAULT_CDP_ENDPOINT} by default.`,
 		type: "string",
 		valueHint: "url",
 	},
@@ -86,6 +90,7 @@ const cliArgs = {
 	netlog: {
 		default: true,
 		description: "Write netlog.json when using --launch-browser.",
+		negatedDescription: "Disable netlog.json in --launch-browser mode.",
 		type: "boolean",
 	},
 	note: {
@@ -101,6 +106,7 @@ const cliArgs = {
 	plugins: {
 		default: true,
 		description: "Load plugins from --config.",
+		negatedDescription: "Disable plugin loading from --config.",
 		type: "boolean",
 	},
 	"snapshot-storage": {

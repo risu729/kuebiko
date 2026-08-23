@@ -1,10 +1,5 @@
 import { z } from "zod";
 
-const optionalNonEmptyString = z.preprocess(
-	(value) => (value === "" ? undefined : value),
-	z.string().optional(),
-);
-
 const optionalStringArray = z.preprocess(
 	(value) => {
 		if (value === undefined) {
@@ -35,6 +30,19 @@ const parseNonEmptyText = (value: string | undefined, flag: string): string | un
 	return value;
 };
 
+// A blank value used to be dropped as if the flag had never been passed at all.
+// A wrapper script expanding an unset variable then ran with no filter or no body cap.
+// It could also run against the default browser profile, with nothing saying so.
+// This is a factory rather than one shared schema so no call site can forget the name.
+const nonEmptyString = (
+	flag: string,
+): z.ZodPipe<z.ZodOptional<z.ZodString>, z.ZodTransform<string | undefined, string | undefined>> =>
+	z.optional(z.string()).transform((value) => parseNonEmptyText(value, flag));
+
+// Number() also accepts exponents, hex, and surrounding whitespace.
+// A typo such as `--max-body-bytes 1e3` silently became a 1000 byte cap.
+const decimalIntegerRegex = /^\d+$/u;
+
 const parseSafeInteger = (
 	value: string | undefined,
 	flag: string,
@@ -45,17 +53,11 @@ const parseSafeInteger = (
 	}
 
 	const parsed = Number(value);
-	if (!Number.isSafeInteger(parsed) || parsed < minimum) {
+	if (!decimalIntegerRegex.test(value) || !Number.isSafeInteger(parsed) || parsed < minimum) {
 		throw new Error(`${flag} must be an integer greater than or equal to ${minimum}.`);
 	}
 
 	return parsed;
 };
 
-export {
-	optionalNonEmptyString,
-	optionalStringArray,
-	parseNonEmptyText,
-	parseRegex,
-	parseSafeInteger,
-};
+export { nonEmptyString, optionalStringArray, parseNonEmptyText, parseRegex, parseSafeInteger };
