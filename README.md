@@ -142,6 +142,10 @@ filenames.
 logger still only writes raw capture files; plugins are trusted local extension
 code you opt into with `--config`.
 
+`run.json` records how the run was started. `--label <label>` (repeatable) and
+`--note <text>` add `labels` and `note` fields so the run also records why it
+was made. Both fields are omitted when the flags are not used.
+
 `metadata.ndjson` contains one JSON object per completed response that passed
 the filters. When available, the same metadata line links to both a saved
 request payload and a saved response body.
@@ -466,6 +470,8 @@ Options:
   --include <regex>        Only persist matching response URLs
   --exclude <regex>        Do not persist matching response URLs
   --max-body-bytes <num>   Skip body retrieval above encoded byte length
+  --label <label>          Label recorded in run.json
+  --note <text>            Free-form note recorded in run.json
   --config <path>          TS/JS logger config with plugin modules
   --no-plugins             Disable plugin loading from --config
   --launch-browser         Launch and own a local CDP browser process

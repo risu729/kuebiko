@@ -86,7 +86,7 @@ const runLogger = async (options: CliOptions): Promise<void> => {
 	let logger: undefined | Awaited<ReturnType<typeof startCdpLogger>>;
 	let plugins: undefined | Awaited<ReturnType<typeof createPluginHost>>;
 	try {
-		storage = await createStorage(out, cdp);
+		storage = await createStorage(out, cdp, { labels: options.labels, note: options.note });
 
 		process.stdout.write(`capture_dir=${storage.runDirectory}\n`);
 		process.stdout.write(`cdp=${cdp}\n`);

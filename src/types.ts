@@ -13,23 +13,15 @@ type CliOptions = {
 	exclude?: RegExp | undefined;
 	help: boolean;
 	include?: RegExp | undefined;
+	labels: string[];
 	launchBrowser: boolean;
 	maxBodyBytes?: number | undefined;
 	netlog: boolean;
 	noPlugins: boolean;
+	note?: string | undefined;
 	out?: string | undefined;
 	verbose: boolean;
 	version: boolean;
-};
-
-type RunInfo = {
-	cdpEndpoint: string;
-	createdAt: string;
-	nodePlatform: NodeJS.Platform;
-	pid: number;
-	runDirectory: string;
-	tool: string;
-	version: string;
 };
 
 type SessionInfo = {
@@ -290,7 +282,6 @@ export type {
 	RequestBodySaveResult,
 	RequestBodySource,
 	ResponseCompletedHookEvent,
-	RunInfo,
 	RunRef,
 	RunHookEvent,
 	SessionInfo,

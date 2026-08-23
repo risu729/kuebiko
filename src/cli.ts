@@ -4,7 +4,12 @@ import { z } from "zod";
 
 import { DEFAULT_CDP_ENDPOINT, TOOL_NAME, TOOL_VERSION } from "./constants";
 import type { CliOptions } from "./types";
-import { optionalNonEmptyString, optionalStringArray, parseSafeInteger } from "./validation";
+import {
+	optionalNonEmptyString,
+	optionalStringArray,
+	parseNonEmptyText,
+	parseSafeInteger,
+} from "./validation";
 
 type CliArgDefinition = {
 	default?: boolean | string | undefined;
@@ -12,6 +17,14 @@ type CliArgDefinition = {
 	multiple?: boolean | undefined;
 	type: "boolean" | "string";
 	valueHint?: string | undefined;
+};
+
+// The subset of node:util parseArgs option config that the CLI definitions use.
+type ParseOption = {
+	default?: boolean | string;
+	multiple?: boolean;
+	short?: string;
+	type: "boolean" | "string";
 };
 
 const cliArgs = {
@@ -63,6 +76,12 @@ const cliArgs = {
 		type: "string",
 		valueHint: "regex",
 	},
+	label: {
+		description: "Label recorded in run.json. May be repeated.",
+		multiple: true,
+		type: "string",
+		valueHint: "label",
+	},
 	"launch-browser": {
 		description: "Launch and own a local CDP browser process.",
 		type: "boolean",
@@ -76,6 +95,11 @@ const cliArgs = {
 		default: true,
 		description: "Write netlog.json when using --launch-browser.",
 		type: "boolean",
+	},
+	note: {
+		description: "Free-form note recorded in run.json.",
+		type: "string",
+		valueHint: "text",
 	},
 	out: {
 		description: "Capture directory.",
@@ -100,20 +124,15 @@ type LoggerArgs = {
 	version?: boolean | undefined;
 };
 
-const createValidFlags = (): Set<string> => {
-	const flags = new Set(["--help", "--version", "-h", "-v"]);
-
-	for (const [name, definition] of Object.entries(cliArgs)) {
-		flags.add(`--${name}`);
-		if (definition.type === "boolean") {
-			flags.add(`--no-${name}`);
-		}
-	}
-
-	return flags;
-};
-
-const validFlags = createValidFlags();
+const validFlags = new Set([
+	"--help",
+	"--version",
+	"-h",
+	"-v",
+	...Object.entries(cliArgs).flatMap(([name, definition]) =>
+		definition.type === "boolean" ? [`--${name}`, `--no-${name}`] : [`--${name}`],
+	),
+]);
 
 const parseRegex = (value: string, flag: string): RegExp => {
 	try {
@@ -146,12 +165,16 @@ const CliOptionsSchema: z.ZodType<CliOptions> = z
 		include: optionalNonEmptyString.transform((value) =>
 			value ? parseRegex(value, "--include") : undefined,
 		),
+		labels: optionalStringArray,
 		launchBrowser: z.boolean(),
 		maxBodyBytes: optionalNonEmptyString.transform((value) =>
 			parseSafeInteger(value, "--max-body-bytes", 0),
 		),
 		netlog: z.boolean(),
 		noPlugins: z.boolean(),
+		// A blank --note is rejected instead of dropped, so a mistyped note cannot vanish.
+		// That deviates on purpose from the optionalNonEmptyString flags such as --out.
+		note: z.optional(z.string()).transform((value) => parseNonEmptyText(value, "--note")),
 		out: optionalNonEmptyString,
 		verbose: z.boolean(),
 		version: z.boolean(),
@@ -202,56 +225,32 @@ const normalizeArgs = (args: LoggerArgs): CliOptions =>
 		exclude: args.exclude,
 		help: args.help ?? false,
 		include: args.include,
+		labels: args.label,
 		launchBrowser: args["launch-browser"] ?? false,
 		maxBodyBytes: args["max-body-bytes"],
 		netlog: args.netlog ?? true,
 		noPlugins: args.plugins === false,
+		note: args.note,
 		out: args.out,
 		verbose: args.verbose ?? false,
 		version: args.version ?? false,
 	});
 
-const createParseOption = (
-	definition: CliArgDefinition,
-): {
-	default?: boolean | string;
-	multiple?: boolean;
-	short?: string;
-	type: "boolean" | "string";
-} => {
-	const parseOption: {
-		default?: boolean | string;
-		multiple?: boolean;
-		short?: string;
-		type: "boolean" | "string";
-	} = {
-		type: definition.type,
+const createParseOption = (definition: CliArgDefinition): ParseOption => ({
+	...(definition.default === undefined ? {} : { default: definition.default }),
+	...(definition.multiple ? { multiple: true } : {}),
+	type: definition.type,
+});
+
+const createParseOptions = (): Record<string, ParseOption> => {
+	const options: Record<string, ParseOption> = {
+		help: { short: "h", type: "boolean" },
+		version: { short: "v", type: "boolean" },
 	};
-	if (definition.default !== undefined) {
-		parseOption.default = definition.default;
-	}
-	if (definition.multiple) {
-		parseOption.multiple = true;
-	}
-
-	return parseOption;
-};
-
-const createParseOptions = (): Record<
-	string,
-	{ default?: boolean | string; multiple?: boolean; short?: string; type: "boolean" | "string" }
-> => {
-	const options: Record<
-		string,
-		{ default?: boolean | string; multiple?: boolean; short?: string; type: "boolean" | "string" }
-	> = {};
 
 	for (const [name, definition] of Object.entries(cliArgs)) {
 		options[name] = createParseOption(definition);
 	}
-
-	options["help"] = { short: "h", type: "boolean" };
-	options["version"] = { short: "v", type: "boolean" };
 
 	return options;
 };

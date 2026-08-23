@@ -19,6 +19,14 @@ const optionalStringArray = z.preprocess(
 	z.array(z.string().min(1)),
 );
 
+const parseNonEmptyText = (value: string | undefined, flag: string): string | undefined => {
+	if (value !== undefined && !value.trim()) {
+		throw new Error(`${flag} must not be empty.`);
+	}
+
+	return value;
+};
+
 const parseSafeInteger = (
 	value: string | undefined,
 	flag: string,
@@ -36,4 +44,4 @@ const parseSafeInteger = (
 	return parsed;
 };
 
-export { optionalNonEmptyString, optionalStringArray, parseSafeInteger };
+export { optionalNonEmptyString, optionalStringArray, parseNonEmptyText, parseSafeInteger };
