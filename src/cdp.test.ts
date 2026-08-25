@@ -69,7 +69,11 @@ class FakeClient extends EventEmitter {
 		attachToTarget: mock(
 			this.#domain("Target.attachToTarget", () => Promise.resolve({ sessionId: "session-1" })),
 		),
-		getTargets: mock(this.#domain("Target.getTargets", () => Promise.resolve({ targetInfos: [] }))),
+		getTargets: mock(
+			this.#domain("Target.getTargets", () =>
+				Promise.resolve({ targetInfos: [] as Protocol.Target.TargetInfo[] }),
+			),
+		),
 		setAutoAttach: mock(this.#domain("Target.setAutoAttach", () => Promise.resolve())),
 		setDiscoverTargets: mock(this.#domain("Target.setDiscoverTargets", () => Promise.resolve())),
 	};
@@ -280,7 +284,13 @@ const IDP_TO_APP = createRedirectResponse({
 
 const emitRequestWillBeSent = (
 	client: FakeClient,
-	request: { hasPostData?: boolean; method?: string; postData?: string; url: string },
+	request: {
+		hasPostData?: boolean;
+		method?: string;
+		postData?: string;
+		sessionId?: string;
+		url: string;
+	},
 	redirectResponse?: Protocol.Network.Response,
 ): void => {
 	client.emit(
@@ -309,7 +319,7 @@ const emitRequestWillBeSent = (
 			type: "Document",
 			wallTime: 1,
 		},
-		"session-1",
+		request.sessionId ?? "session-1",
 	);
 };
 
@@ -422,11 +432,11 @@ const emitLoadingFailed = (client: FakeClient, errorText: string): void => {
 	);
 };
 
-const emitLoadingFinished = (client: FakeClient): void => {
+const emitLoadingFinished = (client: FakeClient, sessionId = "session-1"): void => {
 	client.emit(
 		"Network.loadingFinished",
 		{ encodedDataLength: 123, requestId: "request-1", timestamp: 5 },
-		"session-1",
+		sessionId,
 	);
 };
 
@@ -2509,6 +2519,105 @@ describe("CdpResponseLogger", () => {
 				sessionId: "session-1",
 			}),
 		]);
+	});
+
+	// A browser-level setAutoAttach attaches to the targets that already exist.
+	// The explicit attach of every existing target then ran over those very same ones.
+	// Both sessions had Network enabled, so the browser delivered every event twice.
+	// Every request of an already-open tab then reached metadata.ndjson twice over.
+	it("enables network once for a target attached on two sessions", async () => {
+		const { client, storage } = await setupLogger();
+
+		attachPageTarget(client, "session-2", "target-1");
+		await waitForAsyncEvent();
+
+		expect(client.Network.enable).toHaveBeenCalledTimes(1);
+		expect(client.Network.enable).toHaveBeenCalledWith(NETWORK_BUFFER_OPTIONS, "session-1");
+		// The duplicate session is still resumed, so no target is left waiting on it.
+		expect(client.send).toHaveBeenCalledWith(
+			"Runtime.runIfWaitingForDebugger",
+			undefined,
+			"session-2",
+		);
+
+		emitRequestWillBeSent(client, { url: "https://example.test/api" });
+		emitRequestWillBeSent(client, { sessionId: "session-2", url: "https://example.test/api" });
+		await waitForAsyncEvent();
+		emitFinalResponse(client, "https://example.test/api");
+		emitResponseReceived(client, "https://example.test/api", { sessionId: "session-2" });
+		emitLoadingFinished(client, "session-2");
+		await waitForAsyncEvent();
+
+		expect(storage.metadata).toEqual([
+			expect.objectContaining({ sessionId: "session-1", url: "https://example.test/api" }),
+		]);
+		expect(storage.recordBody).toHaveBeenCalledTimes(1);
+	});
+
+	// A tab that reloads out of process detaches and attaches again under one target id.
+	// Holding its old session as the owner would leave the tab captured by nothing.
+	it("captures a target again once its owning session detached", async () => {
+		const { client, storage } = await setupLogger();
+
+		client.emit("Target.detachedFromTarget", { sessionId: "session-1", targetId: "target-1" });
+		await waitForAsyncEvent();
+		attachPageTarget(client, "session-2", "target-1");
+		await waitForAsyncEvent();
+
+		expect(client.Network.enable).toHaveBeenCalledTimes(2);
+		expect(client.Network.enable).toHaveBeenLastCalledWith(NETWORK_BUFFER_OPTIONS, "session-2");
+
+		emitRequestWillBeSent(client, { sessionId: "session-2", url: "https://example.test/api" });
+		await waitForAsyncEvent();
+		emitResponseReceived(client, "https://example.test/api", { sessionId: "session-2" });
+		emitLoadingFinished(client, "session-2");
+		await waitForAsyncEvent();
+
+		expect(storage.metadata).toEqual([
+			expect.objectContaining({ sessionId: "session-2", url: "https://example.test/api" }),
+		]);
+	});
+
+	// Ownership is per target, so a second tab is a target of its own and captured on its own.
+	it("enables network for every target of its own", async () => {
+		const { client } = await setupLogger();
+
+		attachPageTarget(client, "session-2", "target-2");
+		await waitForAsyncEvent();
+
+		expect(client.Network.enable).toHaveBeenCalledTimes(2);
+		expect(client.Network.enable).toHaveBeenLastCalledWith(NETWORK_BUFFER_OPTIONS, "session-2");
+	});
+
+	// Chrome attaches to the targets that already exist while setAutoAttach is still in flight.
+	// Attaching to one of those again only buys a session the attach handler discards.
+	it("does not attach again to a target auto-attach already delivered", async () => {
+		const { client, logger } = await setupLogger({ start: false });
+		client.Target.setAutoAttach.mockImplementationOnce(() => {
+			attachPageTarget(client);
+			return Promise.resolve();
+		});
+		client.Target.getTargets.mockImplementationOnce(() =>
+			Promise.resolve({
+				targetInfos: [
+					{
+						attached: true,
+						browserContextId: "context-1",
+						canAccessOpener: false,
+						targetId: "target-1",
+						title: "Example",
+						type: "page",
+						url: "https://example.test",
+					},
+				],
+			}),
+		);
+
+		await logger.start();
+		await waitForAsyncEvent();
+
+		expect(client.Target.attachToTarget).not.toHaveBeenCalled();
+		expect(client.Network.enable).toHaveBeenCalledTimes(1);
 	});
 });
 
