@@ -21,6 +21,7 @@ throwaway browser profile:
 - files the browser downloads, with `--capture-downloads`
 - an end-of-run snapshot of cookies, web storage, and IndexedDB, with
   `--snapshot-storage`
+- every web storage and IndexedDB change as it happens, with `--track-storage`
 - request/response metadata in append-only NDJSON
 - Chromium NetLog in the same run directory when using browser launch mode
 
@@ -79,6 +80,19 @@ are accepted rather than worked around:
   the group is left un-released and the browser frees it when the connection
   goes away. That is a documented gap, not an oversight: no Runtime method is
   worth adding for it.
+
+`--track-storage` reads the same three domains and is opt-in for the same
+reason, but it holds them open for the run instead of reading once at the end.
+It executes no page script and changes no browser setting either:
+
+- It enables `DOMStorage` on a page or iframe session the first time that target
+  reaches an `http(s)` origin, and leaves it enabled for the rest of the run.
+- It enables `IndexedDB` and calls `Storage.trackIndexedDBForOrigin` once per
+  origin, on one session, leaving that tracking in place.
+- It reads a store back with `IndexedDB.requestData` each time Chrome reports
+  that store changed, so the same transient `blocked` event and the same
+  un-released object group described above apply per change rather than once.
+- Without the flag none of this happens and neither domain is ever enabled.
 
 `--capture-downloads` is the one exception, and it is opt-in. That flag does
 change browser behavior rather than only observing it:
@@ -182,6 +196,7 @@ errors.ndjson
 websocket.ndjson
 eventsource.ndjson
 downloads.ndjson
+storage.ndjson
 storage-snapshot.json
 bodies/
 requests/
@@ -350,6 +365,37 @@ appends a second line for the same `guid`, the completion superseding the
 earlier loss. Repeats of a state already recorded are ignored, so a `guid` never
 gets the same outcome twice.
 
+`--track-storage` writes `storage.ndjson`, one JSON object per observed storage
+change, for the whole life of the run. It exists because the end-of-run snapshot
+below structurally loses data: it can only read the target sessions still
+attached when the run ends, so the web storage and IndexedDB of every origin
+whose tab was closed earlier is never captured at all. Following the changes as
+they happen is what closes that gap.
+
+Each line has an `area` of `"localStorage"`, `"sessionStorage"`, or
+`"indexedDB"`, and a `change`:
+
+- `"baseline"` is what an area already held when the logger first reached it.
+  Chrome only reports what changes after a domain is enabled, so without this a
+  consumer folding the file forward would start from an assumed-empty area. Web
+  storage is baselined per session and origin, IndexedDB once per origin.
+- `"added"`, `"updated"`, `"removed"`, and `"cleared"` are the `DOMStorage`
+  events, carrying `key`, `newValue`, and `oldValue` as Chrome reported them. A
+  cleared area names no key.
+- `"updated"` on `indexedDB` is a `Storage.indexedDBContentUpdated` event.
+  Chrome names only the store that changed, so the logger reads that one store
+  back and records its `databaseName`, `objectStoreName`, `entries`, and
+  `hasMore`.
+
+Reads of one object store are serialized, so two updates of the same store
+cannot interleave and record their pages out of order. Nothing else is ordered
+against anything else: a change event can land before the baseline read of the
+same area finishes, which is what the `change` field and the timestamps are for.
+
+`--track-storage` and `--snapshot-storage` are independent, and using both is
+the useful combination: the stream says how the session got to where it is, and
+the snapshot is the consolidated final state.
+
 `--snapshot-storage` writes `storage-snapshot.json` once, at the end of the run,
 before the browser and the CDP connection are closed. It is the answer to a site
 that renders from data already in IndexedDB: a value on screen may never appear
@@ -424,7 +470,8 @@ and they never gate `eventsource.ndjson` either, even though its messages do
 carry a URL: that is a deliberate choice, because filtering part of a live
 stream would be more confusing than not filtering it at all. They do not gate
 `downloads.ndjson` either: the browser has already written the file by then, so
-filtering the record would only hide it. They do not gate
+filtering the record would only hide it. They do not gate `storage.ndjson`,
+whose records are keyed by origin rather than by response URL. They do not gate
 `storage-snapshot.json`, which is keyed by origin rather than by response URL.
 
 `errors.ndjson` contains per-request capture failures. Individual CDP failures
@@ -468,6 +515,7 @@ visible without opening `errors.ndjson`:
 ```text
 summary responses=482 response_bytes=19203112 requests=37 request_bytes=8241
 summary websocket_frames=126 eventsource_messages=18 downloads=2 redirects=54
+summary storage_changes=37
 summary snapshot_origins=3 cookies=41 items=27 databases=2 entries=88
 summary errors=4
 summary_errors host=example.test total=2 Network.getResponseBody=2
@@ -482,7 +530,10 @@ received together, and `eventsource_messages` counts every recorded SSE message.
 canceled ones included, because a lost download is exactly what the summary
 should surface; the record's `state` says which it was.
 `redirects` counts recorded redirect hops, which have no body
-of their own and would otherwise be invisible in the totals. The
+of their own and would otherwise be invisible in the totals.
+`storage_changes` counts every line written to `storage.ndjson` with
+`--track-storage`, baselines included, so it says how much the run watched
+rather than how many areas it ended up holding. The
 `summary snapshot_` line is printed only when `--snapshot-storage` wrote a
 snapshot, and counts what landed in it: origins, cookies, `localStorage` and
 `sessionStorage` items together, IndexedDB databases, and object store entries.
@@ -839,6 +890,8 @@ Options:
   --snapshot-storage       Snapshot cookies and web storage when the run ends
   --stream-bodies          Assemble bodies from Network.streamResourceContent
                            (experimental)
+  --track-storage          Record web storage and IndexedDB changes to
+                           storage.ndjson
   --label <label>          Label recorded in run.json
   --note <text>            Free-form note recorded in run.json
   --config <path>          TS/JS logger config with plugin modules
@@ -949,7 +1002,9 @@ mise run compile
   it is a single point in time at shutdown. Storage of an origin whose tab was
   closed earlier in the run is not in it, and neither is storage of an origin
   the run only made requests to. A tab that navigated across origins contributes
-  only the origin it ended on.
+  only the origin it ended on. `--track-storage` is the answer to this
+  one: what a closed tab's storage held, and what it did on the way, is in
+  `storage.ndjson` even though the snapshot cannot see it.
 - An origin open in several tabs is read once, on the first session seen for it.
   `localStorage` and IndexedDB are shared by those tabs anyway, but
   `sessionStorage` is not: the other tabs' `sessionStorage` is silently absent
@@ -959,6 +1014,17 @@ mise run compile
   covered: a cross-site iframe's partitioned `localStorage`, `sessionStorage`,
   and IndexedDB are not what comes back, even when that frame attached and was
   read on its own session.
+- `--track-storage` follows a target only once it reaches an `http(s)` origin,
+  which it learns from `Target.targetInfoChanged`. Storage a page wrote before
+  that event is in the baseline read, but a target Chrome never reports a URL
+  change for is never followed.
+- `--track-storage` reads a changed object store with the same per-store cap as
+  the snapshot, and reports `hasMore` when the store holds more. It does not
+  page through the rest.
+- `--track-storage` records no cookies. Cookie changes are observable on the
+  wire with `--capture-cookies` and as a final jar with `--snapshot-storage`;
+  CDP has no cookie-change event to follow, so a cookie set by script and never
+  sent is in neither stream.
 - The snapshot caps what it reads: 20 origins, 20 databases per origin, 20
   object stores per database, 500 entries per object store, 5000 entries in
   total, and a 15 second deadline. It never pages past the first page of an
@@ -989,6 +1055,13 @@ mise run compile
   flag is off by default; turn it on only when a stored session or
   IndexedDB-cached data is what you are after, keep such runs off shared and
   synced storage, and delete them as soon as you are done.
+- With `--track-storage`, `storage.ndjson` is as sensitive as that snapshot and
+  in one way worse: it holds every value web storage took during the run, not
+  only the last one. A token the site rotated is in the file along with each
+  token that replaced it, and a value the page later deleted is still there. It
+  holds no cookies, which is the one thing the snapshot has that it does not.
+  The flag is off by default; treat a run that used it exactly as you would one
+  that used `--snapshot-storage`.
 - Store capture directories somewhere private, avoid syncing them to cloud
   drives by default, delete runs you no longer need, and share only minimized
   redacted samples.

@@ -28,6 +28,7 @@ describe("parseArgs", () => {
 			noPlugins: false,
 			snapshotStorage: false,
 			streamBodies: false,
+			trackStorage: false,
 			verbose: false,
 			version: false,
 		});

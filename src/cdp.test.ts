@@ -20,6 +20,7 @@ import type {
 	LoggerStorage,
 	RequestState,
 	RequestBodySource,
+	StorageChangeRecord,
 	StorageSnapshot,
 	WebSocketFrameRecord,
 } from "./types";
@@ -103,6 +104,7 @@ const createStorage = (): LoggerStorage & {
 	eventSource: EventSourceMessageRecord[];
 	metadata: CompletedResponseMetadata[];
 	snapshots: StorageSnapshot[];
+	storageChanges: StorageChangeRecord[];
 	websocket: WebSocketFrameRecord[];
 } => {
 	const metadata: CompletedResponseMetadata[] = [];
@@ -110,6 +112,7 @@ const createStorage = (): LoggerStorage & {
 	const errors: ErrorRecord[] = [];
 	const eventSource: EventSourceMessageRecord[] = [];
 	const snapshots: StorageSnapshot[] = [];
+	const storageChanges: StorageChangeRecord[] = [];
 	const websocket: WebSocketFrameRecord[] = [];
 
 	return {
@@ -172,6 +175,10 @@ const createStorage = (): LoggerStorage & {
 			eventSource.push(record);
 			return Promise.resolve();
 		}),
+		recordStorageChange: mock((change: StorageChangeRecord) => {
+			storageChanges.push(change);
+			return Promise.resolve();
+		}),
 		recordStorageSnapshot: mock((snapshot: StorageSnapshot) => {
 			snapshots.push(snapshot);
 			return Promise.resolve("storage-snapshot.json");
@@ -183,6 +190,7 @@ const createStorage = (): LoggerStorage & {
 		runDirectory: "/captures/run",
 		runTimestamp: "2026-07-06T12:34:56Z",
 		snapshots,
+		storageChanges,
 		websocket,
 	};
 };
@@ -2748,5 +2756,286 @@ describe("startLogger", () => {
 		await expect(startLogger(logger)).resolves.toBeUndefined();
 
 		expect(client.close).not.toHaveBeenCalled();
+	});
+});
+
+const emitTargetInfoChanged = (
+	client: FakeClient,
+	url: string,
+	target: { id?: string; type?: string } = {},
+): void => {
+	client.emit("Target.targetInfoChanged", {
+		targetInfo: {
+			attached: true,
+			browserContextId: "context-1",
+			canAccessOpener: false,
+			targetId: target.id ?? "target-1",
+			title: "Example",
+			type: target.type ?? "page",
+			url,
+		},
+	});
+};
+
+const emitDomStorageEvent = (
+	client: FakeClient,
+	event: string,
+	payload: { isLocalStorage?: boolean } & Record<string, unknown> = {},
+): void => {
+	const { isLocalStorage = true, ...item } = payload;
+	client.emit(
+		event,
+		{ storageId: { isLocalStorage, securityOrigin: "https://example.test" }, ...item },
+		"session-1",
+	);
+};
+
+const emitIndexedDbContentUpdated = (client: FakeClient, session = "session-1"): void => {
+	client.emit(
+		"Storage.indexedDBContentUpdated",
+		{
+			bucketId: "bucket-1",
+			databaseName: "app-cache",
+			objectStoreName: "sessions",
+			origin: "https://example.test",
+			storageKey: "https://example.test/",
+		},
+		session,
+	);
+};
+
+// One entry as CDP hands it over: a bounded preview beside a live handle it drops.
+const REMOTE_OBJECT_ENTRY = {
+	key: { description: "token", type: "string", value: "token" },
+	primaryKey: { description: "token", type: "string", value: "token" },
+	value: { className: "Object", objectId: "handle-1", subtype: undefined, type: "object" },
+};
+
+const primeTrackingReplies = (client: FakeClient): void => {
+	client.sendReplies.set("DOMStorage.getDOMStorageItems", (params: unknown) => ({
+		entries: (params as { storageId: { isLocalStorage: boolean } }).storageId.isLocalStorage
+			? [["theme", "dark"]]
+			: [["tab", "1"]],
+	}));
+	client.sendReplies.set("IndexedDB.requestDatabaseNames", { databaseNames: [] });
+};
+
+describe("CdpResponseLogger storage tracking", () => {
+	it("sends no storage command and writes nothing without the flag", async () => {
+		const { client, storage } = await setupLogger();
+		emitTargetInfoChanged(client, "https://example.test/app");
+		emitDomStorageEvent(client, "DOMStorage.domStorageItemAdded", {
+			key: "token",
+			newValue: "abc123",
+		});
+		await waitForAsyncEvent();
+
+		expect(storage.storageChanges).toEqual([]);
+		expect(
+			sentMethods(client).filter((method) => /^(?:DOMStorage|IndexedDB|Storage)\./u.test(method)),
+		).toEqual([]);
+	});
+
+	// A page attaches on about:blank, so the attach-time URL is not what opens the domains.
+	it("reads both web storage areas once a target reaches an origin", async () => {
+		const { client, storage } = await setupLogger({ trackStorage: true });
+		primeTrackingReplies(client);
+		emitTargetInfoChanged(client, "https://example.test/app");
+		await waitForAsyncEvent();
+
+		expect(storage.storageChanges).toEqual([
+			{
+				area: "localStorage",
+				change: "baseline",
+				key: "theme",
+				newValue: "dark",
+				securityOrigin: "https://example.test",
+				sessionId: "session-1",
+				targetId: "target-1",
+				timestamp: expect.any(String),
+			},
+			{
+				area: "sessionStorage",
+				change: "baseline",
+				key: "tab",
+				newValue: "1",
+				securityOrigin: "https://example.test",
+				sessionId: "session-1",
+				targetId: "target-1",
+				timestamp: expect.any(String),
+			},
+		]);
+		expect(sentMethods(client)).toContain("DOMStorage.enable");
+		expect(sentMethods(client)).toContain("Storage.trackIndexedDBForOrigin");
+	});
+
+	// The same target reaching the same origin again must not re-read what it already has.
+	it("reads a web storage area once per session and origin", async () => {
+		const { client, storage } = await setupLogger({ trackStorage: true });
+		primeTrackingReplies(client);
+		emitTargetInfoChanged(client, "https://example.test/app");
+		await waitForAsyncEvent();
+		emitTargetInfoChanged(client, "https://example.test/other");
+		await waitForAsyncEvent();
+
+		expect(storage.storageChanges).toHaveLength(2);
+		expect(
+			sentMethods(client).filter((method) => method === "DOMStorage.getDOMStorageItems"),
+		).toHaveLength(2);
+	});
+
+	it("records every web storage change the browser reports", async () => {
+		const { client, storage } = await setupLogger({ trackStorage: true });
+		emitDomStorageEvent(client, "DOMStorage.domStorageItemAdded", {
+			key: "token",
+			newValue: "abc123",
+		});
+		emitDomStorageEvent(client, "DOMStorage.domStorageItemUpdated", {
+			key: "token",
+			newValue: "def456",
+			oldValue: "abc123",
+		});
+		emitDomStorageEvent(client, "DOMStorage.domStorageItemRemoved", {
+			isLocalStorage: false,
+			key: "token",
+		});
+		emitDomStorageEvent(client, "DOMStorage.domStorageItemsCleared", {});
+		await waitForAsyncEvent();
+
+		expect(storage.storageChanges).toEqual([
+			expect.objectContaining({
+				area: "localStorage",
+				change: "added",
+				key: "token",
+				newValue: "abc123",
+				securityOrigin: "https://example.test",
+				sessionId: "session-1",
+				targetId: "target-1",
+			}),
+			expect.objectContaining({
+				change: "updated",
+				newValue: "def456",
+				oldValue: "abc123",
+			}),
+			expect.objectContaining({ area: "sessionStorage", change: "removed", key: "token" }),
+			// A cleared area names no key, so neither the key nor a value is carried.
+			expect.objectContaining({ area: "localStorage", change: "cleared", key: undefined }),
+		]);
+	});
+
+	// Chrome says only which store changed, so the record has to come from a read back.
+	it("reads an object store back when its contents change", async () => {
+		const { client, storage } = await setupLogger({ trackStorage: true });
+		client.sendReplies.set("IndexedDB.requestData", {
+			hasMore: false,
+			objectStoreDataEntries: [REMOTE_OBJECT_ENTRY],
+		});
+		emitIndexedDbContentUpdated(client);
+		await waitForAsyncEvent();
+
+		expect(storage.storageChanges).toEqual([
+			expect.objectContaining({
+				area: "indexedDB",
+				change: "updated",
+				databaseName: "app-cache",
+				hasMore: false,
+				objectStoreName: "sessions",
+				securityOrigin: "https://example.test",
+				sessionId: "session-1",
+			}),
+		]);
+		// The live handle is meaningless once the run is over, so it is never recorded.
+		expect(JSON.stringify(storage.storageChanges)).not.toContain("objectId");
+	});
+
+	// Tracking twice would record one change once per tab open on the origin.
+	it("tracks IndexedDB once for an origin open in two targets", async () => {
+		const { client } = await setupLogger({ trackStorage: true });
+		primeTrackingReplies(client);
+		attachPageTarget(client, "session-2", "target-2");
+		await waitForAsyncEvent();
+		emitTargetInfoChanged(client, "https://example.test/app");
+		await waitForAsyncEvent();
+		emitTargetInfoChanged(client, "https://example.test/app", { id: "target-2" });
+		await waitForAsyncEvent();
+
+		expect(
+			sentMethods(client).filter((method) => method === "Storage.trackIndexedDBForOrigin"),
+		).toHaveLength(1);
+	});
+
+	// The tracking dies with the session that asked for it, so the next one must retake it.
+	it("retracks an origin after the session holding its tracking detaches", async () => {
+		const { client } = await setupLogger({ trackStorage: true });
+		primeTrackingReplies(client);
+		emitTargetInfoChanged(client, "https://example.test/app");
+		await waitForAsyncEvent();
+		client.emit("Target.detachedFromTarget", { sessionId: "session-1", targetId: "target-1" });
+		await waitForAsyncEvent();
+		attachPageTarget(client, "session-2", "target-2");
+		await waitForAsyncEvent();
+		emitTargetInfoChanged(client, "https://example.test/app", { id: "target-2" });
+		await waitForAsyncEvent();
+
+		expect(
+			sentMethods(client).filter((method) => method === "Storage.trackIndexedDBForOrigin"),
+		).toHaveLength(2);
+	});
+
+	// Targets without an http(s) origin have no storage area to read at all.
+	it("ignores a target that has not reached an http origin", async () => {
+		const { client, storage } = await setupLogger({ trackStorage: true });
+		emitTargetInfoChanged(client, "about:blank");
+		emitTargetInfoChanged(client, "chrome://newtab");
+		await waitForAsyncEvent();
+
+		expect(storage.storageChanges).toEqual([]);
+		expect(
+			sentMethods(client).filter((method) => /^(?:DOMStorage|IndexedDB|Storage)\./u.test(method)),
+		).toEqual([]);
+	});
+
+	it("records a failed storage read against the origin it was reading", async () => {
+		const { client, storage } = await setupLogger({ trackStorage: true });
+		client.sendReplies.set("DOMStorage.getDOMStorageItems", new Error("DOMStorage read failed"));
+		client.sendReplies.set("IndexedDB.requestDatabaseNames", { databaseNames: [] });
+		emitTargetInfoChanged(client, "https://example.test/app");
+		await waitForAsyncEvent();
+
+		expect(storage.errors).toContainEqual(
+			expect.objectContaining({
+				error: "DOMStorage read failed",
+				event: "DOMStorage.getDOMStorageItems",
+				sessionId: "session-1",
+				url: "https://example.test",
+			}),
+		);
+		expect(storage.storageChanges).toEqual([]);
+	});
+
+	// Two updates of one store would otherwise append their pages in whichever order
+	// The two reads happened to answer in.
+	it("serializes two updates of the same object store", async () => {
+		const { client, storage } = await setupLogger({ trackStorage: true });
+		const first = Promise.withResolvers<{ hasMore: boolean; objectStoreDataEntries: never[] }>();
+		let call = 0;
+		client.sendReplies.set("IndexedDB.requestData", () => {
+			call += 1;
+			return call === 1
+				? first.promise
+				: Promise.resolve({ hasMore: true, objectStoreDataEntries: [] });
+		});
+		emitIndexedDbContentUpdated(client);
+		emitIndexedDbContentUpdated(client);
+		await waitForAsyncEvent();
+
+		expect(call).toBe(1);
+		first.resolve({ hasMore: false, objectStoreDataEntries: [] });
+		await waitForRecords(() => storage.storageChanges.length === 2);
+
+		expect(storage.storageChanges.map((change) => "hasMore" in change && change.hasMore)).toEqual([
+			false,
+			true,
+		]);
 	});
 });

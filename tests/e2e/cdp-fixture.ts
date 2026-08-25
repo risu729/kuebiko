@@ -8,6 +8,7 @@ import type {
 	CapturedApiRecord,
 	CapturedDownload,
 	CapturedEventSourceMessage,
+	CapturedStorageChange,
 	CapturedWebSocketFrame,
 } from "./assertions";
 import openNewPage from "./cdp-page";
@@ -184,6 +185,7 @@ const startLogger = (options: {
 		"--capture-cookies",
 		"--capture-downloads",
 		"--snapshot-storage",
+		"--track-storage",
 		"--out",
 		options.captureDirectory,
 	]);
@@ -239,6 +241,21 @@ const waitForStorageWrites = async (captureDirectory: string): Promise<void> => 
 	});
 };
 
+// The page writes both web storage areas and one IndexedDB store, so all three must
+// Reach storage.ndjson before asserting. A write that happened before the logger
+// Reached the origin lands as a baseline, and a later one as its own change, so the
+// Assertion waits for the area rather than for a particular change.
+const findStorageChanges = async (captureDirectory: string): Promise<CapturedStorageChange[]> =>
+	await waitFor("captured storage changes", async () => {
+		const changes = await readNdjson<CapturedStorageChange>(
+			join(captureDirectory, "storage.ndjson"),
+		);
+		const areas = new Set(changes.map((change) => change.area));
+		return areas.has("localStorage") && areas.has("sessionStorage") && areas.has("indexedDB")
+			? changes
+			: undefined;
+	});
+
 // The page clicks one download link, so exactly one terminal record must land.
 const findDownloads = async (captureDirectory: string): Promise<CapturedDownload[]> =>
 	await waitFor("captured downloads", async () => {
@@ -286,6 +303,7 @@ export {
 	findCapturedApiRecord,
 	findDownloads,
 	findEventSourceMessages,
+	findStorageChanges,
 	findWebSocketFrames,
 	loadPageAndWaitForCapture,
 	maybeBrowserIt,

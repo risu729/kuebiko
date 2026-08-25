@@ -87,7 +87,7 @@ describe("createCaptureSummary", () => {
 
 		expect(summary.render().split("\n")).toEqual([
 			"summary responses=0 response_bytes=0 requests=0 request_bytes=0",
-			"summary websocket_frames=0 eventsource_messages=0 downloads=0 redirects=0",
+			"summary websocket_frames=0 eventsource_messages=0 downloads=0 redirects=0 storage_changes=0",
 			"summary snapshot_origins=2 cookies=1 items=3 databases=1 entries=2",
 			"summary errors=0",
 		]);
@@ -106,7 +106,7 @@ describe("createCaptureSummary", () => {
 		expect(summary.render()).toBe(
 			[
 				"summary responses=2 response_bytes=100 requests=1 request_bytes=17",
-				"summary websocket_frames=2 eventsource_messages=1 downloads=1 redirects=0",
+				"summary websocket_frames=2 eventsource_messages=1 downloads=1 redirects=0 storage_changes=0",
 				"summary errors=0",
 			].join("\n"),
 		);
@@ -120,7 +120,7 @@ describe("createCaptureSummary", () => {
 
 		expect(summary.render().split("\n")).toEqual([
 			"summary responses=1 response_bytes=11 requests=0 request_bytes=0",
-			"summary websocket_frames=0 eventsource_messages=0 downloads=0 redirects=2",
+			"summary websocket_frames=0 eventsource_messages=0 downloads=0 redirects=2 storage_changes=0",
 			"summary errors=0",
 		]);
 	});

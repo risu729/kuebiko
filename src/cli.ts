@@ -68,6 +68,7 @@ const CliOptionsSchema: z.ZodType<CliOptions> = z
 		out: nonEmptyString("--out"),
 		snapshotStorage: z.boolean(),
 		streamBodies: z.boolean(),
+		trackStorage: z.boolean(),
 		verbose: z.boolean(),
 		version: z.boolean(),
 	})
@@ -158,6 +159,7 @@ const normalizeArgs = (args: LoggerArgs): CliOptions => {
 		out: args.out,
 		snapshotStorage: args["snapshot-storage"] ?? false,
 		streamBodies: args["stream-bodies"] ?? false,
+		trackStorage: args["track-storage"] ?? false,
 		verbose: args.verbose ?? false,
 		version: args.version ?? false,
 	});

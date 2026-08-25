@@ -123,6 +123,7 @@ const getRunAnnotations = (options: CliOptions): RunAnnotations => ({
 	note: options.note,
 	snapshotStorage: options.snapshotStorage,
 	streamBodies: options.streamBodies,
+	trackStorage: options.trackStorage,
 });
 
 type RunParts = {
@@ -178,6 +179,7 @@ const runLogger = async (options: CliOptions): Promise<void> => {
 			snapshotStorage: options.snapshotStorage,
 			storage,
 			streamBodies: options.streamBodies,
+			trackStorage: options.trackStorage,
 			verbose: options.verbose,
 		});
 		process.stdout.write(`${READY_MESSAGE}\n`);

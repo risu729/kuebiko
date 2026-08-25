@@ -117,6 +117,10 @@ const cliArgs = {
 		description: "Assemble bodies from Network.streamResourceContent (experimental).",
 		type: "boolean",
 	},
+	"track-storage": {
+		description: "Record web storage and IndexedDB changes to storage.ndjson.",
+		type: "boolean",
+	},
 	verbose: {
 		description: "Print verbose status logs.",
 		type: "boolean",
