@@ -28,6 +28,7 @@ describe("parseArgs", () => {
 			noPlugins: false,
 			snapshotStorage: false,
 			streamBodies: false,
+			trackStorage: false,
 			verbose: false,
 			version: false,
 		});
@@ -111,6 +112,10 @@ describe("parseArgs", () => {
 
 	it("parses the storage snapshot opt-in", () => {
 		expect(parseArgs(["--snapshot-storage"]).snapshotStorage).toBe(true);
+	});
+
+	it("parses the storage tracking opt-in", () => {
+		expect(parseArgs(["--track-storage"]).trackStorage).toBe(true);
 	});
 
 	it("rejects unknown flags", () => {

@@ -43,7 +43,8 @@
 	},
 	"overrides": [
 		{
-			"files": ["src/**/*.test.ts"],
+			// Test code, including the e2e fixtures and assertions the tests are built from
+			"files": ["src/**/*.test.ts", "tests/**/*.ts"],
 			"rules": {
 				"eslint/max-lines": "allow",
 				"eslint/max-lines-per-function": "allow",
@@ -81,6 +82,13 @@
 				"eslint/max-params": "allow",
 				"eslint/max-statements": "allow",
 				"promise/avoid-new": "allow"
+			}
+		},
+		{
+			// Declarations only, and it grows by one record type per capture feature
+			"files": ["src/types.ts"],
+			"rules": {
+				"eslint/max-lines": "allow"
 			}
 		}
 	]

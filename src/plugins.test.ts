@@ -69,6 +69,7 @@ const createStorage = (runDirectory: string): LoggerStorage & { errors: ErrorRec
 		recordRequestBody: mock((_state: RequestState): Promise<RequestBodySaveResult> =>
 			Promise.resolve({ bodySaved: true, source: "requestWillBeSent" }),
 		),
+		recordStorageChange: mock(() => Promise.resolve()),
 		recordStorageSnapshot: mock(() => Promise.resolve("storage-snapshot.json")),
 		recordWebSocketFrame: mock((_frame: WebSocketFrameRecord) => Promise.resolve()),
 		runDirectory,

@@ -18,6 +18,7 @@ import type {
 	LoggerStorage,
 	RequestState,
 	RequestBodySaveResult,
+	StorageChangeRecord,
 	StorageSnapshot,
 	WebSocketFrameRecord,
 } from "./types";
@@ -66,6 +67,9 @@ type RunInfo = {
 	// That also explains why every streamed body line reports base64Encoded true.
 	streamBodies: boolean;
 	tool: string;
+	// Records whether storage.ndjson may hold a live session from --track-storage.
+	// It follows every change, so it holds tokens the end-of-run snapshot never saw.
+	trackStorage: boolean;
 	version: string;
 };
 
@@ -76,6 +80,7 @@ type RunAnnotations = Pick<RunInfo, "exclude" | "include" | "labels" | "maxBodyB
 	netlog?: boolean | undefined;
 	snapshotStorage?: boolean | undefined;
 	streamBodies?: boolean | undefined;
+	trackStorage?: boolean | undefined;
 };
 
 // Only the run owner reads the summary, so it stays off the LoggerStorage contract.
@@ -231,6 +236,8 @@ const createRunInfo = (
 	// Always present too, so the directory says how its bodies were retrieved.
 	streamBodies: annotations.streamBodies ?? false,
 	tool: TOOL_NAME,
+	// Always present too, so the directory says whether storage.ndjson holds a session.
+	trackStorage: annotations.trackStorage ?? false,
 	version: TOOL_VERSION,
 });
 
@@ -262,6 +269,7 @@ const createStorage = async (
 		websocket: createNdjsonWriter(join(runDirectory, "websocket.ndjson")),
 		eventsource: createNdjsonWriter(join(runDirectory, "eventsource.ndjson")),
 		downloads: createNdjsonWriter(join(runDirectory, "downloads.ndjson")),
+		storage: createNdjsonWriter(join(runDirectory, "storage.ndjson")),
 	};
 	const summary = createCaptureSummary();
 	let bodyCounter = 0;
@@ -427,6 +435,10 @@ const createStorage = async (
 		recordEventSourceMessage: async (message: EventSourceMessageRecord) => {
 			summary.recordEventSourceMessage();
 			await writers.eventsource.append(message);
+		},
+		recordStorageChange: async (change: StorageChangeRecord) => {
+			summary.recordStorageChange();
+			await writers.storage.append(change);
 		},
 		// A point-in-time document, not a stream of events.
 		// It is therefore written whole once instead of appended to line by line.

@@ -341,6 +341,7 @@ describe("createStorage", () => {
 		expect(storage.summary.render().split("\n")).toEqual([
 			"summary responses=1 response_bytes=11 requests=1 request_bytes=5",
 			"summary websocket_frames=1 eventsource_messages=1 downloads=0 redirects=0",
+			"summary storage_changes=0",
 			"summary errors=1",
 			"summary_errors host=example.test total=1 Network.getResponseBody=1",
 		]);
@@ -372,6 +373,7 @@ describe("createStorage", () => {
 		expect(storage.summary.render().split("\n")).toEqual([
 			"summary responses=0 response_bytes=0 requests=0 request_bytes=0",
 			"summary websocket_frames=0 eventsource_messages=0 downloads=0 redirects=1",
+			"summary storage_changes=0",
 			"summary errors=0",
 		]);
 	});
@@ -513,6 +515,7 @@ describe("createStorage", () => {
 				note: "manual sweep",
 				snapshotStorage: true,
 				streamBodies: true,
+				trackStorage: true,
 			},
 			"2026-07-06T12:34:56Z",
 		);
@@ -526,6 +529,7 @@ describe("createStorage", () => {
 		expect(runInfo.streamBodies).toBe(true);
 		expect(runInfo.captureDownloads).toBe(true);
 		expect(runInfo.snapshotStorage).toBe(true);
+		expect(runInfo.trackStorage).toBe(true);
 		expect(runInfo.createdAt).toBe("2026-07-06T12:34:56Z");
 	});
 
@@ -574,6 +578,7 @@ describe("createStorage", () => {
 			expect(runInfo["captureDownloads"]).toBe(false);
 			expect(runInfo["snapshotStorage"]).toBe(false);
 			expect(runInfo["streamBodies"]).toBe(false);
+			expect(runInfo["trackStorage"]).toBe(false);
 			expect(runInfo["netlog"]).toBe(false);
 			// An unfiltered run leaves them out rather than recording a filter it never had.
 			expect(Object.hasOwn(runInfo, "include")).toBe(false);
@@ -583,6 +588,26 @@ describe("createStorage", () => {
 	});
 
 	// One point-in-time document, so it is written whole instead of appended to.
+	it("appends storage changes and counts them in the summary", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "kuebiko-"));
+		const storage = await createStorage(dir, "http://127.0.0.1:9222", {}, "2026-07-06T12:34:56Z");
+
+		await storage.recordStorageChange({
+			area: "localStorage",
+			change: "added",
+			key: "token",
+			newValue: "abc123",
+			securityOrigin: "https://example.test",
+			sessionId: "session-1",
+			targetId: "target-1",
+			timestamp: "2026-07-06T12:34:57Z",
+		});
+		await storage.close();
+
+		await expect(Bun.file(join(dir, "storage.ndjson")).text()).resolves.toContain('"key":"token"');
+		expect(storage.summary.render().split("\n")).toContain("summary storage_changes=1");
+	});
+
 	it("writes the storage snapshot as one JSON file in the run directory", async () => {
 		const dir = await mkdtemp(join(tmpdir(), "kuebiko-"));
 		const storage = await createStorage(

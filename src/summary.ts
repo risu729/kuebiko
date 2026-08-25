@@ -9,6 +9,7 @@ type CaptureSummary = {
 	recordRedirectHop: () => void;
 	recordSavedRequestBody: (byteLength: number) => void;
 	recordSavedResponseBody: (byteLength: number) => void;
+	recordStorageChange: () => void;
 	recordStorageSnapshot: (counts: StorageSnapshotCounts) => void;
 	recordWebSocketFrame: () => void;
 	// A record file that lost something, named after the writer that failed.
@@ -109,6 +110,7 @@ type RecordCounts = {
 	requestBytes: number;
 	responseBodies: number;
 	responseBytes: number;
+	storageChanges: number;
 	webSocketFrames: number;
 };
 
@@ -125,6 +127,8 @@ const renderWriterFailures = (failed: Map<string, boolean>): string[] =>
 			];
 
 // Saved bodies first, then the records that have no body of their own.
+// Storage changes get a line of their own: the stream line is already at the width
+// A terminal can hold, and both storage lines then read together.
 // The snapshot line is printed only when one was taken, so a normal run is unchanged.
 // The error total comes last, heading the per-host breakdown printed below it.
 const renderTotals = (
@@ -133,6 +137,7 @@ const renderTotals = (
 ): string[] => [
 	`summary responses=${counts.responseBodies} response_bytes=${counts.responseBytes} requests=${counts.requestBodies} request_bytes=${counts.requestBytes}`,
 	`summary websocket_frames=${counts.webSocketFrames} eventsource_messages=${counts.eventSourceMessages} downloads=${counts.downloads} redirects=${counts.redirectHops}`,
+	`summary storage_changes=${counts.storageChanges}`,
 	...(snapshot === undefined
 		? []
 		: [
@@ -152,7 +157,47 @@ const createRecordCounts = (): RecordCounts => ({
 	requestBytes: 0,
 	responseBodies: 0,
 	responseBytes: 0,
+	storageChanges: 0,
 	webSocketFrames: 0,
+});
+
+// The recorders that only ever add to a tally, kept apart from the summary factory.
+// What is left there is the state that is not a plain counter: the per-host error
+// Buckets, the one snapshot, and the writers that failed.
+const createCountRecorders = (
+	counts: RecordCounts,
+): Omit<
+	CaptureSummary,
+	"recordError" | "recordStorageSnapshot" | "recordWriterFailure" | "render"
+> => ({
+	// Every recorded download counts, canceled ones included: the record says which.
+	recordDownload: (): void => {
+		counts.downloads += 1;
+	},
+	// An SSE stream never finishes, so its messages reach no response total either.
+	recordEventSourceMessage: (): void => {
+		counts.eventSourceMessages += 1;
+	},
+	// Redirect hops carry no body, so they would otherwise miss every total.
+	recordRedirectHop: (): void => {
+		counts.redirectHops += 1;
+	},
+	recordSavedRequestBody: (byteLength: number): void => {
+		counts.requestBodies += 1;
+		counts.requestBytes += byteLength;
+	},
+	recordSavedResponseBody: (byteLength: number): void => {
+		counts.responseBodies += 1;
+		counts.responseBytes += byteLength;
+	},
+	// Every observed change, baselines included, so the count says how much the run
+	// Watched rather than how many areas it ended up holding.
+	recordStorageChange: (): void => {
+		counts.storageChanges += 1;
+	},
+	recordWebSocketFrame: (): void => {
+		counts.webSocketFrames += 1;
+	},
 });
 
 const createCaptureSummary = (): CaptureSummary => {
@@ -162,10 +207,7 @@ const createCaptureSummary = (): CaptureSummary => {
 	const counts = createRecordCounts();
 
 	return {
-		// Every recorded download counts, canceled ones included: the record says which.
-		recordDownload: (): void => {
-			counts.downloads += 1;
-		},
+		...createCountRecorders(counts),
 		recordError: (record: ErrorRecord): void => {
 			counts.errors += 1;
 			const bucket = errorBucket(record);
@@ -173,28 +215,9 @@ const createCaptureSummary = (): CaptureSummary => {
 			increment(events, record.event);
 			errorsByHost.set(bucket, events);
 		},
-		// An SSE stream never finishes, so its messages reach no response total either.
-		recordEventSourceMessage: (): void => {
-			counts.eventSourceMessages += 1;
-		},
-		// Redirect hops carry no body, so they would otherwise miss every total.
-		recordRedirectHop: (): void => {
-			counts.redirectHops += 1;
-		},
-		recordSavedRequestBody: (byteLength: number): void => {
-			counts.requestBodies += 1;
-			counts.requestBytes += byteLength;
-		},
-		recordSavedResponseBody: (byteLength: number): void => {
-			counts.responseBodies += 1;
-			counts.responseBytes += byteLength;
-		},
 		// One snapshot per run, so a repeat replaces rather than accumulates.
 		recordStorageSnapshot: (snapshot: StorageSnapshotCounts): void => {
 			snapshotCounts = snapshot;
-		},
-		recordWebSocketFrame: (): void => {
-			counts.webSocketFrames += 1;
 		},
 		// One line per run whatever a writer failed on, so repeats do not accumulate.
 		// A file reported both ways keeps the worse of the two.

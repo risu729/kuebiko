@@ -42,7 +42,7 @@ const SNAPSHOT_TIMEOUT_MS = 15_000;
 
 // Web storage belongs to a browsing context, so only page-like targets are asked.
 // A worker session answers neither DOMStorage nor a frame-scoped IndexedDB read.
-const SNAPSHOT_TARGET_TYPES = new Set(["page", "iframe"]);
+const STORAGE_TARGET_TYPES = new Set(["page", "iframe"]);
 
 // The client types send() to the command names its bundled protocol copy knows.
 // The snapshot builds its method names from a domain, so it uses a widened view.
@@ -69,7 +69,7 @@ const mapSequential = async <Item, Result>(
 
 // Web storage is keyed by origin, so only an http(s) target has any to read.
 // Targets on about:, chrome:, devtools:, and extension schemes are left out.
-const snapshotOriginOf = (url: string | undefined): string | undefined => {
+const storageOriginOf = (url: string | undefined): string | undefined => {
 	const parsed = url === undefined ? null : URL.parse(url);
 	if (parsed === null || (parsed.protocol !== "http:" && parsed.protocol !== "https:")) {
 		return undefined;
@@ -93,10 +93,10 @@ const collectSnapshotOrigins = (
 	const origins = new Map<string, SnapshotOrigin>();
 	for (const session of sessions) {
 		const current = session.targetId === undefined ? undefined : currentUrls.get(session.targetId);
-		const securityOrigin = snapshotOriginOf(current ?? session.targetUrl);
+		const securityOrigin = storageOriginOf(current ?? session.targetUrl);
 		if (
 			securityOrigin === undefined ||
-			!SNAPSHOT_TARGET_TYPES.has(session.targetType ?? "") ||
+			!STORAGE_TARGET_TYPES.has(session.targetType ?? "") ||
 			origins.has(securityOrigin)
 		) {
 			continue;
@@ -132,6 +132,56 @@ const snapshotEntry = (entry: Protocol.IndexedDB.DataEntry): IndexedDbEntrySnaps
 	primaryKey: snapshotValue(entry.primaryKey),
 	value: snapshotValue(entry.value),
 });
+
+// A send that already knows its session and how to record its own failure.
+// Both callers of the read below hold that knowledge; neither shares the other's.
+type BoundedCall = <Result>(method: string, params: object, fallback: Result) => Promise<Result>;
+
+// What one bounded page of an object store holds, whatever the caller does with it.
+type ObjectStorePage = {
+	entries: IndexedDbEntrySnapshot[];
+	error?: string | undefined;
+	// True when the store still holds entries past the ones read.
+	hasMore: boolean;
+};
+
+// One page from one object store, never paged further.
+// The end-of-run snapshot walks every store through here, and --track-storage reads
+// The one store again each time Chrome says its contents changed.
+// Keeping the read in one place is what keeps those two answering the same shape.
+const readObjectStorePage = async (
+	call: BoundedCall,
+	request: {
+		databaseName: string;
+		objectStoreName: string;
+		pageSize: number;
+		securityOrigin: string;
+	},
+): Promise<ObjectStorePage> => {
+	// No indexName is sent, which is what asks for the object store itself.
+	// Chrome reads an empty one as a request for an index and fails the call.
+	const params: Protocol.IndexedDB.RequestDataRequest = {
+		databaseName: request.databaseName,
+		objectStoreName: request.objectStoreName,
+		pageSize: request.pageSize,
+		securityOrigin: request.securityOrigin,
+		skipCount: 0,
+	};
+	const data = await call<Protocol.IndexedDB.RequestDataResponse | undefined>(
+		"IndexedDB.requestData",
+		params,
+		undefined,
+	);
+	if (data === undefined) {
+		return { entries: [], error: "IndexedDB.requestData failed.", hasMore: false };
+	}
+
+	// A store CDP answered for without entries reads as empty, not as a failed call.
+	return {
+		entries: (data.objectStoreDataEntries ?? []).map(snapshotEntry),
+		hasMore: data.hasMore ?? false,
+	};
+};
 
 // DOMStorage answers with [key, value] pairs; a malformed pair is skipped.
 const toStorageItems = (entries: Protocol.DOMStorage.Item[]): Record<string, string> =>
@@ -377,35 +427,21 @@ class StorageSnapshotReader {
 			return { ...shape, entries: [], hasMore: true };
 		}
 
-		// No indexName is sent, which is what asks for the object store itself.
-		// Chrome reads an empty one as a request for an index and fails the call.
-		const params: Protocol.IndexedDB.RequestDataRequest = {
-			databaseName,
-			objectStoreName: store.name,
-			pageSize,
-			securityOrigin: origin.securityOrigin,
-			skipCount: 0,
-		};
-		const data = await this.#call<Protocol.IndexedDB.RequestDataResponse | undefined>(
-			"IndexedDB.requestData",
-			params,
-			origin,
-			undefined,
+		const page = await readObjectStorePage(
+			async (method, params, fallback) => await this.#call(method, params, origin, fallback),
+			{
+				databaseName,
+				objectStoreName: store.name,
+				pageSize,
+				securityOrigin: origin.securityOrigin,
+			},
 		);
-		if (data === undefined) {
-			return { ...shape, entries: [], error: "IndexedDB.requestData failed.", hasMore: false };
-		}
-
-		this.#entries += data.objectStoreDataEntries.length;
-		if (data.hasMore) {
+		this.#entries += page.entries.length;
+		if (page.hasMore) {
 			this.#snapshot.truncated = true;
 		}
 
-		return {
-			...shape,
-			entries: data.objectStoreDataEntries.map(snapshotEntry),
-			hasMore: data.hasMore,
-		};
+		return { ...shape, ...page };
 	}
 }
 
@@ -502,7 +538,10 @@ export {
 	MAX_SNAPSHOT_ENTRIES,
 	MAX_SNAPSHOT_ORIGINS,
 	SNAPSHOT_TIMEOUT_MS,
+	STORAGE_TARGET_TYPES,
 	captureStorageSnapshot,
 	collectSnapshotOrigins,
+	readObjectStorePage,
+	storageOriginOf,
 };
-export type { SnapshotRun };
+export type { BoundedCall, ObjectStorePage, SnapshotRun };

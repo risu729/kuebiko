@@ -22,6 +22,7 @@ type CliOptions = {
 	out?: string | undefined;
 	snapshotStorage: boolean;
 	streamBodies: boolean;
+	trackStorage: boolean;
 	verbose: boolean;
 	version: boolean;
 };
@@ -144,6 +145,43 @@ type WebSocketFrameRecord = StreamRecord & {
 	payloadData: string;
 };
 
+// Web storage and IndexedDB are keyed by origin, and neither change has a request id.
+// A record therefore names the session and target it was observed on instead.
+type StorageRecord = {
+	securityOrigin?: string | undefined;
+	sessionId: string;
+	storageKey?: string | undefined;
+	targetId?: string | undefined;
+	timestamp: string;
+};
+
+// One line per observed storage change, written only with --track-storage.
+// A `baseline` change is the state an area already held when the logger reached it.
+// Folding the file forward from there never starts from an assumed-empty area.
+type StorageChangeRecord = DomStorageChangeRecord | IndexedDbChangeRecord;
+
+type DomStorageChangeRecord = StorageRecord & {
+	area: "localStorage" | "sessionStorage";
+	change: "added" | "baseline" | "cleared" | "removed" | "updated";
+	// Absent for a cleared area, which names no key of its own.
+	key?: string | undefined;
+	newValue?: string | undefined;
+	oldValue?: string | undefined;
+};
+
+// Chrome says only which store changed, so the entries are read back per change.
+// The same per-store caps the end-of-run snapshot uses bound that read.
+type IndexedDbChangeRecord = StorageRecord & {
+	area: "indexedDB";
+	change: "baseline" | "updated";
+	databaseName: string;
+	entries: IndexedDbEntrySnapshot[];
+	error?: string | undefined;
+	// True when the store still holds entries past the ones read.
+	hasMore: boolean;
+	objectStoreName: string;
+};
+
 // One record per browser download, written only with --capture-downloads.
 // A canceled download is recorded too, without a file, so the loss stays visible.
 // The Browser download events are browser-wide and name only the frame behind one.
@@ -248,6 +286,7 @@ type LoggerStorage = RunRef & {
 	recordDownload: (download: DownloadRecord) => Promise<DownloadRecord>;
 	recordError: (error: ErrorRecord) => Promise<void>;
 	recordEventSourceMessage: (message: EventSourceMessageRecord) => Promise<void>;
+	recordStorageChange: (change: StorageChangeRecord) => Promise<void>;
 	// Writes the whole snapshot once and answers with its run-relative path.
 	recordStorageSnapshot: (snapshot: StorageSnapshot) => Promise<string>;
 	recordWebSocketFrame: (frame: WebSocketFrameRecord) => Promise<void>;
@@ -271,6 +310,7 @@ export type {
 	RequestBodySource,
 	RunRef,
 	SessionInfo,
+	StorageChangeRecord,
 	StorageSnapshot,
 	StorageSnapshotCounts,
 	StorageSnapshotValue,

@@ -5,6 +5,7 @@ import {
 	assertCapturedDownload,
 	assertCapturedEventSourceMessages,
 	assertCapturedRawHeaders,
+	assertCapturedStorageChanges,
 	assertCapturedStorageSnapshot,
 	assertCapturedWebSocketFrames,
 	assertNetLog,
@@ -18,6 +19,7 @@ import {
 	findCapturedApiRecord,
 	findDownloads,
 	findEventSourceMessages,
+	findStorageChanges,
 	findWebSocketFrames,
 	loadPageAndWaitForCapture,
 	maybeBrowserIt,
@@ -29,7 +31,7 @@ import { DOWNLOAD_CSV } from "./fixture-server";
 
 const BROWSER_E2E_TIMEOUT_MS = 30_000;
 
-const assertCapturedTraffic = async (context: TestContext): Promise<void> => {
+const assertCapturedTraffic = async (context: TestContext, pageOrigin: string): Promise<void> => {
 	const metadata = await findCapturedApiRecord(context.captureDirectory);
 	assertCapturedApi(metadata, await readCapturedBodies(context.captureDirectory, metadata));
 	assertCapturedRawHeaders(metadata);
@@ -46,6 +48,7 @@ const assertCapturedTraffic = async (context: TestContext): Promise<void> => {
 		contents: DOWNLOAD_CSV,
 		url: `http://127.0.0.1:${context.fixtureServer.port}/statement.csv`,
 	});
+	assertCapturedStorageChanges(await findStorageChanges(context.captureDirectory), pageOrigin);
 };
 
 // Everything the run only produces once it has shut down: the snapshot file, the
@@ -69,7 +72,7 @@ describe("CDP launch-mode browser e2e", () => {
 
 			try {
 				await loadPageAndWaitForCapture(context);
-				await assertCapturedTraffic(context);
+				await assertCapturedTraffic(context, pageOrigin);
 				// The snapshot is taken during shutdown, so the writes must land first.
 				await waitForStorageWrites(context.captureDirectory);
 			} finally {

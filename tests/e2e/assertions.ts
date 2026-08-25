@@ -35,6 +35,19 @@ type CapturedDownload = {
 	url?: string | undefined;
 };
 
+// One observed storage change. A web storage line carries the key and its values;
+// An IndexedDB line names the store that changed and the entries read back from it.
+type CapturedStorageChange = {
+	area?: string | undefined;
+	change?: string | undefined;
+	databaseName?: string | undefined;
+	entries?: unknown[] | undefined;
+	key?: string | undefined;
+	newValue?: string | undefined;
+	objectStoreName?: string | undefined;
+	securityOrigin?: string | undefined;
+};
+
 // The one whole-file output: cookies plus per-origin web storage and IndexedDB.
 type CapturedStorageSnapshot = {
 	cookies?: { name?: string | undefined; value?: string | undefined }[] | undefined;
@@ -167,11 +180,32 @@ const assertCapturedStorageSnapshot = async (
 	expect(store?.entries?.length).toBeGreaterThan(0);
 };
 
+// The value the page wrote must be in the stream, whether it was already there when
+// The logger reached the origin or arrived afterwards as a change of its own.
+const assertCapturedStorageChanges = (changes: CapturedStorageChange[], origin: string): void => {
+	const forArea = (area: string): CapturedStorageChange[] =>
+		changes.filter((change) => change.area === area && change.securityOrigin === origin);
+
+	expect(forArea("localStorage")).toContainEqual(
+		expect.objectContaining({ key: "e2e-local", newValue: "local-value" }),
+	);
+	expect(forArea("sessionStorage")).toContainEqual(
+		expect.objectContaining({ key: "e2e-session", newValue: "session-value" }),
+	);
+	const store = forArea("indexedDB").find(
+		(change) => change.databaseName === "e2e-db" && change.objectStoreName === "sessions",
+	);
+	expect(store?.entries?.length).toBeGreaterThan(0);
+	// Every line says which of the two it was, so a consumer can fold the file forward.
+	expect(changes.every((change) => change.change !== undefined)).toBe(true);
+};
+
 const assertRunSummary = (output: string): void => {
 	expect(output).toContain("summary responses=");
 	expect(output).toContain("summary websocket_frames=");
 	expect(output).toContain("eventsource_messages=");
 	expect(output).toContain("downloads=");
+	expect(output).toContain("storage_changes=");
 };
 
 const readNetLog = async (path: string): Promise<NetLogRecord> => {
@@ -204,6 +238,7 @@ export {
 	assertCapturedDownload,
 	assertCapturedEventSourceMessages,
 	assertCapturedRawHeaders,
+	assertCapturedStorageChanges,
 	assertCapturedStorageSnapshot,
 	assertCapturedWebSocketFrames,
 	assertNetLog,
@@ -215,6 +250,7 @@ export type {
 	CapturedApiRecord,
 	CapturedDownload,
 	CapturedEventSourceMessage,
+	CapturedStorageChange,
 	CapturedStorageSnapshot,
 	CapturedWebSocketFrame,
 };

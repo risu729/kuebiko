@@ -13,7 +13,15 @@ import {
 } from "./plugins";
 import type { HookPublisher } from "./plugins";
 import { matchesFilters } from "./sanitize";
-import { captureStorageSnapshot } from "./storage-snapshot";
+import {
+	MAX_DATABASES_PER_ORIGIN,
+	MAX_ENTRIES_PER_OBJECT_STORE,
+	MAX_OBJECT_STORES_PER_DATABASE,
+	STORAGE_TARGET_TYPES,
+	captureStorageSnapshot,
+	readObjectStorePage,
+	storageOriginOf,
+} from "./storage-snapshot";
 import { settlesWithin } from "./timeout";
 import type {
 	BodySaveResult,
@@ -27,6 +35,7 @@ import type {
 	RequestBodySaveResult,
 	RequestBodySource,
 	SessionInfo,
+	StorageChangeRecord,
 	WebSocketFrameRecord,
 } from "./types";
 
@@ -52,10 +61,15 @@ type StartLoggerOptions = {
 	snapshotTimeoutMs?: number | undefined;
 	streamBodies?: boolean | undefined;
 	storage: LoggerStorage;
+	// Follows web storage and IndexedDB for the whole run instead of reading them once.
+	trackStorage?: boolean | undefined;
 	verbose: boolean;
 };
 
 type CdpClient = CDP.Client;
+// The client types send() to the command names its bundled protocol copy knows.
+// The storage domains are addressed by name here, so they use a widened view.
+type RawSend = (method: string, params?: object, sessionId?: string) => Promise<unknown>;
 type TerminableSocket = { terminate?: () => void };
 type TargetAttachedEvent = Protocol.Target.AttachedToTargetEvent;
 type TargetDetachedEvent = Protocol.Target.DetachedFromTargetEvent;
@@ -63,6 +77,16 @@ type RequestWillBeSentEvent = Protocol.Network.RequestWillBeSentEvent;
 type RequestWillBeSentExtraInfoEvent = Protocol.Network.RequestWillBeSentExtraInfoEvent;
 type ResponseReceivedEvent = Protocol.Network.ResponseReceivedEvent;
 type ResponseReceivedExtraInfoEvent = Protocol.Network.ResponseReceivedExtraInfoEvent;
+type TargetInfoChangedEvent = Protocol.Target.TargetInfoChangedEvent;
+// Only the cleared event names no key, so the union is narrowed by `in` where it matters.
+type DomStorageEvent =
+	| Protocol.DOMStorage.DomStorageItemAddedEvent
+	| Protocol.DOMStorage.DomStorageItemRemovedEvent
+	| Protocol.DOMStorage.DomStorageItemUpdatedEvent
+	| Protocol.DOMStorage.DomStorageItemsClearedEvent;
+type IndexedDbContentUpdatedEvent = Protocol.Storage.IndexedDBContentUpdatedEvent;
+// The read chain of one object store: what is running, and whether one is waiting.
+type QueuedStoreRead = { chain: Promise<void>; queued: boolean };
 type LoadingFinishedEvent = Protocol.Network.LoadingFinishedEvent;
 type LoadingFailedEvent = Protocol.Network.LoadingFailedEvent;
 type DataReceivedEvent = Protocol.Network.DataReceivedEvent;
@@ -344,10 +368,29 @@ class CdpResponseLogger {
 	readonly #extraInfo = new Map<string, PendingExtraInfo>();
 	// Redirect hop writes in flight, keyed like #requests so a chain appends in order.
 	readonly #hopWrites = new Map<string, Promise<void>>();
+	// The session tracking IndexedDB for an origin, keyed by origin.
+	// IndexedDB answers per origin, so one session tracks it for every tab on that origin.
+	// Tracking dies with the session that asked for it, hence the owner kept here.
+	// Detach drops the entry, which lets the next session of that origin take it over.
+	readonly #indexedDbOrigins = new Map<string, string>();
+	// One read in flight per object store, keyed origin:database:store, plus at most one
+	// More queued behind it. A burst of updates to one store therefore costs two reads
+	// Rather than one per event: the queued read runs after the current one and sees
+	// The same final state every superseded read would have. Without that bound a bulk
+	// IndexedDB import queued one 500-entry read per commit, and the reads still waiting
+	// When the writers closed were counted in the summary but never reached the file.
+	// The chain clears itself, so nothing here is tied to a session or swept on detach.
+	readonly #indexedDbReads = new Map<string, QueuedStoreRead>();
 	readonly #options: StartLoggerOptions;
 	readonly #pendingEvents = new Set<Promise<void>>();
 	readonly #requests = new Map<string, RequestState>();
 	readonly #sessions = new Map<string, SessionInfo>();
+	// The http(s) origins each session has already read its web storage for.
+	// The localStorage area is shared per origin and sessionStorage belongs to the tab,
+	// So the session and the origin together are what makes one baseline read unique.
+	// It also says which sessions are on an origin, which is how a detached IndexedDB
+	// Owner hands its tracking to a tab still open on the same origin.
+	readonly #sessionOrigins = new Map<string, Set<string>>();
 	// Streamed body buffers keyed like #requests, only populated with --stream-bodies.
 	// Held only while a request is in flight, then dropped on finish, failure, or detach.
 	readonly #streams = new Map<string, StreamAccumulator>();
@@ -603,6 +646,41 @@ class CdpResponseLogger {
 				this.#trackEvent(this.#handleDownloadProgress(event as DownloadProgressEvent));
 			});
 		}
+		// Storage is followed for the whole run only with --track-storage.
+		// A run without the flag subscribes none of this and enables neither domain,
+		// So the storage domains stay closed exactly as they were before the flag.
+		// Target.targetInfoChanged is already flowing from setDiscoverTargets: a page
+		// Attaches on about:blank, and this says it reached an origin worth reading.
+		if (this.#options.trackStorage) {
+			this.#client.on("Target.targetInfoChanged", (event) => {
+				this.#trackEvent(this.#handleTargetInfoChanged(event as TargetInfoChangedEvent));
+			});
+			this.#client.on("DOMStorage.domStorageItemAdded", (event, sessionId) => {
+				this.#trackEvent(
+					this.#handleDomStorageChange("added", event as DomStorageEvent, sessionId),
+				);
+			});
+			this.#client.on("DOMStorage.domStorageItemUpdated", (event, sessionId) => {
+				this.#trackEvent(
+					this.#handleDomStorageChange("updated", event as DomStorageEvent, sessionId),
+				);
+			});
+			this.#client.on("DOMStorage.domStorageItemRemoved", (event, sessionId) => {
+				this.#trackEvent(
+					this.#handleDomStorageChange("removed", event as DomStorageEvent, sessionId),
+				);
+			});
+			this.#client.on("DOMStorage.domStorageItemsCleared", (event, sessionId) => {
+				this.#trackEvent(
+					this.#handleDomStorageChange("cleared", event as DomStorageEvent, sessionId),
+				);
+			});
+			this.#client.on("Storage.indexedDBContentUpdated", (event, sessionId) => {
+				this.#trackEvent(
+					this.#handleIndexedDbContentUpdated(event as IndexedDbContentUpdatedEvent, sessionId),
+				);
+			});
+		}
 		this.#client.on("Network.eventSourceMessageReceived", (event, sessionId) => {
 			this.#trackEvent(
 				this.#handleEventSourceMessage(event as EventSourceMessageReceivedEvent, sessionId),
@@ -771,6 +849,21 @@ class CdpResponseLogger {
 			}
 		}
 
+		// Storage bookkeeping is swept on its own, because losing it drops no capture.
+		// The origin set only says which areas were already read on this session.
+		// An IndexedDB owner only says which session holds Chrome's tracking for an origin.
+		// Chrome drops that tracking with the session, so it is handed to a tab still open
+		// On the origin. Waiting for another Target.targetInfoChanged would not do: a tab
+		// That already navigated there never reports one, and its writes would go unseen
+		// For the rest of the run with nothing saying so.
+		this.#sessionOrigins.delete(event.sessionId);
+		const orphanedOrigins = [...this.#indexedDbOrigins]
+			.filter(([, owner]) => owner === event.sessionId)
+			.map(([origin]) => origin);
+		for (const origin of orphanedOrigins) {
+			this.#indexedDbOrigins.delete(origin);
+		}
+
 		// Downloads are tracked browser-wide and outlive the target that started them.
 		// Nothing about them is swept here.
 		this.#verbose(`detached session=${event.sessionId}`);
@@ -790,6 +883,11 @@ class CdpResponseLogger {
 					session.targetUrl,
 				),
 			);
+		}
+
+		// Last, so a handover that has to talk to the browser cannot delay the sweep above.
+		for (const origin of orphanedOrigins) {
+			await this.#handOverIndexedDb(origin);
 		}
 	}
 
@@ -1618,6 +1716,378 @@ class CdpResponseLogger {
 				this.#webSockets.get(requestKey(sessionId, event.requestId)),
 			),
 		);
+	}
+
+	// The storage domains are addressed by name, so they need the widened send.
+	#rawSend(method: string, params: object, sessionId: string): Promise<unknown> {
+		return (this.#client.send as unknown as RawSend)(method, params, sessionId);
+	}
+
+	// A storage read answers with its fallback instead of throwing, exactly as the
+	// End-of-run snapshot does: one unreadable area must not stop the run from
+	// Following every other one.
+	async #sendStorage<Result>(
+		method: string,
+		params: object,
+		session: SessionInfo,
+		securityOrigin: string | undefined,
+		fallback: Result,
+	): Promise<Result> {
+		try {
+			return (await this.#rawSend(method, params, session.sessionId)) as Result;
+		} catch (error) {
+			await this.#recordCaptureError(
+				createErrorRecord(method, session, error, undefined, securityOrigin),
+			);
+			return fallback;
+		}
+	}
+
+	// A storage command whose answer carries nothing, so only whether it worked matters.
+	// Enabling is deferred to the first origin a session reaches, which is why a run
+	// That never navigates anywhere opens neither domain.
+	async #sendStorageOk(
+		method: string,
+		params: object,
+		session: SessionInfo,
+		securityOrigin: string,
+	): Promise<boolean> {
+		try {
+			await this.#rawSend(method, params, session.sessionId);
+			return true;
+		} catch (error) {
+			await this.#recordCaptureError(
+				createErrorRecord(method, session, error, undefined, securityOrigin),
+			);
+			return false;
+		}
+	}
+
+	// A target is captured through its owning session alone, so that is the one to read
+	// Its storage on: a duplicate session has nothing enabled and is not tracked at all.
+	#sessionOfTarget(targetId: string): SessionInfo | undefined {
+		const owner = this.#targetSessions.get(targetId);
+
+		return owner === undefined ? undefined : this.#sessions.get(owner);
+	}
+
+	// A page attaches on about:blank, so neither storage area can be read at attach time.
+	// This is what says a target reached an origin that has storage to follow.
+	// A target navigating on is read again, because the new origin is a new area.
+	async #handleTargetInfoChanged(event: TargetInfoChangedEvent): Promise<void> {
+		const securityOrigin = storageOriginOf(event.targetInfo.url);
+		if (securityOrigin === undefined || !STORAGE_TARGET_TYPES.has(event.targetInfo.type)) {
+			return;
+		}
+		const session = this.#sessionOfTarget(event.targetInfo.targetId);
+		if (session === undefined) {
+			return;
+		}
+
+		await this.#readDomStorageBaseline(session, securityOrigin);
+		await this.#trackIndexedDb(session, securityOrigin);
+	}
+
+	// Both web storage areas of one origin on one session, read once.
+	// Chrome only reports what changes after the domain is enabled, so without this
+	// The keys a site wrote before the logger arrived would appear nowhere.
+	async #readDomStorageBaseline(session: SessionInfo, securityOrigin: string): Promise<void> {
+		const origins = this.#sessionOrigins.get(session.sessionId) ?? new Set<string>();
+		if (origins.has(securityOrigin)) {
+			return;
+		}
+		origins.add(securityOrigin);
+		this.#sessionOrigins.set(session.sessionId, origins);
+
+		// Releasing the marker leaves the next navigation free to try the domain again,
+		// The same way a failed IndexedDB enable releases the origin it had claimed.
+		if (!(await this.#sendStorageOk("DOMStorage.enable", {}, session, securityOrigin))) {
+			origins.delete(securityOrigin);
+			return;
+		}
+		for (const isLocalStorage of [true, false]) {
+			await this.#readDomStorageArea(session, securityOrigin, isLocalStorage);
+		}
+	}
+
+	async #readDomStorageArea(
+		session: SessionInfo,
+		securityOrigin: string,
+		isLocalStorage: boolean,
+	): Promise<void> {
+		const params: Protocol.DOMStorage.GetDOMStorageItemsRequest = {
+			storageId: { isLocalStorage, securityOrigin },
+		};
+		const items = await this.#sendStorage<
+			Protocol.DOMStorage.GetDOMStorageItemsResponse | undefined
+		>("DOMStorage.getDOMStorageItems", params, session, securityOrigin, undefined);
+		// DOMStorage answers with [key, value] pairs; a malformed pair is skipped.
+		for (const [key, value] of items?.entries ?? []) {
+			if (key === undefined) {
+				continue;
+			}
+			await this.#recordStorageChange({
+				area: isLocalStorage ? "localStorage" : "sessionStorage",
+				change: "baseline",
+				key,
+				newValue: value ?? "",
+				securityOrigin,
+				sessionId: session.sessionId,
+				targetId: session.targetId,
+				timestamp: nowIso(),
+			});
+		}
+	}
+
+	// One session tracks IndexedDB for an origin, however many tabs are open on it.
+	// Tracking twice would record the same change once per tab.
+	async #trackIndexedDb(session: SessionInfo, securityOrigin: string): Promise<void> {
+		if (this.#indexedDbOrigins.has(securityOrigin)) {
+			return;
+		}
+		this.#indexedDbOrigins.set(securityOrigin, session.sessionId);
+
+		const params: Protocol.Storage.TrackIndexedDBForOriginRequest = { origin: securityOrigin };
+		// Either failure has to release the claim. A kept claim is not a harmless retry
+		// Lost: it says an origin is tracked that Chrome is reporting nothing for, so the
+		// File reads as an origin whose IndexedDB never changed.
+		if (
+			!(await this.#sendStorageOk("IndexedDB.enable", {}, session, securityOrigin)) ||
+			!(await this.#sendStorageOk(
+				"Storage.trackIndexedDBForOrigin",
+				params,
+				session,
+				securityOrigin,
+			))
+		) {
+			this.#releaseIndexedDb(securityOrigin, session.sessionId);
+			return;
+		}
+		await this.#readIndexedDbBaseline(session, securityOrigin);
+	}
+
+	// A detach between the claim and a failure can hand the origin to another session.
+	// Releasing it blindly would drop that session's claim while Chrome still tracks for
+	// It, so a third session would claim the origin and track it a second time, and every
+	// Change would be recorded once per tracking session.
+	#releaseIndexedDb(securityOrigin: string, sessionId: string): void {
+		if (this.#indexedDbOrigins.get(securityOrigin) === sessionId) {
+			this.#indexedDbOrigins.delete(securityOrigin);
+		}
+	}
+
+	// Chrome drops IndexedDB tracking with the session that asked for it.
+	// Any other session already on the origin can take it over, and one that is not on
+	// The origin has nothing to hand over: its target is elsewhere.
+	async #handOverIndexedDb(securityOrigin: string): Promise<void> {
+		for (const [sessionId, origins] of this.#sessionOrigins) {
+			const session = this.#sessions.get(sessionId);
+			if (session !== undefined && origins.has(securityOrigin)) {
+				await this.#trackIndexedDb(session, securityOrigin);
+				return;
+			}
+		}
+	}
+
+	// What IndexedDB already held when tracking started.
+	// Chrome reports only what changes after that, so a store a site never writes to
+	// Again would otherwise reach no line of storage.ndjson at all.
+	async #readIndexedDbBaseline(session: SessionInfo, securityOrigin: string): Promise<void> {
+		const namesParams: Protocol.IndexedDB.RequestDatabaseNamesRequest = { securityOrigin };
+		const names = await this.#sendStorage<
+			Protocol.IndexedDB.RequestDatabaseNamesResponse | undefined
+		>("IndexedDB.requestDatabaseNames", namesParams, session, securityOrigin, undefined);
+
+		const databaseNames = names?.databaseNames ?? [];
+		await this.#reportBaselineCap(
+			session,
+			securityOrigin,
+			"databases",
+			databaseNames.length,
+			MAX_DATABASES_PER_ORIGIN,
+		);
+
+		for (const databaseName of databaseNames.slice(0, MAX_DATABASES_PER_ORIGIN)) {
+			const databaseParams: Protocol.IndexedDB.RequestDatabaseRequest = {
+				databaseName,
+				securityOrigin,
+			};
+			const database = await this.#sendStorage<
+				Protocol.IndexedDB.RequestDatabaseResponse | undefined
+			>("IndexedDB.requestDatabase", databaseParams, session, securityOrigin, undefined);
+			const stores = database?.databaseWithObjectStores.objectStores ?? [];
+			await this.#reportBaselineCap(
+				session,
+				securityOrigin,
+				`object stores of ${databaseName}`,
+				stores.length,
+				MAX_OBJECT_STORES_PER_DATABASE,
+			);
+			for (const store of stores.slice(0, MAX_OBJECT_STORES_PER_DATABASE)) {
+				await this.#readObjectStore(session, securityOrigin, databaseName, store.name, "baseline");
+			}
+		}
+	}
+
+	// A store past a cap reaches no record of its own, and an entry cut from a page it
+	// Did reach says so with `hasMore`. Nothing else would say the rest exists, so the
+	// Cap reports itself the way every other capture loss does.
+	async #reportBaselineCap(
+		session: SessionInfo,
+		securityOrigin: string,
+		what: string,
+		found: number,
+		cap: number,
+	): Promise<void> {
+		if (found <= cap) {
+			return;
+		}
+		await this.#recordCaptureError(
+			createErrorRecord(
+				"Storage.trackIndexedDBForOrigin",
+				session,
+				`Baseline read ${cap} of ${found} ${what}; the rest are not in storage.ndjson.`,
+				undefined,
+				securityOrigin,
+			),
+		);
+	}
+
+	// Chrome says only which store changed, so the store is read back to see what it holds.
+	async #handleIndexedDbContentUpdated(
+		event: IndexedDbContentUpdatedEvent,
+		sessionId?: string,
+	): Promise<void> {
+		if (!sessionId) {
+			return;
+		}
+		const session = this.#sessions.get(sessionId);
+		if (session === undefined) {
+			return;
+		}
+
+		// Two updates of one store would otherwise interleave their reads and append
+		// Their pages in whichever order the two requestData calls happened to answer.
+		const readKey = `${event.origin}:${event.databaseName}:${event.objectStoreName}`;
+		await this.#queueIndexedDbRead(
+			readKey,
+			async () =>
+				await this.#readObjectStore(
+					session,
+					event.origin,
+					event.databaseName,
+					event.objectStoreName,
+					"updated",
+				),
+		);
+	}
+
+	// At most one read in flight per store and at most one waiting behind it.
+	// A read already waiting will observe this change too, so queuing another would only
+	// Re-read the state that one is going to see anyway.
+	#queueIndexedDbRead(readKey: string, read: () => Promise<void>): Promise<void> {
+		const pending = this.#indexedDbReads.get(readKey);
+		if (pending === undefined) {
+			const started: QueuedStoreRead = { chain: Promise.resolve(), queued: false };
+			this.#indexedDbReads.set(readKey, started);
+			started.chain = this.#runIndexedDbRead(readKey, started, read);
+
+			return started.chain;
+		}
+		if (pending.queued) {
+			return pending.chain;
+		}
+		pending.queued = true;
+		pending.chain = pending.chain
+			.catch(() => undefined)
+			.then(async () => await this.#runIndexedDbRead(readKey, pending, read));
+
+		return pending.chain;
+	}
+
+	async #runIndexedDbRead(
+		readKey: string,
+		pending: QueuedStoreRead,
+		read: () => Promise<void>,
+	): Promise<void> {
+		// Cleared as the read starts, so a change arriving now queues the next one.
+		pending.queued = false;
+		try {
+			await read();
+		} finally {
+			// Only the entry still holding this store clears it, and only with nothing
+			// Queued behind: the waiting read is what clears it in that case.
+			if (this.#indexedDbReads.get(readKey) === pending && !pending.queued) {
+				this.#indexedDbReads.delete(readKey);
+			}
+		}
+	}
+
+	async #readObjectStore(
+		session: SessionInfo,
+		securityOrigin: string,
+		databaseName: string,
+		objectStoreName: string,
+		change: "baseline" | "updated",
+	): Promise<void> {
+		const page = await readObjectStorePage(
+			async (method, params, fallback) =>
+				await this.#sendStorage(method, params, session, securityOrigin, fallback),
+			{
+				databaseName,
+				objectStoreName,
+				pageSize: MAX_ENTRIES_PER_OBJECT_STORE,
+				securityOrigin,
+			},
+		);
+		await this.#recordStorageChange({
+			area: "indexedDB",
+			change,
+			databaseName,
+			entries: page.entries,
+			error: page.error,
+			hasMore: page.hasMore,
+			objectStoreName,
+			securityOrigin,
+			sessionId: session.sessionId,
+			targetId: session.targetId,
+			timestamp: nowIso(),
+		});
+	}
+
+	// A change the browser reported, rather than one this run went looking for.
+	async #handleDomStorageChange(
+		change: "added" | "cleared" | "removed" | "updated",
+		event: DomStorageEvent,
+		sessionId?: string,
+	): Promise<void> {
+		if (!sessionId) {
+			return;
+		}
+		const session = this.#sessions.get(sessionId);
+		if (session === undefined) {
+			return;
+		}
+
+		await this.#recordStorageChange({
+			area: event.storageId.isLocalStorage ? "localStorage" : "sessionStorage",
+			change,
+			// A cleared area names no key, and only an update reports the value it replaced.
+			key: "key" in event ? event.key : undefined,
+			newValue: "newValue" in event ? event.newValue : undefined,
+			oldValue: "oldValue" in event ? event.oldValue : undefined,
+			securityOrigin: event.storageId.securityOrigin,
+			sessionId,
+			storageKey: event.storageId.storageKey,
+			targetId: session.targetId,
+			timestamp: nowIso(),
+		});
+	}
+
+	// Storage values are the credentials the snapshot hook event deliberately withholds,
+	// So they reach storage.ndjson and no plugin: there is no path-only shape to publish.
+	async #recordStorageChange(change: StorageChangeRecord): Promise<void> {
+		await this.#options.storage.recordStorageChange(change);
 	}
 }
 
