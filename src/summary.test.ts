@@ -10,7 +10,7 @@ const createError = (event: string, url?: string): ErrorRecord => ({
 	url,
 });
 
-const errorLines = (rendered: string): string[] => rendered.split("\n").slice(3);
+const errorLines = (rendered: string): string[] => rendered.split("\n").slice(4);
 
 describe("hostFromUrl", () => {
 	it("returns the host including a non-default port", () => {
@@ -77,17 +77,18 @@ describe("countStorageSnapshot", () => {
 });
 
 describe("createCaptureSummary", () => {
-	// A run without --snapshot-storage keeps the three-line summary it had before.
+	// A run without --snapshot-storage prints totals, storage changes, and errors only.
 	it("prints a snapshot line only once a snapshot was written", () => {
 		const summary = createCaptureSummary();
 
-		expect(summary.render().split("\n")).toHaveLength(3);
+		expect(summary.render().split("\n")).toHaveLength(4);
 
 		summary.recordStorageSnapshot(countStorageSnapshot(createSnapshot()));
 
 		expect(summary.render().split("\n")).toEqual([
 			"summary responses=0 response_bytes=0 requests=0 request_bytes=0",
-			"summary websocket_frames=0 eventsource_messages=0 downloads=0 redirects=0 storage_changes=0",
+			"summary websocket_frames=0 eventsource_messages=0 downloads=0 redirects=0",
+			"summary storage_changes=0",
 			"summary snapshot_origins=2 cookies=1 items=3 databases=1 entries=2",
 			"summary errors=0",
 		]);
@@ -106,7 +107,8 @@ describe("createCaptureSummary", () => {
 		expect(summary.render()).toBe(
 			[
 				"summary responses=2 response_bytes=100 requests=1 request_bytes=17",
-				"summary websocket_frames=2 eventsource_messages=1 downloads=1 redirects=0 storage_changes=0",
+				"summary websocket_frames=2 eventsource_messages=1 downloads=1 redirects=0",
+				"summary storage_changes=0",
 				"summary errors=0",
 			].join("\n"),
 		);
@@ -120,7 +122,8 @@ describe("createCaptureSummary", () => {
 
 		expect(summary.render().split("\n")).toEqual([
 			"summary responses=1 response_bytes=11 requests=0 request_bytes=0",
-			"summary websocket_frames=0 eventsource_messages=0 downloads=0 redirects=2 storage_changes=0",
+			"summary websocket_frames=0 eventsource_messages=0 downloads=0 redirects=2",
+			"summary storage_changes=0",
 			"summary errors=0",
 		]);
 	});
@@ -134,7 +137,7 @@ describe("createCaptureSummary", () => {
 
 		const rendered = summary.render();
 
-		expect(rendered.split("\n")[2]).toBe("summary errors=4");
+		expect(rendered.split("\n")[3]).toBe("summary errors=4");
 		expect(errorLines(rendered)).toEqual([
 			"summary_errors host=example.test total=3 Network.getResponseBody=2 Network.loadingFailed=1",
 			"summary_errors host=cdn.test:8443 total=1 Network.getRequestPostData=1",

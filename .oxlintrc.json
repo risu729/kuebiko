@@ -76,19 +76,19 @@
 			}
 		},
 		{
-			// Declarations only, and it grows by one record type per capture feature
-			"files": ["src/types.ts"],
-			"rules": {
-				"eslint/max-lines": "allow"
-			}
-		},
-		{
 			"files": ["src/index.ts", "src/sanitize.ts"],
 			"rules": {
 				"eslint/init-declarations": "allow",
 				"eslint/max-params": "allow",
 				"eslint/max-statements": "allow",
 				"promise/avoid-new": "allow"
+			}
+		},
+		{
+			// Declarations only, and it grows by one record type per capture feature
+			"files": ["src/types.ts"],
+			"rules": {
+				"eslint/max-lines": "allow"
 			}
 		}
 	]

@@ -2820,6 +2820,30 @@ const primeTrackingReplies = (client: FakeClient): void => {
 	client.sendReplies.set("IndexedDB.requestDatabaseNames", { databaseNames: [] });
 };
 
+// The same replies plus one database holding one store, so the baseline has something
+// To walk. Without this the baseline stops at an origin with no databases at all.
+const primeBaselineDatabase = (client: FakeClient, storeNames = ["sessions"]): void => {
+	client.sendReplies.set("IndexedDB.requestDatabaseNames", { databaseNames: ["app-cache"] });
+	client.sendReplies.set("IndexedDB.requestDatabase", {
+		databaseWithObjectStores: {
+			name: "app-cache",
+			objectStores: storeNames.map((name) => ({ autoIncrement: false, indexes: [], name })),
+			version: 1,
+		},
+	});
+	client.sendReplies.set("IndexedDB.requestData", {
+		hasMore: false,
+		objectStoreDataEntries: [REMOTE_OBJECT_ENTRY],
+	});
+};
+
+const trackCalls = (client: FakeClient): number =>
+	sentMethods(client).filter((method) => method === "Storage.trackIndexedDBForOrigin").length;
+
+const detach = (client: FakeClient, session: string, target: string): void => {
+	client.emit("Target.detachedFromTarget", { sessionId: session, targetId: target });
+};
+
 describe("CdpResponseLogger storage tracking", () => {
 	it("sends no storage command and writes nothing without the flag", async () => {
 		const { client, storage } = await setupLogger();
@@ -2970,16 +2994,173 @@ describe("CdpResponseLogger storage tracking", () => {
 		primeTrackingReplies(client);
 		emitTargetInfoChanged(client, "https://example.test/app");
 		await waitForAsyncEvent();
-		client.emit("Target.detachedFromTarget", { sessionId: "session-1", targetId: "target-1" });
+		detach(client, "session-1", "target-1");
 		await waitForAsyncEvent();
 		attachPageTarget(client, "session-2", "target-2");
 		await waitForAsyncEvent();
 		emitTargetInfoChanged(client, "https://example.test/app", { id: "target-2" });
 		await waitForAsyncEvent();
 
-		expect(
-			sentMethods(client).filter((method) => method === "Storage.trackIndexedDBForOrigin"),
-		).toHaveLength(2);
+		expect(trackCalls(client)).toBe(2);
+	});
+
+	// A tab that already navigated to the origin never reports another targetInfoChanged,
+	// So waiting for one left the origin tracked by nobody for the rest of the run.
+	it("hands tracking to a target still open on the origin when the owner detaches", async () => {
+		const { client } = await setupLogger({ trackStorage: true });
+		primeTrackingReplies(client);
+		attachPageTarget(client, "session-2", "target-2");
+		await waitForAsyncEvent();
+		emitTargetInfoChanged(client, "https://example.test/app");
+		emitTargetInfoChanged(client, "https://example.test/app", { id: "target-2" });
+		await waitForAsyncEvent();
+
+		expect(trackCalls(client)).toBe(1);
+
+		detach(client, "session-1", "target-1");
+		await waitForAsyncEvent();
+
+		expect(trackCalls(client)).toBe(2);
+		expect(client.sent.filter((call) => call.method === "Storage.trackIndexedDBForOrigin")).toEqual(
+			[
+				expect.objectContaining({ sessionId: "session-1" }),
+				expect.objectContaining({ sessionId: "session-2" }),
+			],
+		);
+	});
+
+	// A claim released blindly is a claim taken from whoever holds it now.
+	// The origin would then be tracked twice and every change recorded once per session.
+	it("keeps another session's claim when a late enable failure rolls back", async () => {
+		const { client } = await setupLogger({ trackStorage: true });
+		primeTrackingReplies(client);
+		const blocked = Promise.withResolvers<never>();
+		let enables = 0;
+		client.sendReplies.set("IndexedDB.enable", () => {
+			enables += 1;
+			return enables === 1 ? blocked.promise : Promise.resolve({});
+		});
+		emitTargetInfoChanged(client, "https://example.test/app");
+		await waitForAsyncEvent();
+		detach(client, "session-1", "target-1");
+		attachPageTarget(client, "session-2", "target-2");
+		await waitForAsyncEvent();
+		emitTargetInfoChanged(client, "https://example.test/app", { id: "target-2" });
+		await waitForAsyncEvent();
+
+		expect(trackCalls(client)).toBe(1);
+
+		// Only now does the first session's enable fail, long after it lost the origin.
+		blocked.reject(new Error("IndexedDB.enable failed"));
+		await waitForAsyncEvent();
+		attachPageTarget(client, "session-3", "target-3");
+		await waitForAsyncEvent();
+		emitTargetInfoChanged(client, "https://example.test/app", { id: "target-3" });
+		await waitForAsyncEvent();
+
+		expect(trackCalls(client)).toBe(1);
+	});
+
+	// A kept claim says an origin is tracked that Chrome reports nothing for, so the
+	// File reads as an origin whose IndexedDB simply never changed.
+	it("releases the origin when tracking it fails so a later session can retry", async () => {
+		const { client, storage } = await setupLogger({ trackStorage: true });
+		primeTrackingReplies(client);
+		client.sendReplies.set(
+			"Storage.trackIndexedDBForOrigin",
+			new Error("Storage.trackIndexedDBForOrigin failed"),
+		);
+		emitTargetInfoChanged(client, "https://example.test/app");
+		await waitForAsyncEvent();
+		attachPageTarget(client, "session-2", "target-2");
+		await waitForAsyncEvent();
+		emitTargetInfoChanged(client, "https://example.test/app", { id: "target-2" });
+		await waitForAsyncEvent();
+
+		expect(trackCalls(client)).toBe(2);
+		expect(storage.errors).toContainEqual(
+			expect.objectContaining({
+				event: "Storage.trackIndexedDBForOrigin",
+				url: "https://example.test",
+			}),
+		);
+	});
+
+	// Chrome reports only what changes after tracking starts, so a store the site never
+	// Writes to again would otherwise reach no line of the file at all.
+	it("records what IndexedDB already held when tracking started", async () => {
+		const { client, storage } = await setupLogger({ trackStorage: true });
+		primeTrackingReplies(client);
+		primeBaselineDatabase(client);
+		emitTargetInfoChanged(client, "https://example.test/app");
+		await waitForAsyncEvent();
+
+		expect(storage.storageChanges).toContainEqual(
+			expect.objectContaining({
+				area: "indexedDB",
+				change: "baseline",
+				databaseName: "app-cache",
+				hasMore: false,
+				objectStoreName: "sessions",
+				securityOrigin: "https://example.test",
+			}),
+		);
+	});
+
+	// A store past a cap reaches no record of its own, so nothing else would say it exists.
+	it("reports object stores the baseline cap left out", async () => {
+		const { client, storage } = await setupLogger({ trackStorage: true });
+		primeTrackingReplies(client);
+		primeBaselineDatabase(
+			client,
+			Array.from({ length: 25 }, (_unused, index) => `store-${index}`),
+		);
+		emitTargetInfoChanged(client, "https://example.test/app");
+		await waitForAsyncEvent();
+
+		expect(storage.errors).toContainEqual(
+			expect.objectContaining({
+				error:
+					"Baseline read 20 of 25 object stores of app-cache; the rest are not in storage.ndjson.",
+				url: "https://example.test",
+			}),
+		);
+		expect(storage.storageChanges.filter((change) => change.area === "indexedDB")).toHaveLength(20);
+	});
+
+	// A tab that navigates across origins holds a second area, not the same one again.
+	it("reads a second baseline when one target reaches another origin", async () => {
+		const { client, storage } = await setupLogger({ trackStorage: true });
+		primeTrackingReplies(client);
+		emitTargetInfoChanged(client, "https://example.test/app");
+		await waitForAsyncEvent();
+		emitTargetInfoChanged(client, "https://other.test/app");
+		await waitForAsyncEvent();
+
+		expect(storage.storageChanges.map((change) => change.securityOrigin)).toEqual([
+			"https://example.test",
+			"https://example.test",
+			"https://other.test",
+			"https://other.test",
+		]);
+	});
+
+	// The sweep has to forget the areas a detached session read, or a session id Chrome
+	// Reuses would look like it had already read them.
+	it("forgets the areas a detached session had read", async () => {
+		const { client, storage } = await setupLogger({ trackStorage: true });
+		primeTrackingReplies(client);
+		emitTargetInfoChanged(client, "https://example.test/app");
+		await waitForAsyncEvent();
+		detach(client, "session-1", "target-1");
+		attachPageTarget(client);
+		await waitForAsyncEvent();
+		emitTargetInfoChanged(client, "https://example.test/app");
+		await waitForAsyncEvent();
+
+		expect(storage.storageChanges.filter((change) => change.area === "localStorage")).toHaveLength(
+			2,
+		);
 	});
 
 	// Targets without an http(s) origin have no storage area to read at all.
@@ -3037,5 +3218,31 @@ describe("CdpResponseLogger storage tracking", () => {
 			false,
 			true,
 		]);
+	});
+
+	// A bulk import commits one transaction per put, so the store reported a change per
+	// Entry. One 500-entry read per event queued reads faster than they could drain, and
+	// The ones still waiting when the writers closed were counted but never written.
+	it("coalesces a burst of updates to one store into two reads", async () => {
+		const { client, storage } = await setupLogger({ trackStorage: true });
+		const blocked = Promise.withResolvers<{ hasMore: boolean; objectStoreDataEntries: never[] }>();
+		let reads = 0;
+		client.sendReplies.set("IndexedDB.requestData", () => {
+			reads += 1;
+			return reads === 1
+				? blocked.promise
+				: Promise.resolve({ hasMore: false, objectStoreDataEntries: [] });
+		});
+		for (let index = 0; index < 20; index += 1) {
+			emitIndexedDbContentUpdated(client);
+		}
+		await waitForAsyncEvent();
+
+		expect(reads).toBe(1);
+		blocked.resolve({ hasMore: false, objectStoreDataEntries: [] });
+		await waitForRecords(() => storage.storageChanges.length === 2);
+
+		// The queued read sees the state every dropped one would have seen.
+		expect(reads).toBe(2);
 	});
 });

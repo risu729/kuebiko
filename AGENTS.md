@@ -137,6 +137,11 @@ Keep plugin events path-based. Do not put captured bodies inline in hook events.
 The logger should save files first, then publish events with metadata and
 relative paths.
 
+`storage.ndjson` is deliberately the one record file with no hook event: a
+storage change is a value rather than a path, and those values are what the
+`storage.snapshot` event already withholds. Do not add one without deciding what
+a path-based shape for it would even be.
+
 If plugin behavior fails, times out, or overflows its queue, record that in
 `errors.ndjson` and keep capture running.
 

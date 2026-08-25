@@ -82,16 +82,23 @@ are accepted rather than worked around:
   worth adding for it.
 
 `--track-storage` reads the same three domains and is opt-in for the same
-reason, but it holds them open for the run instead of reading once at the end.
-It executes no page script and changes no browser setting either:
+reason, but it keeps `DOMStorage` and `IndexedDB` enabled for the run instead of
+opening them once at the end. It executes no page script and changes no browser
+setting either:
 
 - It enables `DOMStorage` on a page or iframe session the first time that target
   reaches an `http(s)` origin, and leaves it enabled for the rest of the run.
-- It enables `IndexedDB` and calls `Storage.trackIndexedDBForOrigin` once per
-  origin, on one session, leaving that tracking in place.
-- It reads a store back with `IndexedDB.requestData` each time Chrome reports
-  that store changed, so the same transient `blocked` event and the same
-  un-released object group described above apply per change rather than once.
+- It enables `IndexedDB` and calls `Storage.trackIndexedDBForOrigin` for an
+  origin on one session, and holds that tracking until the session detaches.
+- Per origin it sends the same reads the snapshot does, as a baseline:
+  `DOMStorage.getDOMStorageItems` for both areas, then
+  `IndexedDB.requestDatabaseNames`, `IndexedDB.requestDatabase`, and
+  `IndexedDB.requestData`.
+- It sends `IndexedDB.requestData` again each time Chrome reports that a store
+  changed. The transient `blocked` event and the un-released object group
+  described above therefore apply once per baseline read and once per change,
+  rather than once at the end of the run.
+- It sends no `Storage.getCookies`: cookies are not part of this stream.
 - Without the flag none of this happens and neither domain is ever enabled.
 
 `--capture-downloads` is the one exception, and it is opt-in. That flag does
@@ -225,7 +232,8 @@ was made. Both fields are omitted when the flags are not used. A
 A `streamBodies` boolean is always present too, so the directory also says how
 its bodies were retrieved, a `captureDownloads` boolean says whether browser
 download behavior was changed for the run, and a `snapshotStorage` boolean says
-whether the directory may hold a whole stored session.
+whether the directory may hold a whole stored session. A `trackStorage` boolean
+says the same about `storage.ndjson`, which holds a live session of its own.
 
 `run.json` also records how complete the capture is: `include` and `exclude`
 hold the filter sources, `maxBodyBytes` the cap above which a body was never
@@ -378,17 +386,25 @@ Each line has an `area` of `"localStorage"`, `"sessionStorage"`, or
 - `"baseline"` is what an area already held when the logger first reached it.
   Chrome only reports what changes after a domain is enabled, so without this a
   consumer folding the file forward would start from an assumed-empty area. Web
-  storage is baselined per session and origin, IndexedDB once per origin.
+  storage is baselined once per session and origin. IndexedDB tracking is held
+  by one session per origin, so it is baselined once per owning session: when
+  that session detaches, another target still open on the origin takes the
+  tracking over and a fresh set of `"baseline"` lines follows. A `"baseline"`
+  line therefore replaces what a consumer holds for that area rather than only
+  ever appearing first.
 - `"added"`, `"updated"`, `"removed"`, and `"cleared"` are the `DOMStorage`
   events, carrying `key`, `newValue`, and `oldValue` as Chrome reported them. A
   cleared area names no key.
 - `"updated"` on `indexedDB` is a `Storage.indexedDBContentUpdated` event.
   Chrome names only the store that changed, so the logger reads that one store
   back and records its `databaseName`, `objectStoreName`, `entries`, and
-  `hasMore`.
+  `hasMore`. A read CDP refused sets `error` and leaves `entries` empty, so a
+  failed read is not the same line as a store that was emptied.
 
-Reads of one object store are serialized, so two updates of the same store
-cannot interleave and record their pages out of order. Nothing else is ordered
+Change-driven reads of one object store are serialized, and at most one further
+read is queued behind the one in flight, so a burst of updates to one store
+costs two reads rather than one per update and their pages cannot land out of
+order. The baseline reads do not go through that queue, and nothing is ordered
 against anything else: a change event can land before the baseline read of the
 same area finishes, which is what the `change` field and the timestamps are for.
 
@@ -531,9 +547,12 @@ canceled ones included, because a lost download is exactly what the summary
 should surface; the record's `state` says which it was.
 `redirects` counts recorded redirect hops, which have no body
 of their own and would otherwise be invisible in the totals.
-`storage_changes` counts every line written to `storage.ndjson` with
-`--track-storage`, baselines included, so it says how much the run watched
-rather than how many areas it ended up holding. The
+`storage_changes` counts every line written to `storage.ndjson`, baselines
+included, so it says how much the run watched rather than how many areas it
+ended up holding. It has a line of its own because the line above is already as
+wide as a terminal holds, and unlike the `summary snapshot_` line below it is
+printed for every run: a run without `--track-storage` prints
+`storage_changes=0`. The
 `summary snapshot_` line is printed only when `--snapshot-storage` wrote a
 snapshot, and counts what landed in it: origins, cookies, `localStorage` and
 `sessionStorage` items together, IndexedDB databases, and object store entries.
@@ -690,6 +709,13 @@ Supported plugin events are:
 - `download.completed`
 - `storage.snapshot`
 - `capture.error`
+
+`storage.ndjson` is the one record file with no hook event of its own. A storage
+change is a value, not a path, and the values are exactly the credentials
+`storage.snapshot` withholds by publishing only a path and totals. There is
+therefore nothing to publish for it that would keep hook events path-based, so
+nothing is published and `--track-storage` reaches plugins only through the
+file.
 
 Hook events do not contain inline request or response bodies. Read saved files
 with `ctx.resolveRunPath(event.response.bodyFile)` or the request-body path when
@@ -1018,9 +1044,15 @@ mise run compile
   which it learns from `Target.targetInfoChanged`. Storage a page wrote before
   that event is in the baseline read, but a target Chrome never reports a URL
   change for is never followed.
-- `--track-storage` reads a changed object store with the same per-store cap as
-  the snapshot, and reports `hasMore` when the store holds more. It does not
-  page through the rest.
+- `--track-storage` reads an object store with a flat cap of 500 entries and
+  reports `hasMore` when the store holds more; it does not page through the
+  rest. The snapshot's cap is the same 500, but shrinks as its own 5000-entry
+  budget is spent, so the two do not always read the same number of entries.
+- Its baseline reads at most 20 databases per origin and 20 object stores per
+  database, and a store past either cap reaches no record at all. That cap
+  reports itself in `errors.ndjson` rather than in `storage.ndjson`, because
+  there is no record for a store that was never read. Unlike the snapshot, the
+  stream has no 20-origin cap, no run-wide entry budget, and no deadline.
 - `--track-storage` records no cookies. Cookie changes are observable on the
   wire with `--capture-cookies` and as a final jar with `--snapshot-storage`;
   CDP has no cookie-change event to follow, so a cookie set by script and never

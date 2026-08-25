@@ -127,6 +127,8 @@ const renderWriterFailures = (failed: Map<string, boolean>): string[] =>
 			];
 
 // Saved bodies first, then the records that have no body of their own.
+// Storage changes get a line of their own: the stream line is already at the width
+// A terminal can hold, and both storage lines then read together.
 // The snapshot line is printed only when one was taken, so a normal run is unchanged.
 // The error total comes last, heading the per-host breakdown printed below it.
 const renderTotals = (
@@ -134,7 +136,8 @@ const renderTotals = (
 	snapshot: StorageSnapshotCounts | undefined,
 ): string[] => [
 	`summary responses=${counts.responseBodies} response_bytes=${counts.responseBytes} requests=${counts.requestBodies} request_bytes=${counts.requestBytes}`,
-	`summary websocket_frames=${counts.webSocketFrames} eventsource_messages=${counts.eventSourceMessages} downloads=${counts.downloads} redirects=${counts.redirectHops} storage_changes=${counts.storageChanges}`,
+	`summary websocket_frames=${counts.webSocketFrames} eventsource_messages=${counts.eventSourceMessages} downloads=${counts.downloads} redirects=${counts.redirectHops}`,
+	`summary storage_changes=${counts.storageChanges}`,
 	...(snapshot === undefined
 		? []
 		: [

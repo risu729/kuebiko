@@ -114,6 +114,10 @@ describe("parseArgs", () => {
 		expect(parseArgs(["--snapshot-storage"]).snapshotStorage).toBe(true);
 	});
 
+	it("parses the storage tracking opt-in", () => {
+		expect(parseArgs(["--track-storage"]).trackStorage).toBe(true);
+	});
+
 	it("rejects unknown flags", () => {
 		expect(() => parseArgs(["--wat"])).toThrow("Unknown argument: --wat");
 	});
