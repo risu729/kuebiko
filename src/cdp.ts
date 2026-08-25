@@ -1783,7 +1783,10 @@ class CdpResponseLogger {
 		}
 		this.#storageBaselines.add(baselineKey);
 
+		// Releasing the marker leaves the next navigation free to try the domain again,
+		// The same way a failed IndexedDB enable releases the origin it had claimed.
 		if (!(await this.#enableStorageDomain("DOMStorage", session))) {
+			this.#storageBaselines.delete(baselineKey);
 			return;
 		}
 		for (const isLocalStorage of [true, false]) {
