@@ -1763,15 +1763,12 @@ class CdpResponseLogger {
 		}
 	}
 
-	// Sessions are keyed by session id, and only a handful are attached at once.
+	// A target is captured through its owning session alone, so that is the one to read
+	// Its storage on: a duplicate session has nothing enabled and is not tracked at all.
 	#sessionOfTarget(targetId: string): SessionInfo | undefined {
-		for (const session of this.#sessions.values()) {
-			if (session.targetId === targetId) {
-				return session;
-			}
-		}
+		const owner = this.#targetSessions.get(targetId);
 
-		return undefined;
+		return owner === undefined ? undefined : this.#sessions.get(owner);
 	}
 
 	// A page attaches on about:blank, so neither storage area can be read at attach time.
