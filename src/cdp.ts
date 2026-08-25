@@ -353,6 +353,9 @@ class CdpResponseLogger {
 	readonly #streams = new Map<string, StreamAccumulator>();
 	// One record per run: an unsupported method fails on every request there is.
 	#streamFailureRecorded = false;
+	// The session that owns each attached target, keyed by target id.
+	// A target is only ever captured through its owning session, so it is captured once.
+	readonly #targetSessions = new Map<string, string>();
 	// Socket URLs keyed like #requests.
 	// A WebSocket handshake produces no Network.requestWillBeSent event.
 	// Nothing else maps a frame requestId back to its URL.
@@ -636,7 +639,9 @@ class CdpResponseLogger {
 	async #attachExistingTargets(): Promise<void> {
 		const { targetInfos } = await this.#client.Target.getTargets({});
 		for (const targetInfo of targetInfos) {
-			if (!isInspectableTarget(targetInfo)) {
+			// Auto-attach already took the targets that existed when it was sent.
+			// Attaching to one of those again only buys a session #handleAttached discards.
+			if (!isInspectableTarget(targetInfo) || this.#targetSessions.has(targetInfo.targetId)) {
 				continue;
 			}
 
@@ -663,23 +668,44 @@ class CdpResponseLogger {
 	}
 
 	async #handleAttached(event: TargetAttachedEvent): Promise<void> {
+		const targetId = event.targetInfo.targetId;
 		const session: SessionInfo = {
 			sessionId: event.sessionId,
-			targetId: event.targetInfo.targetId,
+			targetId,
 			targetType: event.targetInfo.type,
 			targetUrl: event.targetInfo.url,
 		};
-		this.#sessions.set(event.sessionId, session);
 
 		if (!isInspectableTarget(event.targetInfo)) {
-			this.#verbose(`skip target type=${event.targetInfo.type} id=${event.targetInfo.targetId}`);
+			this.#sessions.set(event.sessionId, session);
+			this.#verbose(`skip target type=${event.targetInfo.type} id=${targetId}`);
 			return;
 		}
+
+		// A browser-level setAutoAttach attaches to the targets that already exist.
+		// #attachExistingTargets attaches to those very same ones, so each arrives twice.
+		// Enabling Network on both sessions makes the browser deliver its events twice.
+		// Every request of a pre-existing target then reached metadata.ndjson twice over.
+		// The first session to arrive owns the target and is the only one that captures it.
+		// The claim is taken before the first await, so two handlers cannot both take it.
+		const owner = this.#targetSessions.get(targetId);
+		if (owner !== undefined && owner !== event.sessionId) {
+			// The duplicate session captures nothing, so nothing is ever keyed under it.
+			this.#verbose(
+				`duplicate session=${event.sessionId} target=${event.targetInfo.type} id=${targetId} owner=${owner}`,
+			);
+			// A target attached with waitForDebuggerOnStart is held on every session it has.
+			// Leaving this one unresumed would leave the target itself waiting.
+			await this.#resumeTarget(event, session);
+			return;
+		}
+		this.#targetSessions.set(targetId, event.sessionId);
+		this.#sessions.set(event.sessionId, session);
 
 		try {
 			await this.#client.Network.enable(NETWORK_BUFFER_OPTIONS, event.sessionId);
 			this.#log(
-				`attached target=${event.targetInfo.type} session=${event.sessionId} id=${event.targetInfo.targetId}`,
+				`attached target=${event.targetInfo.type} session=${event.sessionId} id=${targetId}`,
 			);
 		} catch (error) {
 			await this.#recordCaptureError(createErrorRecord("Network.enable", session, error));
@@ -712,6 +738,14 @@ class CdpResponseLogger {
 	async #handleDetached(event: TargetDetachedEvent): Promise<void> {
 		const session = this.#sessions.get(event.sessionId);
 		this.#sessions.delete(event.sessionId);
+		// Only the owning session releases its target, and a duplicate never held one.
+		// A target attaching again after this is then captured through its new session.
+		if (
+			session?.targetId !== undefined &&
+			this.#targetSessions.get(session.targetId) === event.sessionId
+		) {
+			this.#targetSessions.delete(session.targetId);
+		}
 		// Every counted map is keyed by session and request id, so one prefix sweeps them all.
 		// Request state is only ever stored under the key built from the session it names.
 		// The prefix assumes no session id is itself a prefix of another, as Chrome's hex ids are not.
