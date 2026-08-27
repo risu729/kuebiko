@@ -20,7 +20,7 @@ yamlfmt = "0.21.0"
 # required for pipx backend
 uv = "0.12.6"
 yamllint = "1.38.0"
-typos = "1.49.0"
+typos = "1.49.1"
 
 [settings]
 experimental = true
