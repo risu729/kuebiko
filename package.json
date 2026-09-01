@@ -13,7 +13,7 @@
 	"dependencies": {
 		"chrome-remote-interface": "0.34.0",
 		"mime-types": "3.0.2",
-		"zod": "4.5.2"
+		"zod": "4.5.4"
 	},
 	"devDependencies": {
 		"@risu729/tsconfigs": "3.0.0",
