@@ -18,7 +18,7 @@ tombi = "1.5.4"
 rumdl = "v0.2.69"
 yamlfmt = "0.21.0"
 # required for pipx backend
-uv = "0.12.11"
+uv = "0.12.12"
 yamllint = "1.38.0"
 typos = "1.50.1"
 
