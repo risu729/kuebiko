@@ -23,7 +23,7 @@ jobs:
     needs:
       - validate
     if: github.ref == 'refs/heads/main' && github.repository_owner == 'risu729'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     permissions:
       contents: write # semantic-release creates tags and GitHub releases
