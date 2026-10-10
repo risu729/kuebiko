@@ -86,11 +86,11 @@ jobs:
             target: linux-x64
             binary: ./dist/kuebiko-linux-x64
           - name: macOS arm64
-            runner: macos-latest
+            runner: macos-26
             target: macos-arm64
             binary: ./dist/kuebiko-macos-arm64
           - name: Windows x64
-            runner: windows-latest
+            runner: windows-2025
             target: windows-x64
             binary: ./dist/kuebiko-windows-x64.exe
     steps:
@@ -103,12 +103,12 @@ jobs:
         with:
           version: 2026.10.7
       - name: Compile binary
-        if: runner.os != 'Windows'
+        if: ${{ runner.os != 'Windows' }}
         run: mise run compile --target "${COMPILE_TARGET}"
         env:
           COMPILE_TARGET: ${{ matrix.target }}
       - name: Smoke test binary
-        if: runner.os != 'Windows'
+        if: ${{ runner.os != 'Windows' }}
         run: |
           test -f "${BINARY_PATH}"
           "${BINARY_PATH}" --help
@@ -116,13 +116,13 @@ jobs:
         env:
           BINARY_PATH: ${{ matrix.binary }}
       - name: Compile binary
-        if: runner.os == 'Windows'
+        if: ${{ runner.os == 'Windows' }}
         shell: pwsh
         run: mise run compile --target $env:COMPILE_TARGET
         env:
           COMPILE_TARGET: ${{ matrix.target }}
       - name: Smoke test binary
-        if: runner.os == 'Windows'
+        if: ${{ runner.os == 'Windows' }}
         shell: pwsh
         run: |
           if (-not (Test-Path -PathType Leaf $env:BINARY_PATH)) {
@@ -152,7 +152,7 @@ jobs:
     name: Generate Actions Timeline
     needs:
       - ci-check
-    if: always() && !cancelled()
+    if: ${{ always() && !cancelled() }}
     runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions:
