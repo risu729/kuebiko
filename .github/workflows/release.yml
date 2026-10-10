@@ -17,7 +17,7 @@ jobs:
     permissions:
       actions: read # actions-timeline reads workflow run metadata
       contents: read # CI jobs check out the repository
-    uses: ./.github/workflows/ci.yml # zizmor: ignore[self-repository] -- actionlint 1.7.12 does not support $/ yet.
+    uses: ./.github/workflows/ci.yml # zizmor: ignore[self-repository] -- Reuse the workflow from the caller's revision.
   release:
     name: Release
     needs:
