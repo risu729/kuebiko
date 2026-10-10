@@ -21,8 +21,8 @@
 		"@types/bun": "1.4.2",
 		"@types/chrome-remote-interface": "0.34.0",
 		"@types/mime-types": "3.0.1",
-		"@types/node": "26.6.3",
-		"devtools-protocol": "0.0.1704951",
+		"@types/node": "26.6.4",
+		"devtools-protocol": "0.0.1710668",
 		"typescript": "7.0.2"
 	}
 }

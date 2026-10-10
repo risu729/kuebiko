@@ -17,7 +17,7 @@ jobs:
     permissions:
       actions: read # actions-timeline reads workflow run metadata
       contents: read # CI jobs check out the repository
-    uses: ./.github/workflows/ci.yml # zizmor: ignore[self-repository] -- actionlint 1.7.12 does not support $/ yet.
+    uses: ./.github/workflows/ci.yml # zizmor: ignore[self-repository] -- Reuse the workflow from the caller's revision.
   release:
     name: Release
     needs:
@@ -36,9 +36,9 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Install mise
-        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        uses: jdx/mise-action@2d8d4cafcbd33be2ea37d2b6f5ad595363d1f1ca # v5.1.1
         with:
-          version: 2026.9.15
+          version: 2026.10.7
       - name: Install dependencies
         run: mise deps
       - name: Release

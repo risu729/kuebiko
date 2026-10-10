@@ -25,9 +25,9 @@ jobs:
         with:
           persist-credentials: false
       - name: Install mise
-        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        uses: jdx/mise-action@2d8d4cafcbd33be2ea37d2b6f5ad595363d1f1ca # v5.1.1
         with:
-          version: 2026.9.15
+          version: 2026.10.7
       - name: Run lint
         run: mise run check --lint
         env:
@@ -44,9 +44,9 @@ jobs:
         with:
           persist-credentials: false
       - name: Install mise
-        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        uses: jdx/mise-action@2d8d4cafcbd33be2ea37d2b6f5ad595363d1f1ca # v5.1.1
         with:
-          version: 2026.9.15
+          version: 2026.10.7
       - name: Test
         run: mise run test
   e2e:
@@ -61,9 +61,9 @@ jobs:
         with:
           persist-credentials: false
       - name: Install mise
-        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        uses: jdx/mise-action@2d8d4cafcbd33be2ea37d2b6f5ad595363d1f1ca # v5.1.1
         with:
-          version: 2026.9.15
+          version: 2026.10.7
       - name: Setup Chrome
         id: setup-chrome
         uses: browser-actions/setup-chrome@48ad923757ca74d66703209fe939badbdf80f2f4 # v2.2.0
@@ -99,9 +99,9 @@ jobs:
         with:
           persist-credentials: false
       - name: Install mise
-        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        uses: jdx/mise-action@2d8d4cafcbd33be2ea37d2b6f5ad595363d1f1ca # v5.1.1
         with:
-          version: 2026.9.15
+          version: 2026.10.7
       - name: Compile binary
         if: runner.os != 'Windows'
         run: mise run compile --target "${COMPILE_TARGET}"
