@@ -22,7 +22,7 @@ jobs:
     name: Release
     needs:
       - validate
-    if: github.ref == 'refs/heads/main' && github.repository_owner == 'risu729'
+    if: ${{ github.ref == 'refs/heads/main' && github.repository_owner == 'risu729' }}
     runs-on: ubuntu-26.04
     timeout-minutes: 20
     permissions:
@@ -52,7 +52,7 @@ jobs:
             echo "created=true" >> "${GITHUB_OUTPUT}"
           fi
       - name: Attest release asset build provenance
-        if: steps.release-assets.outputs.created == 'true'
+        if: ${{ steps.release-assets.outputs.created == 'true' }}
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: dist/release/*
