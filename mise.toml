@@ -10,7 +10,7 @@ node = "26.11.1"
 hk = "2.6.0"
 oxlint = "1.72.0"
 oxfmt = "0.72.0"
-jactionlint = "2.0.2"
+jactionlint = "v2.1.0"
 # required for jactionlint's workflow shell checks
 shellcheck = "0.11.0"
 ghalint = "1.5.6"
