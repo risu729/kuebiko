@@ -1,6 +1,6 @@
 #:schema https://mise.jdx.dev/schema/mise.json
 
-min_version = "2026.10.8"
+min_version = "2026.10.9"
 
 [tools]
 bun = "1.4.3"
