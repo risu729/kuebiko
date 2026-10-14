@@ -10,7 +10,7 @@
         "zod": "4.6.5",
       },
       "devDependencies": {
-        "@risu729/tsconfigs": "3.0.0",
+        "@risu729/tsconfigs": "3.0.1",
         "@semantic-release/exec": "7.1.0",
         "@types/bun": "1.4.2",
         "@types/chrome-remote-interface": "0.34.0",
@@ -64,7 +64,7 @@
 
     "@pnpm/npm-conf": ["@pnpm/npm-conf@3.0.3", "", { "dependencies": { "@pnpm/config.env-replace": "^1.1.0", "@pnpm/network.ca-file": "^1.0.1", "config-chain": "^1.1.11" } }, "sha512-//0sR/cow/s4ICQaYoAobOl4aU8cjU6x/V24V7XkKotb9+O+3zySIYp146vpaobYHnxa4pZX8NkV54Z5AwbDKA=="],
 
-    "@risu729/tsconfigs": ["@risu729/tsconfigs@3.0.0", "", { "peerDependencies": { "typescript": "^6.0.0" } }, "sha512-FAYLBHC4KQ9TPSksm2Q8blZPSI08bedKOEE9dMbhbcQmj1I54ZPzqz4i8gqINQubcp4gkLE8kFeX5ZXudVl/9Q=="],
+    "@risu729/tsconfigs": ["@risu729/tsconfigs@3.0.1", "", { "peerDependencies": { "typescript": "^6.0.0 || ^7.0.0" } }, "sha512-b/IrIdjtj4/Sgn90W6VrAy8oPuak64R9Qq3oTyo+SaszxycHU43Hk9J3sWQ8uAm7SKyH4PRm+YVF/7idrLSDQA=="],
 
     "@sec-ant/readable-stream": ["@sec-ant/readable-stream@0.4.1", "", {}, "sha512-831qok9r2t8AlxLko40y2ebgSDhenenCatLVeW/uBtnHPyhHOvG0C7TvfgecV+wHzIm5KUICgzmVpWS+IMEAeg=="],
 
