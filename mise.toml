@@ -26,6 +26,8 @@ typos = "1.51.1"
 
 [settings]
 experimental = true
+lockfile = true
+lockfile_mode = "generate"
 
 [settings.npm]
 package_manager = "bun"
