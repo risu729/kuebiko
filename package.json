@@ -16,7 +16,7 @@
 		"zod": "4.6.5"
 	},
 	"devDependencies": {
-		"@risu729/tsconfigs": "3.0.0",
+		"@risu729/tsconfigs": "3.0.1",
 		"@semantic-release/exec": "7.1.0",
 		"@types/bun": "1.4.2",
 		"@types/chrome-remote-interface": "0.34.0",
