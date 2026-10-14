@@ -2,6 +2,11 @@
 
 These instructions apply to agent work in this repository.
 
+## Language
+
+Use English consistently for repository documentation, code comments, commit
+messages, and pull request titles and descriptions.
+
 ## Project Scope
 
 This project is a local Chrome CDP/NetLog capture tool. Keep it focused on
