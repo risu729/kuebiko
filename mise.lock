@@ -317,16 +317,19 @@ url = "https://nodejs.org/dist/v26.12.0/node-v26.12.0-win-x64.zip"
 
 [[tools."npm:semantic-release"]]
 version = "25.0.9"
+aube = { path = ".mise/locks/npm-semantic-release/25.0.9", digest = "sha256:a6c1817c964d26994a12bcf3a4c9f17e743591ddc928d124f8b940624e5f197e" }
 backend = "npm:semantic-release"
 specifiers = ["25.0.9"]
 
 [[tools."npm:typescript"]]
 version = "7.0.2"
+aube = { path = ".mise/locks/npm-typescript/7.0.2", digest = "sha256:3d06b3b23564c68cdad7815c356edb1506fab1c42bfb8c54234134fd9650ec17" }
 backend = "npm:typescript"
 specifiers = ["7.0.2"]
 
 [[tools.oxfmt]]
 version = "0.72.0"
+aube = { path = ".mise/locks/oxfmt/0.72.0", digest = "sha256:8cff19be82a82e83efe243f08fd8bf1a2a2f635f10384d070d7956209ddd9b44" }
 backend = "npm:oxfmt"
 specifiers = ["0.72.0"]
 
