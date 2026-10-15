@@ -966,8 +966,15 @@ created by configured plugins. Nothing is intentionally written under `%TEMP%`,
 
 ## Development
 
+Development tools installed through mise's npm backend use its embedded Aube
+installer and committed native dependency locks under `.mise/locks`. The
+application and its project dependencies use Bun and `bun.lock`.
+When updating these tools, run `mise lock` and review both `mise.lock` and its
+referenced manifest/lockfile pairs together. Automated updates must include the
+referenced sidecars as well.
+
 ```sh
-mise install
+mise install --locked
 mise run test
 E2E_BROWSER_PATH=/path/to/chrome-or-chromium mise run test-e2e
 mise run check --lint

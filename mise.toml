@@ -30,7 +30,7 @@ lockfile = true
 lockfile_mode = "generate"
 
 [settings.npm]
-package_manager = "bun"
+package_manager = "aube"
 
 [deps.bun]
 auto = true
