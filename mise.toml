@@ -9,7 +9,7 @@ node = "26.12.0"
 "npm:semantic-release" = "25.0.9"
 hk = "2.6.0"
 oxlint = "1.72.0"
-oxfmt = "0.72.0"
+oxfmt = "0.73.0"
 jactionlint = "v2.2.0"
 # required for jactionlint's workflow shell checks
 shellcheck = "0.11.0"
