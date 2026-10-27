@@ -17,7 +17,7 @@ ghalint = "1.5.7"
 pinact = "5.0.2"
 zizmor = "1.31.1"
 tombi = "1.9.6"
-rumdl = "v0.3.0"
+rumdl = "v0.3.1"
 yamlfmt = "0.21.0"
 # required for pypi backend
 uv = "0.13.6"
