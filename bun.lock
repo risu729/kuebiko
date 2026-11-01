@@ -13,7 +13,7 @@
         "@risu729/tsconfigs": "3.0.1",
         "@semantic-release/exec": "7.1.0",
         "@types/bun": "1.4.4",
-        "@types/chrome-remote-interface": "0.34.0",
+        "@types/chrome-remote-interface": "0.34.1",
         "@types/mime-types": "3.0.1",
         "@types/node": "26.6.6",
         "devtools-protocol": "0.0.1732152",
@@ -88,7 +88,7 @@
 
     "@types/bun": ["@types/bun@1.4.4", "", { "dependencies": { "bun-types": "1.4.4" } }, "sha512-9wkRDXUXK124pEnAutE6n/l18j+i9GC5IAHK8TmX/2nlySETmky0OU6yL5U8pW1AoKh++AN9auDCr647BfurjQ=="],
 
-    "@types/chrome-remote-interface": ["@types/chrome-remote-interface@0.34.0", "", { "dependencies": { "devtools-protocol": "0.0.1173815" } }, "sha512-4q8pMUvasrAkB7bejGWw5igboAvBz7vJRZq+295yFONGoeN7X/hfq8Mq4vTxUQKnENbR9tqksP8RZsLxlRtsWQ=="],
+    "@types/chrome-remote-interface": ["@types/chrome-remote-interface@0.34.1", "", { "dependencies": { "devtools-protocol": "0.0.1721602" } }, "sha512-YaxsTVDoCdgw3fha8Vd3+YtoA+OYw+RkcuabVEBvJm7eEv4FP+HBMVR9c0TleYuGoJpHhNPPjUhsgz6lMkmt/Q=="],
 
     "@types/mime-types": ["@types/mime-types@3.0.1", "", {}, "sha512-xRMsfuQbnRq1Ef+C+RKaENOxXX87Ygl38W1vDfPHRku02TgQr+Qd8iivLtAMcR0KF5/29xlnFihkTlbqFrGOVQ=="],
 
@@ -592,7 +592,7 @@
 
     "@semantic-release/release-notes-generator/read-package-up": ["read-package-up@11.0.0", "", { "dependencies": { "find-up-simple": "^1.0.0", "read-pkg": "^9.0.0", "type-fest": "^4.6.0" } }, "sha512-MbgfoNPANMdb4oRBNg5eqLbB2t2r+o5Ua1pNt8BqGp4I0FJZhuVSOj3PaBPni4azWuSzEdNn2evevzVmEk1ohQ=="],
 
-    "@types/chrome-remote-interface/devtools-protocol": ["devtools-protocol@0.0.1173815", "", {}, "sha512-CmsjkudmgCMeae8FSJB4GV8COZwOk6dJKyE9HS2F/ih/sA8uTdbPKHg5F7DsrOYLEET/QKK00LJCU4YoyG+uHg=="],
+    "@types/chrome-remote-interface/devtools-protocol": ["devtools-protocol@0.0.1721602", "", {}, "sha512-e+CRu+s/WFxe/RbRywkCdQDvmyCbM/JxvbyZMBxO3CDH1snKtpghcCzUJ69KUzG4QehmYyXBOtyCq1pNMScmyQ=="],
 
     "cli-highlight/chalk": ["chalk@4.1.2", "", { "dependencies": { "ansi-styles": "^4.1.0", "supports-color": "^7.1.0" } }, "sha512-oKnbhFyRIXpUuez8iBMmyEa4nbj4IOQyuhc/wy9kY7/WVPcwIO9VA668Pu8RkO7+0G76SLROeyw9CpQ061i4mA=="],
 
