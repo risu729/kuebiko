@@ -52,75 +52,75 @@ checksum = "sha256:0f20ce6674d4f2dbcc8c5d59fdf99f7ba45f8c3b367e0f5781cbfa30a1c78
 url = "https://github.com/oven-sh/bun/releases/download/bun-v1.4.4/bun-windows-x64-baseline.zip"
 
 [[tools.ghalint]]
-version = "1.5.7"
+version = "1.6.0"
 backend = "aqua:suzuki-shunsuke/ghalint"
-specifiers = ["1.5.7"]
+specifiers = ["1.6.0"]
 
 [tools.ghalint."platforms.linux-arm64"]
-checksum = "sha256:0123356892fb6e62ed0c7deba7b06e57af29a7447d41e51d0d71f8fcb3ecbbea"
-checksum_source = "mise-versions"
-url = "https://github.com/suzuki-shunsuke/ghalint/releases/download/v1.5.7/ghalint_1.5.7_linux_arm64.tar.gz"
-url_api = "https://api.github.com/repos/suzuki-shunsuke/ghalint/releases/assets/676756686"
+checksum = "sha256:f9d8e20a75c934d21ee6ab1967eb79fa125237ef5633c6bfd03b27999c6a6cda"
+url = "https://github.com/suzuki-shunsuke/ghalint/releases/download/v1.6.0/ghalint_1.6.0_linux_arm64.tar.gz"
+url_api = "https://api.github.com/repos/suzuki-shunsuke/ghalint/releases/assets/694554152"
+provenance = "cosign"
 
 [tools.ghalint."platforms.linux-arm64-musl"]
-checksum = "sha256:0123356892fb6e62ed0c7deba7b06e57af29a7447d41e51d0d71f8fcb3ecbbea"
-checksum_source = "mise-versions"
-url = "https://github.com/suzuki-shunsuke/ghalint/releases/download/v1.5.7/ghalint_1.5.7_linux_arm64.tar.gz"
-url_api = "https://api.github.com/repos/suzuki-shunsuke/ghalint/releases/assets/676756686"
+checksum = "sha256:f9d8e20a75c934d21ee6ab1967eb79fa125237ef5633c6bfd03b27999c6a6cda"
+url = "https://github.com/suzuki-shunsuke/ghalint/releases/download/v1.6.0/ghalint_1.6.0_linux_arm64.tar.gz"
+url_api = "https://api.github.com/repos/suzuki-shunsuke/ghalint/releases/assets/694554152"
+provenance = "cosign"
 
 [tools.ghalint."platforms.linux-x64"]
-checksum = "sha256:b8eaba77baea50540caf43e81ea32049ca07fecba267a84c78a27ce5a86631a3"
-checksum_source = "mise-versions"
-url = "https://github.com/suzuki-shunsuke/ghalint/releases/download/v1.5.7/ghalint_1.5.7_linux_amd64.tar.gz"
-url_api = "https://api.github.com/repos/suzuki-shunsuke/ghalint/releases/assets/676756679"
+checksum = "sha256:eda1af79c1a4a31c2de5831cd1333ad582fa6fa72015f8e9c1c4525d550c1d35"
+url = "https://github.com/suzuki-shunsuke/ghalint/releases/download/v1.6.0/ghalint_1.6.0_linux_amd64.tar.gz"
+url_api = "https://api.github.com/repos/suzuki-shunsuke/ghalint/releases/assets/694554144"
+provenance = "cosign"
 
 [tools.ghalint."platforms.linux-x64-baseline"]
-checksum = "sha256:b8eaba77baea50540caf43e81ea32049ca07fecba267a84c78a27ce5a86631a3"
-checksum_source = "mise-versions"
-url = "https://github.com/suzuki-shunsuke/ghalint/releases/download/v1.5.7/ghalint_1.5.7_linux_amd64.tar.gz"
-url_api = "https://api.github.com/repos/suzuki-shunsuke/ghalint/releases/assets/676756679"
+checksum = "sha256:eda1af79c1a4a31c2de5831cd1333ad582fa6fa72015f8e9c1c4525d550c1d35"
+url = "https://github.com/suzuki-shunsuke/ghalint/releases/download/v1.6.0/ghalint_1.6.0_linux_amd64.tar.gz"
+url_api = "https://api.github.com/repos/suzuki-shunsuke/ghalint/releases/assets/694554144"
+provenance = "cosign"
 
 [tools.ghalint."platforms.linux-x64-musl"]
-checksum = "sha256:b8eaba77baea50540caf43e81ea32049ca07fecba267a84c78a27ce5a86631a3"
-checksum_source = "mise-versions"
-url = "https://github.com/suzuki-shunsuke/ghalint/releases/download/v1.5.7/ghalint_1.5.7_linux_amd64.tar.gz"
-url_api = "https://api.github.com/repos/suzuki-shunsuke/ghalint/releases/assets/676756679"
+checksum = "sha256:eda1af79c1a4a31c2de5831cd1333ad582fa6fa72015f8e9c1c4525d550c1d35"
+url = "https://github.com/suzuki-shunsuke/ghalint/releases/download/v1.6.0/ghalint_1.6.0_linux_amd64.tar.gz"
+url_api = "https://api.github.com/repos/suzuki-shunsuke/ghalint/releases/assets/694554144"
+provenance = "cosign"
 
 [tools.ghalint."platforms.linux-x64-musl-baseline"]
-checksum = "sha256:b8eaba77baea50540caf43e81ea32049ca07fecba267a84c78a27ce5a86631a3"
-checksum_source = "mise-versions"
-url = "https://github.com/suzuki-shunsuke/ghalint/releases/download/v1.5.7/ghalint_1.5.7_linux_amd64.tar.gz"
-url_api = "https://api.github.com/repos/suzuki-shunsuke/ghalint/releases/assets/676756679"
+checksum = "sha256:eda1af79c1a4a31c2de5831cd1333ad582fa6fa72015f8e9c1c4525d550c1d35"
+url = "https://github.com/suzuki-shunsuke/ghalint/releases/download/v1.6.0/ghalint_1.6.0_linux_amd64.tar.gz"
+url_api = "https://api.github.com/repos/suzuki-shunsuke/ghalint/releases/assets/694554144"
+provenance = "cosign"
 
 [tools.ghalint."platforms.macos-arm64"]
-checksum = "sha256:c3abc5c3a8eedafbeb3d3d2d27a2757876fd5d4937c7306a3932906d578f968a"
-checksum_source = "mise-versions"
-url = "https://github.com/suzuki-shunsuke/ghalint/releases/download/v1.5.7/ghalint_1.5.7_darwin_arm64.tar.gz"
-url_api = "https://api.github.com/repos/suzuki-shunsuke/ghalint/releases/assets/676756660"
+checksum = "sha256:427acb85cb6cdda8828bf46643825b47cb46e6d2d5d3fa4f60b7bdfee194d2c7"
+url = "https://github.com/suzuki-shunsuke/ghalint/releases/download/v1.6.0/ghalint_1.6.0_darwin_arm64.tar.gz"
+url_api = "https://api.github.com/repos/suzuki-shunsuke/ghalint/releases/assets/694554130"
+provenance = "cosign"
 
 [tools.ghalint."platforms.macos-x64"]
-checksum = "sha256:b5644bc3a78fddc662fdb16767cd4a6d6e4066ab1714f71bfff61b911b7837b7"
-checksum_source = "mise-versions"
-url = "https://github.com/suzuki-shunsuke/ghalint/releases/download/v1.5.7/ghalint_1.5.7_darwin_amd64.tar.gz"
-url_api = "https://api.github.com/repos/suzuki-shunsuke/ghalint/releases/assets/676756664"
+checksum = "sha256:0b5ceda34753d74b6fd024ba6306fa332cd03c855801430bd7cbd44a94692252"
+url = "https://github.com/suzuki-shunsuke/ghalint/releases/download/v1.6.0/ghalint_1.6.0_darwin_amd64.tar.gz"
+url_api = "https://api.github.com/repos/suzuki-shunsuke/ghalint/releases/assets/694554125"
+provenance = "cosign"
 
 [tools.ghalint."platforms.macos-x64-baseline"]
-checksum = "sha256:b5644bc3a78fddc662fdb16767cd4a6d6e4066ab1714f71bfff61b911b7837b7"
-checksum_source = "mise-versions"
-url = "https://github.com/suzuki-shunsuke/ghalint/releases/download/v1.5.7/ghalint_1.5.7_darwin_amd64.tar.gz"
-url_api = "https://api.github.com/repos/suzuki-shunsuke/ghalint/releases/assets/676756664"
+checksum = "sha256:0b5ceda34753d74b6fd024ba6306fa332cd03c855801430bd7cbd44a94692252"
+url = "https://github.com/suzuki-shunsuke/ghalint/releases/download/v1.6.0/ghalint_1.6.0_darwin_amd64.tar.gz"
+url_api = "https://api.github.com/repos/suzuki-shunsuke/ghalint/releases/assets/694554125"
+provenance = "cosign"
 
 [tools.ghalint."platforms.windows-x64"]
-checksum = "sha256:b9be347bc179de6a8c7c8d4a57ab4cf32701a73d1459a5a27457deb60a4d7cfc"
-checksum_source = "mise-versions"
-url = "https://github.com/suzuki-shunsuke/ghalint/releases/download/v1.5.7/ghalint_1.5.7_windows_amd64.zip"
-url_api = "https://api.github.com/repos/suzuki-shunsuke/ghalint/releases/assets/676756694"
+checksum = "sha256:9119faab7bad322f1fe3895da456846d780e84cc5e98405493b8e86ae03f215f"
+url = "https://github.com/suzuki-shunsuke/ghalint/releases/download/v1.6.0/ghalint_1.6.0_windows_amd64.zip"
+url_api = "https://api.github.com/repos/suzuki-shunsuke/ghalint/releases/assets/694554169"
+provenance = "cosign"
 
 [tools.ghalint."platforms.windows-x64-baseline"]
-checksum = "sha256:b9be347bc179de6a8c7c8d4a57ab4cf32701a73d1459a5a27457deb60a4d7cfc"
-checksum_source = "mise-versions"
-url = "https://github.com/suzuki-shunsuke/ghalint/releases/download/v1.5.7/ghalint_1.5.7_windows_amd64.zip"
-url_api = "https://api.github.com/repos/suzuki-shunsuke/ghalint/releases/assets/676756694"
+checksum = "sha256:9119faab7bad322f1fe3895da456846d780e84cc5e98405493b8e86ae03f215f"
+url = "https://github.com/suzuki-shunsuke/ghalint/releases/download/v1.6.0/ghalint_1.6.0_windows_amd64.zip"
+url_api = "https://api.github.com/repos/suzuki-shunsuke/ghalint/releases/assets/694554169"
+provenance = "cosign"
 
 [[tools.hk]]
 version = "2.10.0"
