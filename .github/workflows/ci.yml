@@ -25,9 +25,9 @@ jobs:
         with:
           persist-credentials: false
       - name: Install mise
-        uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+        uses: jdx/mise-action@f5be966e4a917d54244728e6a5fdcd1d93a35e6c # v5.2.6
         with:
-          version: 2026.10.10
+          version: 2026.11.1
       - name: Run lint
         run: mise run check --lint
         env:
@@ -44,9 +44,9 @@ jobs:
         with:
           persist-credentials: false
       - name: Install mise
-        uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+        uses: jdx/mise-action@f5be966e4a917d54244728e6a5fdcd1d93a35e6c # v5.2.6
         with:
-          version: 2026.10.10
+          version: 2026.11.1
       - name: Test
         run: mise run test
   e2e:
@@ -61,9 +61,9 @@ jobs:
         with:
           persist-credentials: false
       - name: Install mise
-        uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+        uses: jdx/mise-action@f5be966e4a917d54244728e6a5fdcd1d93a35e6c # v5.2.6
         with:
-          version: 2026.10.10
+          version: 2026.11.1
       - name: Setup Chrome
         id: setup-chrome
         uses: browser-actions/setup-chrome@48ad923757ca74d66703209fe939badbdf80f2f4 # v2.2.0
@@ -99,9 +99,9 @@ jobs:
         with:
           persist-credentials: false
       - name: Install mise
-        uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+        uses: jdx/mise-action@f5be966e4a917d54244728e6a5fdcd1d93a35e6c # v5.2.6
         with:
-          version: 2026.10.10
+          version: 2026.11.1
       - name: Compile binary
         if: ${{ runner.os != 'Windows' }}
         run: mise run compile --target "${COMPILE_TARGET}"
@@ -159,4 +159,4 @@ jobs:
       actions: read # Required by actions-timeline to read this workflow run's jobs.
     steps:
       - name: actions-timeline
-        uses: Kesin11/actions-timeline@57fc93f20c6da7fbc14063c6d24a2a5627c799ad # v3.2.0
+        uses: Kesin11/actions-timeline@460b1f8a750077029ad3589824d371b200e91dcf # v3.2.1
