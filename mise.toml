@@ -20,7 +20,7 @@ tombi = "1.11.2"
 rumdl = "v0.3.3"
 yamlfmt = "0.21.0"
 # required for pypi backend
-uv = "0.13.7"
+uv = "0.13.8"
 yamllint = "1.38.0"
 typos = "1.52.2"
 
