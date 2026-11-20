@@ -29,7 +29,7 @@ experimental = true
 lockfile = true
 
 [settings.npm]
-package_manager = "bun"
+package_manager = "aube"
 
 [deps.bun]
 auto = true
